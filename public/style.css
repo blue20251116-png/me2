@@ -85,6 +85,23 @@ html, body {
   border-style: dashed;
 }
 
+.key-input-row {
+  display: flex;
+  gap: 8px;
+}
+.key-input-row input { flex: 1; }
+.btn-clear-key {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-clear-key:hover { color: var(--red); border-color: var(--red); }
+
 .btn-danger {
   font-family: var(--font-body);
   font-weight: 600;

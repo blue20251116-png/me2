@@ -620,6 +620,28 @@ document.getElementById('anthropicForm').addEventListener('submit', async (e) =>
   }
 });
 
+async function clearAiKey(clearField) {
+  const msg = document.getElementById('anthropicMsg');
+  if (!confirm('이 키를 지울까요?')) return;
+  try {
+    const res = await apiFetch(`/api/accounts/${activeAccountId}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [clearField]: true }),
+    });
+    if (!res.ok) throw new Error('삭제 실패');
+    msg.textContent = '삭제 완료';
+    msg.className = 'msg';
+    loadSettings();
+  } catch (err) {
+    msg.textContent = '오류: ' + err.message;
+    msg.className = 'msg error';
+  }
+}
+
+document.getElementById('clearAnthropicKeyBtn').addEventListener('click', () => clearAiKey('CLEAR_ANTHROPIC_KEY'));
+document.getElementById('clearOpenaiKeyBtn').addEventListener('click', () => clearAiKey('CLEAR_OPENAI_KEY'));
+
 document.getElementById('coupangForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;

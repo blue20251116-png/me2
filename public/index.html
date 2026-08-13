@@ -190,10 +190,16 @@
         <p class="hint">둘 중 하나만 입력하면 됩니다. Anthropic 키가 있으면 그걸 우선 쓰고, 없으면 OpenAI 키를 사용합니다.</p>
         <form id="anthropicForm">
           <label>Anthropic API Key <span class="label-note">(console.anthropic.com에서 발급)</span>
-            <input type="password" name="ANTHROPIC_API_KEY" placeholder="sk-ant-... (변경 시에만 입력)" />
+            <div class="key-input-row">
+              <input type="password" name="ANTHROPIC_API_KEY" placeholder="sk-ant-... (변경 시에만 입력)" />
+              <button type="button" id="clearAnthropicKeyBtn" class="btn-clear-key">지우기</button>
+            </div>
           </label>
           <label>OpenAI API Key <span class="label-note">(platform.openai.com에서 발급)</span>
-            <input type="password" name="OPENAI_API_KEY" placeholder="sk-... (변경 시에만 입력)" />
+            <div class="key-input-row">
+              <input type="password" name="OPENAI_API_KEY" placeholder="sk-... (변경 시에만 입력)" />
+              <button type="button" id="clearOpenaiKeyBtn" class="btn-clear-key">지우기</button>
+            </div>
           </label>
           <button type="submit" class="btn-secondary">저장</button>
         </form>
