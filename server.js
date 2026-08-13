@@ -325,6 +325,7 @@ app.get('/api/accounts/:accountId/settings', requireAccount, (req, res) => {
     hasCoupangSecret: !!a.coupang_secret_key,
     COUPANG_DISCLOSURE_TEMPLATE: a.coupang_disclosure_template || DEFAULT_DISCLOSURE_TEMPLATE,
     hasAnthropicKey: !!a.anthropic_api_key,
+    hasOpenaiKey: !!a.openai_api_key,
   });
 });
 
@@ -337,6 +338,7 @@ app.post('/api/accounts/:accountId/settings', requireAccount, (req, res) => {
     COUPANG_SECRET_KEY,
     COUPANG_SUB_ID,
     ANTHROPIC_API_KEY,
+    OPENAI_API_KEY,
   } = req.body;
 
   const fields = {};
@@ -347,6 +349,7 @@ app.post('/api/accounts/:accountId/settings', requireAccount, (req, res) => {
   if (COUPANG_SECRET_KEY) fields.coupang_secret_key = COUPANG_SECRET_KEY;
   if (COUPANG_SUB_ID !== undefined) fields.coupang_sub_id = COUPANG_SUB_ID;
   if (ANTHROPIC_API_KEY) fields.anthropic_api_key = ANTHROPIC_API_KEY;
+  if (OPENAI_API_KEY) fields.openai_api_key = OPENAI_API_KEY;
 
   updateAccount(req.account.id, fields);
   res.json({ ok: true });

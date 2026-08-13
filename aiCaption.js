@@ -23,13 +23,27 @@ const SYSTEM_PROMPT = `너는 한국 스레드(Threads)에서 반응 좋은 짧�
 
 async function generateCaption(accountId, { productName, price }) {
   const account = getAccount(accountId);
-  if (!account?.anthropic_api_key) {
-    throw new Error('이 계정에 Anthropic API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
-  }
-
   const priceText = price ? `${Number(price).toLocaleString('ko-KR')}원` : '';
   const userMessage = `상품명: ${productName}${priceText ? `\n가격: ${priceText}` : ''}`;
 
+  if (account?.anthropic_api_key) {
+    return generateWithAnthropic(account.anthropic_api_key, userMessage);
+  }
+  if (account?.openai_api_key) {
+    return generateWithOpenAI(account.openai_api_key, userMessage);
+  }
+  throw new Error('이 계정에 Anthropic 또는 OpenAI API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
+}
+
+function splitVariants(text) {
+  const variants = text
+    .split(/\n\s*---\s*\n/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+  return variants.length ? variants : [text.trim()];
+}
+
+async function generateWithAnthropic(apiKey, userMessage) {
   const res = await axios.post(
     'https://api.anthropic.com/v1/messages',
     {
@@ -40,7 +54,7 @@ async function generateCaption(accountId, { productName, price }) {
     },
     {
       headers: {
-        'x-api-key': account.anthropic_api_key,
+        'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
@@ -50,13 +64,32 @@ async function generateCaption(accountId, { productName, price }) {
 
   const textBlock = res.data?.content?.find((b) => b.type === 'text');
   if (!textBlock) throw new Error('생성 결과를 받지 못했습니다');
+  return splitVariants(textBlock.text);
+}
 
-  const variants = textBlock.text
-    .split(/\n\s*---\s*\n/)
-    .map((v) => v.trim())
-    .filter(Boolean);
+async function generateWithOpenAI(apiKey, userMessage) {
+  const res = await axios.post(
+    'https://api.openai.com/v1/chat/completions',
+    {
+      model: 'gpt-4o-mini',
+      max_tokens: 900,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
+      timeout: 25000,
+    }
+  );
 
-  return variants.length ? variants : [textBlock.text.trim()];
+  const text = res.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('생성 결과를 받지 못했습니다');
+  return splitVariants(text);
 }
 
 module.exports = { generateCaption };

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   coupang_disclosure_template TEXT,
 
   anthropic_api_key TEXT,
+  openai_api_key TEXT,
 
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -87,6 +88,7 @@ const migrations = [
   `ALTER TABLE posts ADD COLUMN comment_error_message TEXT`,
   `ALTER TABLE posts ADD COLUMN video_url TEXT`,
   `ALTER TABLE posts ADD COLUMN account_id INTEGER`,
+  `ALTER TABLE accounts ADD COLUMN openai_api_key TEXT`,
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (e) { /* 컬럼이 이미 있으면 무시 */ }
@@ -170,6 +172,7 @@ const ACCOUNT_UPDATABLE_FIELDS = [
   'coupang_sub_id',
   'coupang_disclosure_template',
   'anthropic_api_key',
+  'openai_api_key',
 ];
 
 function updateAccount(id, fields) {

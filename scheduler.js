@@ -61,7 +61,12 @@ function startPublishJob() {
           await new Promise((r) => setTimeout(r, 3000));
           await postAffiliateComment(account, post, mediaId);
         } catch (err) {
-          const msg = err.response?.data?.error?.message || err.message;
+          const apiErr = err.response?.data?.error;
+          const msg = apiErr
+            ? `${apiErr.message} (type: ${apiErr.type || '-'}, code: ${apiErr.code || '-'}${
+                apiErr.error_subcode ? ', subcode: ' + apiErr.error_subcode : ''
+              })`
+            : err.message;
           db.prepare(`UPDATE posts SET status = 'failed', error_message = ? WHERE id = ?`).run(msg, post.id);
           console.error(`[발행 실패] account #${account.id} post #${post.id}:`, msg);
         }
