@@ -588,6 +588,7 @@ async function loadSettings() {
 
   const aForm = document.getElementById('anthropicForm');
   aForm.ANTHROPIC_API_KEY.placeholder = data.hasAnthropicKey ? '저장됨 (변경 시에만 입력)' : 'sk-ant-... (변경 시에만 입력)';
+  aForm.OPENAI_API_KEY.placeholder = data.hasOpenaiKey ? '저장됨 (변경 시에만 입력)' : 'sk-... (변경 시에만 입력)';
 
   disclosureTemplate = data.COUPANG_DISCLOSURE_TEMPLATE || '';
   document.getElementById('disclosureForm').template.value = disclosureTemplate;
@@ -603,7 +604,10 @@ document.getElementById('anthropicForm').addEventListener('submit', async (e) =>
     const res = await apiFetch(`/api/accounts/${activeAccountId}/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ANTHROPIC_API_KEY: form.ANTHROPIC_API_KEY.value }),
+      body: JSON.stringify({
+        ANTHROPIC_API_KEY: form.ANTHROPIC_API_KEY.value,
+        OPENAI_API_KEY: form.OPENAI_API_KEY.value,
+      }),
     });
     if (!res.ok) throw new Error('저장 실패');
     msg.textContent = '저장 완료';

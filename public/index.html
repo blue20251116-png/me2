@@ -186,11 +186,14 @@
       </div>
 
       <div class="panel narrow">
-        <h2>AI 글 생성 (Claude API)</h2>
-        <p class="hint">console.anthropic.com에서 발급받은 API 키를 입력하면 "AI로 글 써주기" 버튼으로 광고 느낌 없는 캐주얼한 본문을 자동으로 써줍니다.</p>
+        <h2>AI 글 생성 (Claude 또는 GPT)</h2>
+        <p class="hint">둘 중 하나만 입력하면 됩니다. Anthropic 키가 있으면 그걸 우선 쓰고, 없으면 OpenAI 키를 사용합니다.</p>
         <form id="anthropicForm">
-          <label>Anthropic API Key
+          <label>Anthropic API Key <span class="label-note">(console.anthropic.com에서 발급)</span>
             <input type="password" name="ANTHROPIC_API_KEY" placeholder="sk-ant-... (변경 시에만 입력)" />
+          </label>
+          <label>OpenAI API Key <span class="label-note">(platform.openai.com에서 발급)</span>
+            <input type="password" name="OPENAI_API_KEY" placeholder="sk-... (변경 시에만 입력)" />
           </label>
           <button type="submit" class="btn-secondary">저장</button>
         </form>
