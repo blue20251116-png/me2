@@ -57,11 +57,13 @@ function getAuthUrl(accountId) {
   }
 
   const scopes = [
-    'threads_basic',
-    'threads_content_publish',
-    'threads_manage_insights',
-  ].join(',');
-
+  'threads_basic',
+  'threads_content_publish',
+  'threads_manage_insights',
+  'threads_manage_replies',
+  'threads_read_replies',
+].join(',');
+  
   return (
     `https://threads.net/oauth/authorize` +
     `?client_id=${encodeURIComponent(account.threads_app_id)}` +
