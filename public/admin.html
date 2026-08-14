@@ -43,6 +43,32 @@
     </div>
     <div id="userList"></div>
 
+    <h2 style="font-family: var(--font-display); font-size: 15px; margin: 28px 0 10px;">서비스 공용 API 설정</h2>
+    <form id="systemApiForm" style="display:flex; flex-direction:column; gap:10px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px;">
+      <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 4px; line-height:1.55;">여기에 입력한 값은 모든 회원이 공용으로 사용합니다. Secret/OpenAI 키는 저장 후 다시 화면에 표시하지 않습니다.</p>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--text-dim);">Threads App ID
+        <input type="text" name="threads_app_id" />
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--text-dim);">Threads App Secret
+        <input type="password" name="threads_app_secret" placeholder="변경할 때만 입력" />
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--text-dim);">Meta Callback / Redirect URI
+        <input type="url" name="threads_redirect_uri" placeholder="https://내도메인/auth/callback" />
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--text-dim);">OpenAI API Key
+        <input type="password" name="openai_api_key" placeholder="sk-... (변경할 때만 입력)" />
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--text-dim);">네이버 데이터랩 Client ID
+        <input type="text" name="naver_client_id" />
+      </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--text-dim);">네이버 데이터랩 Client Secret
+        <input type="password" name="naver_client_secret" placeholder="변경할 때만 입력" />
+      </label>
+      <button type="submit" style="align-self:flex-start;font-size:12.5px;padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:var(--amber);color:#1a1300;font-weight:600;cursor:pointer;">공용 API 저장</button>
+      <p id="systemApiStatus" style="font-size:12px;color:var(--text-dim);margin:0;"></p>
+      <p id="systemApiMsg" style="font-size:12.5px;margin:0;"></p>
+    </form>
+
     <h2 style="font-family: var(--font-display); font-size: 15px; margin: 28px 0 10px;">회원가입 화면에 보일 결제 안내</h2>
     <form id="siteSettingsForm" style="display:flex; flex-direction:column; gap:10px; background: var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px;">
       <label style="display:flex; flex-direction:column; gap:4px; font-size:12.5px; color: var(--text-dim);">
@@ -168,8 +194,48 @@
       }
     });
 
+    async function loadSystemApiSettings() {
+      const res = await fetch('/api/admin/system-api-settings');
+      if (!res.ok) return;
+      const data = await res.json();
+      const form = document.getElementById('systemApiForm');
+      form.threads_app_id.value = data.threads_app_id || '';
+      form.threads_redirect_uri.value = data.threads_redirect_uri || '';
+      form.naver_client_id.value = data.naver_client_id || '';
+      form.threads_app_secret.placeholder = data.has_threads_app_secret ? '저장됨 — 변경할 때만 입력' : '변경할 때만 입력';
+      form.openai_api_key.placeholder = data.has_openai_api_key ? '저장됨 — 변경할 때만 입력' : 'sk-...';
+      form.naver_client_secret.placeholder = data.has_naver_client_secret ? '저장됨 — 변경할 때만 입력' : '변경할 때만 입력';
+      document.getElementById('systemApiStatus').textContent =
+        `Threads Secret ${data.has_threads_app_secret ? '✓' : '✕'} · OpenAI ${data.has_openai_api_key ? '✓' : '✕'} · Naver Secret ${data.has_naver_client_secret ? '✓' : '✕'}`;
+    }
+
+    document.getElementById('systemApiForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target, msg = document.getElementById('systemApiMsg');
+      try {
+        const res = await fetch('/api/admin/system-api-settings', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            threads_app_id: form.threads_app_id.value,
+            threads_app_secret: form.threads_app_secret.value,
+            threads_redirect_uri: form.threads_redirect_uri.value,
+            openai_api_key: form.openai_api_key.value,
+            naver_client_id: form.naver_client_id.value,
+            naver_client_secret: form.naver_client_secret.value,
+          })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || '저장 실패');
+        form.threads_app_secret.value = '';
+        form.openai_api_key.value = '';
+        form.naver_client_secret.value = '';
+        msg.textContent = '공용 API 설정 저장 완료'; msg.style.color='var(--green)';
+        loadSystemApiSettings();
+      } catch (err) { msg.textContent='오류: '+err.message; msg.style.color='var(--red)'; }
+    });
+
     loadUsers();
     loadSiteSettings();
+    loadSystemApiSettings();
   </script>
 </body>
 </html>

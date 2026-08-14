@@ -27,6 +27,7 @@
       </form>
       <p id="loginMsg" class="msg"></p>
       <p class="auth-switch">계정이 없으신가요? <a href="/signup.html">회원가입</a></p>
+      <p id="adminSetupLink" class="auth-switch" style="display:none;"><a href="/admin-setup.html">최초 관리자 설정</a></p>
     </div>
   </div>
   <script>
@@ -42,12 +43,19 @@
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
-        location.href = '/';
+        location.href = data.role === 'admin' ? '/admin' : '/';
       } catch (err) {
         msg.textContent = err.message;
         msg.className = 'msg error';
       }
     });
+
+    fetch('/api/auth/admin-setup-status')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.needsSetup) document.getElementById('adminSetupLink').style.display = 'block';
+      })
+      .catch(() => {});
   </script>
 </body>
 </html>
