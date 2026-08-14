@@ -1,12 +1,13 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { getAccount } = require('./db');
+const { getAccount, getSystemApiSettings } = require('./db');
 
 // SaaS 전환: 일반 회원에게 OpenAI 키를 직접 받지 않고, 운영자가 등록한 서버 환경변수(OPENAI_API_KEY)를
 // 우선 사용한다. 아직 env가 없는 로컬 개발/과거 계정 호환을 위해 계정별 저장 키로 폴백은 남겨둠.
 function resolveOpenAiKey(account) {
-  return process.env.OPENAI_API_KEY || account?.openai_api_key || null;
+  const shared = getSystemApiSettings();
+  return shared.openai_api_key || process.env.OPENAI_API_KEY || account?.openai_api_key || null;
 }
 
 // ---- Scene(상황) 생성 ----

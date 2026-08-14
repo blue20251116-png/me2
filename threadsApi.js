@@ -1,5 +1,16 @@
 const axios = require('axios');
-const { getAccount } = require('./db');
+const { getAccount, getSystemApiSettings } = require('./db');
+
+// SaaS 전환: 새 고객이 계정을 연결할 때마다 Meta App ID/Secret을 직접 입력하지 않아도 되게,
+// 운영자가 등록한 서버 환경변수를 기본값으로 쓰고, 계정별로 따로 입력한 값이 있으면 그걸 우선한다.
+function resolveThreadsAppCreds(account) {
+  const shared = getSystemApiSettings();
+  return {
+    appId: shared.threads_app_id || process.env.THREADS_APP_ID || account?.threads_app_id || null,
+    appSecret: shared.threads_app_secret || process.env.THREADS_APP_SECRET || account?.threads_app_secret || null,
+    redirectUri: shared.threads_redirect_uri || process.env.THREADS_REDIRECT_URI || account?.threads_redirect_uri || null,
+  };
+}
 
 const GRAPH_BASE = 'https://graph.threads.net/v1.0';
 
@@ -48,12 +59,14 @@ function getAuthUrl(accountId) {
     throw new Error('존재하지 않는 계정입니다');
   }
 
-  if (!account.threads_app_id) {
-    throw new Error('Threads App ID가 설정되지 않았습니다');
+  const { appId, redirectUri } = resolveThreadsAppCreds(account);
+
+  if (!appId) {
+    throw new Error('Threads App ID가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
   }
 
-  if (!account.threads_redirect_uri) {
-    throw new Error('Threads Redirect URI가 설정되지 않았습니다');
+  if (!redirectUri) {
+    throw new Error('Threads Redirect URI가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
   }
 
   const scopes = [
@@ -66,8 +79,8 @@ function getAuthUrl(accountId) {
   
   return (
     `https://threads.net/oauth/authorize` +
-    `?client_id=${encodeURIComponent(account.threads_app_id)}` +
-    `&redirect_uri=${encodeURIComponent(account.threads_redirect_uri)}` +
+    `?client_id=${encodeURIComponent(appId)}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
     `&scope=${encodeURIComponent(scopes)}` +
     `&response_type=code` +
     `&state=${encodeURIComponent(accountId)}`
@@ -83,16 +96,18 @@ async function exchangeCodeForToken(accountId, code) {
     throw new Error('존재하지 않는 계정입니다');
   }
 
+  const { appId, appSecret, redirectUri } = resolveThreadsAppCreds(account);
+
   try {
     const res = await axios.post(
       'https://graph.threads.net/oauth/access_token',
       null,
       {
         params: {
-          client_id: account.threads_app_id,
-          client_secret: account.threads_app_secret,
+          client_id: appId,
+          client_secret: appSecret,
           grant_type: 'authorization_code',
-          redirect_uri: account.threads_redirect_uri,
+          redirect_uri: redirectUri,
           code,
         },
         timeout: 20000,
@@ -121,13 +136,15 @@ async function exchangeForLongLivedToken(
     throw new Error('존재하지 않는 계정입니다');
   }
 
+  const { appSecret } = resolveThreadsAppCreds(account);
+
   try {
     const res = await axios.get(
       `${GRAPH_BASE}/access_token`,
       {
         params: {
           grant_type: 'th_exchange_token',
-          client_secret: account.threads_app_secret,
+          client_secret: appSecret,
           access_token: shortLivedToken,
         },
         timeout: 20000,

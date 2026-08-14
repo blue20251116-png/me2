@@ -27,6 +27,10 @@ const {
   countAccountsForUser,
   getSiteSettings,
   updateSiteSettings,
+  getSystemApiSettings,
+  updateSystemApiSettings,
+  hasAdmin,
+  createInitialAdmin,
 } = require('./db');
 const { hashPassword, verifyPassword, requireAuth, requireAdmin } = require('./auth');
 const threadsApi = require('./threadsApi');
@@ -61,6 +65,29 @@ app.use(express.static(path.join(__dirname, 'public'), { index: false })); // cs
 app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
 app.get('/signup.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'signup.html')));
 app.get('/status.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'status.html')));
+
+app.get('/admin-setup.html', (req, res) => {
+  if (hasAdmin()) return res.redirect('/login.html');
+  res.sendFile(path.join(__dirname, 'public', 'admin-setup.html'));
+});
+
+app.get('/api/auth/admin-setup-status', (req, res) => {
+  res.json({ needsSetup: !hasAdmin() });
+});
+
+app.post('/api/auth/setup-admin', (req, res) => {
+  if (hasAdmin()) return res.status(409).json({ error: '이미 관리자 계정이 설정되어 있습니다' });
+  const { email, password, name } = req.body || {};
+  if (!email || !password) return res.status(400).json({ error: '관리자 이메일과 비밀번호가 필요합니다' });
+  if (String(password).length < 8) return res.status(400).json({ error: '비밀번호는 8자 이상으로 설정해주세요' });
+  try {
+    const id = createInitialAdmin(String(email).trim().toLowerCase(), hashPassword(password), name);
+    req.session.userId = Number(id);
+    res.json({ ok: true, role: 'admin' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // 결제 안내(계좌/오픈카톡/문구) — 로그인 전에도 회원가입 화면에서 봐야 하므로 공개
 app.get('/api/site-settings', (req, res) => {
@@ -161,6 +188,34 @@ app.get('/api/admin/site-settings', requireAdmin, (req, res) => {
 
 app.post('/api/admin/site-settings', requireAdmin, (req, res) => {
   updateSiteSettings(req.body || {});
+  res.json({ ok: true });
+});
+
+
+// 서비스 전체가 공용으로 사용하는 API 설정 — 관리자 전용.
+// secret 값 자체는 GET 응답으로 절대 돌려주지 않는다.
+app.get('/api/admin/system-api-settings', requireAdmin, (req, res) => {
+  const s = getSystemApiSettings();
+  res.json({
+    threads_app_id: s.threads_app_id || '',
+    threads_redirect_uri: s.threads_redirect_uri || '',
+    naver_client_id: s.naver_client_id || '',
+    has_threads_app_secret: !!s.threads_app_secret,
+    has_openai_api_key: !!s.openai_api_key,
+    has_naver_client_secret: !!s.naver_client_secret,
+  });
+});
+
+app.post('/api/admin/system-api-settings', requireAdmin, (req, res) => {
+  const body = req.body || {};
+  updateSystemApiSettings({
+    threads_app_id: body.threads_app_id,
+    threads_app_secret: body.threads_app_secret,
+    threads_redirect_uri: body.threads_redirect_uri,
+    openai_api_key: body.openai_api_key,
+    naver_client_id: body.naver_client_id,
+    naver_client_secret: body.naver_client_secret,
+  });
   res.json({ ok: true });
 });
 

@@ -116,6 +116,12 @@ CREATE TABLE IF NOT EXISTS site_settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+-- 운영자 공용 API 설정. 일반 회원에게는 절대 노출하지 않고 관리자 화면에서만 관리.
+CREATE TABLE IF NOT EXISTS system_api_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
 `);
 
 const DEFAULT_SITE_SETTINGS = {
@@ -157,6 +163,61 @@ function updateSiteSettings(fields) {
   }
 }
 
+
+// ---- 운영자 공용 API 설정 ----
+const SYSTEM_API_SETTING_KEYS = [
+  'threads_app_id',
+  'threads_app_secret',
+  'threads_redirect_uri',
+  'openai_api_key',
+  'naver_client_id',
+  'naver_client_secret',
+];
+
+function getSystemApiSettings() {
+  const rows = db.prepare('SELECT key, value FROM system_api_settings').all();
+  const out = {};
+  for (const key of SYSTEM_API_SETTING_KEYS) out[key] = '';
+  for (const row of rows) {
+    if (SYSTEM_API_SETTING_KEYS.includes(row.key)) out[row.key] = row.value || '';
+  }
+  return out;
+}
+
+function updateSystemApiSettings(fields) {
+  for (const key of SYSTEM_API_SETTING_KEYS) {
+    if (!(key in fields)) continue;
+    const value = fields[key];
+    // secret 입력란은 빈 값으로 보내면 기존 값을 유지한다.
+    if (['threads_app_secret', 'openai_api_key', 'naver_client_secret'].includes(key) && !value) continue;
+    db.prepare(
+      `INSERT INTO system_api_settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run(key, value == null ? '' : String(value).trim());
+  }
+}
+
+function hasAdmin() {
+  return !!db.prepare(`SELECT 1 FROM users WHERE role = 'admin' LIMIT 1`).get();
+}
+
+function createInitialAdmin(email, passwordHash, name) {
+  if (hasAdmin()) throw new Error('이미 관리자 계정이 설정되어 있습니다');
+  const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (existing) {
+    db.prepare(
+      `UPDATE users SET password_hash = ?, name = ?, role = 'admin', status = 'active', expires_at = NULL WHERE id = ?`
+    ).run(passwordHash, name || '관리자', existing.id);
+    assignOrphanAccountsToAdmin();
+    return existing.id;
+  }
+  const info = db.prepare(
+    `INSERT INTO users (email, password_hash, name, role, status, plan, expires_at)
+     VALUES (?, ?, ?, 'admin', 'active', 'pro', NULL)`
+  ).run(email, passwordHash, name || '관리자');
+  assignOrphanAccountsToAdmin();
+  return info.lastInsertRowid;
+}
 
 // 최초 관리자 자동 생성/승격 — 회원가입 경로로는 admin이 될 수 없고, 오직 서버 환경변수로만 부트스트랩됨
 function bootstrapAdmin() {
@@ -438,4 +499,8 @@ module.exports = {
   getTodayUsage,
   getSiteSettings,
   updateSiteSettings,
+  getSystemApiSettings,
+  updateSystemApiSettings,
+  hasAdmin,
+  createInitialAdmin,
 };
