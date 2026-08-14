@@ -1,226 +1,400 @@
 const axios = require('axios');
-const { getAccount, getSystemApiSettings } = require('./db');
+const { getAccount } = require('./db');
 
-// SaaS 전환: 일반 회원에게 OpenAI 키를 직접 받지 않고, 운영자가 등록한 서버 환경변수(OPENAI_API_KEY)를
-// 우선 사용한다. 아직 env가 없는 로컬 개발/과거 계정 호환을 위해 계정별 저장 키로 폴백은 남겨둠.
-function resolveOpenAiKey(account) {
-  const shared = getSystemApiSettings();
-  return shared.openai_api_key || process.env.OPENAI_API_KEY || account?.openai_api_key || null;
+// ----------------------------------------------------
+// 한국 날짜 / 계절 계산
+// ----------------------------------------------------
+function getKoreaContext() {
+  const now = new Date();
+
+  const currentDate = new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  }).format(now);
+
+  const currentMonth = Number(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Seoul',
+      month: 'numeric',
+    }).format(now)
+  );
+
+  let currentSeason = '봄';
+
+  if ([6, 7, 8].includes(currentMonth)) {
+    currentSeason = '여름';
+  } else if ([9, 10, 11].includes(currentMonth)) {
+    currentSeason = '가을';
+  } else if ([12, 1, 2].includes(currentMonth)) {
+    currentSeason = '겨울';
+  }
+
+  return {
+    currentDate,
+    currentMonth,
+    currentSeason,
+  };
 }
 
-const SYSTEM_PROMPT = `
-너는 한국 Threads(스레드)에 실제로 자주 글을 올리는 사람이다.
+// ----------------------------------------------------
+// Threads 글 생성 프롬프트
+// ----------------------------------------------------
+function makeSystemPrompt() {
+  const { currentDate, currentSeason } = getKoreaContext();
 
-사용자가 상품명을 주면 광고문구를 쓰는 것이 아니라,
-그 상품을 실제로 써봤거나 먹어본 사람이
-친구한테 경험담을 툭 풀듯 자연스러운 Threads 글을 작성한다.
+  return `
+너는 한국 Threads에서 실제 일반 사용자가 쓰는 것처럼
+짧고 자연스러운 게시물을 만드는 콘텐츠 작가다.
+
+현재 날짜: ${currentDate}
+현재 계절: ${currentSeason}
+
+주어진 상품을 소재로 Threads 게시물 5개를 작성한다.
 
 가장 중요한 목표는
-"AI가 작성한 광고글처럼 보이지 않는 것"이다.
+"상품 광고"처럼 보이지 않고
+사람이 자기 일상이나 생각을 그냥 올린 글처럼 보이게 하는 것이다.
 
-[기본 문체]
 
-- 한국인이 실제 Threads에 쓴 것처럼 자연스럽게 작성한다.
-- 반말 위주의 일상적인 구어체를 사용한다.
-- 문장을 너무 정돈하거나 예쁘게 다듬지 않는다.
-- 실제 경험처럼 생활 속 디테일을 넣는다.
-- 상황에 맞으면 "ㅋㅋ", "와", "아니", "근데", "진짜", "은근", "생각보다", "괜히" 같은 표현을 자연스럽게 사용할 수 있다.
-- 모든 문장을 완벽한 문어체로 끝내지 않는다.
-- 광고 카피보다 실제 사람이 쓴 후기나 썰에 가깝게 쓴다.
-- 약간 날것의 생활 표현을 허용한다.
-- 다만 억지 유행어나 과도한 비속어는 사용하지 않는다.
+[가장 중요한 규칙]
 
-[길이]
+1. 현재 날짜와 계절을 반드시 고려한다.
 
-- 기본 6~10줄 정도로 작성한다.
-- 내용에 따라 5줄 또는 11줄 정도가 되어도 괜찮다.
-- 억지로 짧게 줄이지 않는다.
-- 한 줄은 모바일에서 읽기 편하게 너무 길지 않게 끊는다.
-- 3줄짜리 단답형 글은 피한다.
+현재 계절과 맞지 않는 날씨나 상황을
+현재 실제 상황처럼 만들어내면 안 된다.
 
-[글의 흐름]
+예:
 
-아래 흐름을 참고하되
-매번 같은 순서로 만들지 않는다.
+여름인데
+"오늘 너무 추워서 코트를 꺼냈다"
+"아침에 너무 추워서 패딩을 입었다"
+같은 표현 금지.
 
-생활 속 상황
-→ 불편함 / 고민 / 웃긴 상황
-→ 실제 경험
-→ 상품을 써보거나 먹어봄
-→ 의외였던 점 또는 만족한 부분
-→ 자연스러운 마무리
+겨울인데
+"너무 더워서 선풍기를 꺼냈다"
+같은 표현 금지.
 
-상품명을 첫 줄부터 대놓고 소개하지 않는 것을 선호한다.
+현재 실제 날씨 정보는 제공되지 않았으므로
 
-상품은 중간이나 후반에 자연스럽게 등장시키거나,
-필요하면 상품명을 직접 쓰지 않고
-"이거", "이걸로", "이거 써봤는데"처럼 표현할 수 있다.
+"오늘 비가 와서"
+"눈이 엄청 와서"
+"폭염이라서"
+"한파라서"
 
-[후킹]
+처럼 확인되지 않은 구체적인 날씨도 단정하지 않는다.
 
-첫 줄은 다음 줄을 읽고 싶게 만들어야 한다.
 
-하지만 모든 글을 질문형으로 시작하면 안 된다.
+2. 상품의 계절과 현재 계절이 맞지 않으면
+억지로 지금 사용 중인 것처럼 쓰지 않는다.
 
-다음 형태를 다양하게 섞어라.
+대신 자연스럽게 다음 중 하나로 풀어낸다.
 
-- 실제 경험 고백
-- 황당한 상황
-- 공감
-- 고민
-- 반전
-- 짧은 한마디
+- 미리 준비하는 상황
+- 다음 계절 대비
+- 우연히 발견
+- 찜해둔 상품
+- 갖고 싶어서 저장
+- 가격 보고 미리 구매
+- 다음 시즌에 쓰려고 구매
+- 사진이나 디자인 보고 관심이 생긴 상황
+
+
+3. 쇼핑몰 후기처럼 쓰지 않는다.
+
+다음과 같은 문구는 사용하지 않는다.
+
+- 편안한 건 물론이고
+- 활용도가 좋다
+- 다양한 스타일링이 가능하다
+- 스타일링하기 좋다
+- 자주 사용하게 될 것 같다
+- 자주 입게 될 것 같다
+- 강력 추천한다
+- 추천합니다
+- 데일리로 활용하기 좋다
+- 하나쯤 있으면 좋다
+- 만족도가 높다
+- 실용적이다
+- 다양한 코디가 가능하다
+- 구매하길 잘했다
+- 고민이 덜해졌다
+
+
+4. 제품 장점을 설명하는 글을 만들지 않는다.
+
+제품의 장점은 한 게시물에서
+최대 1~2개까지만 자연스럽게 녹인다.
+
+상품의 기능을 연속으로 나열하지 않는다.
+
+
+5. 실제 사람이 Threads에 즉흥적으로 작성한 느낌으로 쓴다.
+
+문장은 짧게 끊는다.
+
+너무 완벽한 문장이나
+블로그 후기 같은 문장은 피한다.
+
+말투는 자연스러운 반말을 기본으로 한다.
+
+억지 유행어,
+과도한 "ㅋㅋㅋㅋ",
+과도한 감탄사,
+과도한 밈 표현은 사용하지 않는다.
+
+필요한 경우 "ㅋㅋ" 정도는 자연스럽게 사용할 수 있다.
+
+
+6. 모든 글을 질문형으로 시작하지 않는다.
+
+5개 버전은 서로 다른 방식으로 시작한다.
+
+예:
+
+- 공감형
 - 질문형
-- 가족/친구/회사/집에서 생긴 상황
+- 혼잣말형
+- 발견형
+- 충동구매형
+- 고민형
+- 짧은 썰형
+- 반전형
+- 감탄형
 
-예시 느낌:
+이 중 상품에 맞는 스타일을 골라 서로 다르게 작성한다.
 
-나 냄새에 진짜 예민한 편인데
 
-남편 방 문 열었다가 바로 닫음ㅋㅋ
+7. 모든 글을 같은 구조로 작성하지 않는다.
 
-사과 잘못 사면 한 박스가 진짜 고문임
+특히 아래 구조를 반복하지 않는다.
 
-조카 놀러 왔다가 집에 안 간다고 난리남ㅋㅋ
+상황
+→ 불편함
+→ 제품 등장
+→ 장점
+→ 만족
+→ 추천
 
-이거 왜 이제 알았지
+5개 버전의 시작 방식과 결말을 서로 다르게 만든다.
 
-나만 이런 거 신경 쓰나 했는데
 
-위 문장을 그대로 베끼지 말고
-상품에 맞게 새롭게 만들어라.
+8. 글 길이도 전부 똑같게 만들지 않는다.
 
-[광고 느낌 금지]
+5개 중 길이를 섞는다.
+
+- 매우 짧은 글: 2~3줄
+- 짧은 글: 4~5줄
+- 조금 긴 글: 5~7줄
+
+7줄을 넘기지 않는다.
+
+
+9. 상품명을 본문에서 반복하지 않는다.
+
+브랜드명과 전체 상품명을 그대로 복사해서
+광고처럼 보여주지 않는다.
+
+필요하면
+
+"이거"
+"이런 거"
+"이거 하나"
+
+처럼 자연스럽게 지칭한다.
+
+다만 상품의 종류조차 전혀 알 수 없게
+지나치게 숨기지는 않는다.
+
+
+10. 실제로 제공되지 않은 개인 경험을 과도하게 지어내지 않는다.
+
+예를 들어 정보가 없는데
+
+"친구가 추천했다"
+"남편이 사줬다"
+"회사 동료가 쓴다"
+"한 달 동안 사용했다"
+
+같은 구체적인 사실을 임의로 만들지 않는다.
+
+가벼운 상황 설정은 가능하지만
+실제 후기처럼 상세한 허위 경험을 만들지 않는다.
+
+
+11. 다음 요소는 본문에 넣지 않는다.
+
+- 링크
+- 쿠팡 링크
+- 해시태그
+- 광고 표시 문구
+- 가격 링크 안내
+- 이모지 남발
+- "구매는 댓글"
+- "프로필 링크"
+- "궁금하면 댓글"
+
+이런 요소는 시스템에서 별도로 처리한다.
+
+
+12. 광고 문구 금지.
 
 다음 표현은 사용하지 않는다.
 
 - 추천합니다
-- 강력 추천
 - 강추
-- 필수템
 - 꿀템
+- 필수템
+- 무조건 사세요
+- 이 제품은
 - 구매하세요
 - 놓치지 마세요
-- 이 제품은
-- 오늘 소개할 제품은
-- ~하시는 분들께 추천
 - 가성비 최고
-- 완전 대박 제품
-- 무조건 사세요
+- 인생템
 
-장점을 숫자로 나열하지 않는다.
 
-예:
-1. 향이 좋음
-2. 오래 감
-3. 저렴함
+[상품별 판단 규칙]
 
-이런 방식은 금지한다.
+상품이 패션이라면
+핏, 색감, 코디 고민, 계절 준비처럼 자연스럽게 접근한다.
 
-[사실성]
+생활용품이라면
+일상의 사소한 불편이나 발견에서 시작할 수 있다.
 
-상품명이나 가격만 보고
-확실하지 않은 기능, 성분, 효능, 인증, 할인율, 성능을
-사실처럼 만들어내지 않는다.
+식품이라면
+확인되지 않은 건강 효능을 만들어내지 않는다.
 
-예를 들어 상품명에 없는
-"저자극 인증", "24시간 지속", "항균 99.9%" 같은 내용은
-임의로 만들지 않는다.
+건강식품이라면
+질병 치료, 체중 감량 보장, 성기능 개선 등
+확정적인 효과를 주장하지 않는다.
 
-확실한 정보가 없으면
-느낌이나 상황 중심으로 자연스럽게 작성한다.
+전자제품이라면
+제공되지 않은 스펙을 임의로 만들어내지 않는다.
 
-[상품명 사용]
+계절상품이라면
+현재 계절과의 관계를 가장 먼저 확인한다.
 
-상품명과 브랜드명을 과하게 반복하지 않는다.
 
-글 전체에서 상품명을 꼭 써야 하는 것은 아니다.
+[좋은 문체 예시]
 
-필요하면 마지막 쪽에서 한 번 정도 자연스럽게 언급한다.
+예시 1:
 
-[버전 다양성]
+옷은 많은데
+막상 나가려면 입을 게 없음ㅋㅋ
 
-서로 다른 Threads 글 5개를 작성한다.
+이런 코트 하나 보고 있는데
+가을 오면 바로 입을 듯
 
-5개 글은
-첫 문장만 바꾼 복사본처럼 만들면 안 된다.
 
-각 버전마다:
+예시 2:
 
-- 다른 상황
-- 다른 후킹
-- 다른 감정
-- 다른 말투
-- 다른 이야기 흐름
+이런 거 왜 이제 봤지
 
-을 사용한다.
+맨날 충전선 책상 밑으로 떨어져서
+찾는 게 일이었는데
+이건 좀 탐남
 
-예를 들어 한 버전은 집에서,
-한 버전은 친구 얘기,
-한 버전은 직접 써본 후기,
-한 버전은 고민에서 시작,
-한 버전은 웃긴 상황에서 시작하는 식으로
-확실히 차이를 둔다.
+
+예시 3:
+
+아직 여름인데
+벌써 가을옷 보는 사람 나뿐임?
+
+이거 핏 때문에
+일단 저장해둠
+
+
+예시 4:
+
+집에서 냄새에 예민한 사람은
+이런 거 한 번쯤 찾아보게 되는 듯
+
+나도 요즘 이런 쪽만 계속 보고 있음
+
+
+위 예시 문장을 그대로 복사하지 말고
+결과의 분위기와 자연스러움만 참고한다.
+
 
 [출력 형식]
 
-완성된 Threads 본문 5개만 출력한다.
+서로 확실히 다른 Threads 글 5개를 작성한다.
 
-각 글 사이에는 반드시 아래 구분자를 한 줄 넣는다.
+각 버전 사이에는 반드시 아래처럼
+--- 한 줄만 넣는다.
 
+첫 번째 글
 ---
+두 번째 글
+---
+세 번째 글
+---
+네 번째 글
+---
+다섯 번째 글
 
-번호는 붙이지 않는다.
-제목도 붙이지 않는다.
-추가 설명도 하지 않는다.
-해시태그와 링크는 넣지 않는다.
+번호,
+"버전 1",
+설명,
+따옴표,
+제목은 붙이지 않는다.
+
+최종 출력에는 게시물 본문 5개와 --- 구분자만 출력한다.
 `;
+}
 
-async function generateCaption(accountId, { productName, price, target, scene }) {
+// ----------------------------------------------------
+// 캡션 생성
+// ----------------------------------------------------
+async function generateCaption(accountId, { productName, price }) {
   const account = getAccount(accountId);
-
-  if (!account) {
-    throw new Error('존재하지 않는 계정입니다');
-  }
-
-  const apiKey = resolveOpenAiKey(account);
-  if (!apiKey) {
-    throw new Error(
-      'OpenAI API 키가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)'
-    );
-  }
 
   const priceText = price
     ? `${Number(price).toLocaleString('ko-KR')}원`
     : '';
 
-  const targetText =
-    target && target !== '전체'
-      ? `\n\n이 글을 읽을 타겟은 "${target}"이다. 이 타겟이 실제로 겪을 법한 상황, 말투, 관심사에 맞춰서 써줘 (예: 20대 여자면 자취/화장품/다이어트/연애 관련 일상, 30대 남자면 회사/운동/육아/자취 관련 일상 등 타겟에 맞는 생활 맥락을 자연스럽게 반영).`
-      : '';
+  const { currentDate, currentSeason } = getKoreaContext();
 
-  // 이미지와 짝을 맞출 배경 상황이 있으면, 글의 장소/상황도 그 배경과 자연스럽게 맞춰줌
-  // (이미지가 카페 사진인데 글은 집 얘기를 하는 식으로 어긋나지 않게)
-  const sceneText = scene
-    ? `\n\n같이 쓸 사진의 배경: ${scene.location || ''} (${scene.context || ''}). ` +
-      `글의 배경/상황도 이 사진과 자연스럽게 맞아떨어지게 써줘. 다만 있지도 않은 세부 체험을 ` +
-      `과장해서 지어내지는 말고, 사진 배경과 어색하지 않게 이어지는 정도로만.`
-    : '';
+  const userMessage = `
+현재 날짜: ${currentDate}
+현재 계절: ${currentSeason}
 
-  const userMessage =
-    `상품명: ${productName}` +
-    `${priceText ? `\n가격: ${priceText}` : ''}` +
-    targetText +
-    sceneText +
-    `\n\n이 상품을 바탕으로 실제 사람이 Threads에 쓴 것 같은 자연스러운 글 5개를 작성해줘.
-광고문구보다 생활 속 경험담이나 썰 느낌을 우선해줘.`;
+상품명: ${productName}
+${priceText ? `가격: ${priceText}` : ''}
 
-  return generateWithOpenAI(
-    apiKey,
-    userMessage
+이 상품을 소재로
+위 시스템 규칙에 맞는 Threads 글 5개를 작성해줘.
+
+상품명만 보고 확인할 수 없는 기능,
+효능,
+사용 경험,
+날씨는 임의로 만들어내지 마.
+`.trim();
+
+  if (account?.anthropic_api_key) {
+    return generateWithAnthropic(
+      account.anthropic_api_key,
+      userMessage
+    );
+  }
+
+  if (account?.openai_api_key) {
+    return generateWithOpenAI(
+      account.openai_api_key,
+      userMessage
+    );
+  }
+
+  throw new Error(
+    '이 계정에 Anthropic 또는 OpenAI API 키가 설정되지 않았습니다 (연결 설정에서 입력)'
   );
 }
 
+// ----------------------------------------------------
+// AI 결과 5개 분리
+// ----------------------------------------------------
 function splitVariants(text) {
   const variants = text
     .split(/\n\s*---\s*\n/)
@@ -228,179 +402,88 @@ function splitVariants(text) {
     .filter(Boolean);
 
   return variants.length
-    ? variants
+    ? variants.slice(0, 5)
     : [text.trim()];
 }
 
-async function generateWithOpenAI(apiKey, userMessage) {
-  try {
-    const res = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4o-mini',
-        max_tokens: 1800,
-        temperature: 0.9,
-        messages: [
-          {
-            role: 'system',
-            content: SYSTEM_PROMPT,
-          },
-          {
-            role: 'user',
-            content: userMessage,
-          },
-        ],
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 30000,
-      }
-    );
-
-    const text =
-      res.data?.choices?.[0]?.message?.content;
-
-    if (!text) {
-      throw new Error(
-        'OpenAI에서 생성 결과를 받지 못했습니다'
-      );
-    }
-
-    return splitVariants(text);
-
-  } catch (err) {
-    const apiErr =
-      err.response?.data?.error;
-
-    console.error(
-      '[OpenAI 생성 실패]',
-      JSON.stringify(
+// ----------------------------------------------------
+// Anthropic
+// ----------------------------------------------------
+async function generateWithAnthropic(apiKey, userMessage) {
+  const res = await axios.post(
+    'https://api.anthropic.com/v1/messages',
+    {
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1200,
+      temperature: 0.9,
+      system: makeSystemPrompt(),
+      messages: [
         {
-          status: err.response?.status,
-          type: apiErr?.type,
-          code: apiErr?.code,
-          message:
-            apiErr?.message || err.message,
+          role: 'user',
+          content: userMessage,
         },
-        null,
-        2
-      )
-    );
+      ],
+    },
+    {
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      timeout: 30000,
+    }
+  );
 
-    throw new Error(
-      apiErr?.message ||
-      err.message ||
-      'OpenAI 글 생성에 실패했습니다'
-    );
+  const textBlock = res.data?.content?.find(
+    (block) => block.type === 'text'
+  );
+
+  if (!textBlock?.text) {
+    throw new Error('생성 결과를 받지 못했습니다');
   }
+
+  return splitVariants(textBlock.text);
+}
+
+// ----------------------------------------------------
+// OpenAI
+// ----------------------------------------------------
+async function generateWithOpenAI(apiKey, userMessage) {
+  const res = await axios.post(
+    'https://api.openai.com/v1/chat/completions',
+    {
+      model: 'gpt-4o-mini',
+      max_tokens: 1200,
+      temperature: 0.9,
+      messages: [
+        {
+          role: 'system',
+          content: makeSystemPrompt(),
+        },
+        {
+          role: 'user',
+          content: userMessage,
+        },
+      ],
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
+      timeout: 30000,
+    }
+  );
+
+  const text = res.data?.choices?.[0]?.message?.content;
+
+  if (!text) {
+    throw new Error('생성 결과를 받지 못했습니다');
+  }
+
+  return splitVariants(text);
 }
 
 module.exports = {
   generateCaption,
-  suggestKeyword,
 };
-
-// AI가 검색 키워드 자체를 정해줌 ("완전 자동발행"에서 사람 개입 없이 상품을 고를 때 사용)
-const KEYWORD_SYSTEM_PROMPT = `너는 쿠팡에서 잘 팔리는 생활용품/식품/뷰티 상품을 Threads에 소개하는 사람이다.
-지금 계절, 요즘 사람들이 실제로 관심 가질 만한 생활 밀착형 상품 카테고리를 하나 골라서
-쿠팡 검색창에 그대로 입력할 만한 한국어 검색 키워드를 딱 하나만 출력해라.
-
-- 브랜드명 없이 일반 명사로 (예: "섬유유연제", "찰옥수수", "무선 이어폰", "여름 이불")
-- 2~4단어 이내의 짧은 검색어 형태
-- 결과는 키워드 텍스트 하나만 출력. 설명, 따옴표, 번호 절대 붙이지 말 것`;
-
-async function suggestKeyword(accountId) {
-  const account = getAccount(accountId);
-  if (!account) {
-    throw new Error('존재하지 않는 계정입니다');
-  }
-  const apiKey = resolveOpenAiKey(account);
-  if (!apiKey) {
-    throw new Error('OpenAI API 키가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
-  }
-
-  const res = await axios.post(
-    'https://api.openai.com/v1/chat/completions',
-    {
-      model: 'gpt-4o-mini',
-      max_tokens: 50,
-      temperature: 1,
-      messages: [
-        { role: 'system', content: KEYWORD_SYSTEM_PROMPT },
-        { role: 'user', content: '키워드 하나 제안해줘' },
-      ],
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 20000,
-    }
-  );
-
-  const text = res.data?.choices?.[0]?.message?.content;
-  if (!text) throw new Error('OpenAI에서 키워드를 받지 못했습니다');
-  return text.trim().split('\n')[0].replace(/["'.]/g, '').trim();
-}
-
-const KEYWORD_CANDIDATES_PROMPT = `너는 쿠팡에서 잘 팔리는 생활용품/식품/뷰티 상품을 Threads에 소개하는 사람이다.
-지금 계절, 요즘 사람들이 실제로 관심 가질 만한 생활 밀착형 상품 카테고리를 서로 다른 5개 골라서
-쿠팡 검색창에 그대로 입력할 만한 한국어 검색 키워드를 5개 출력해라.
-
-- 브랜드명 없이 일반 명사로 (예: "섬유유연제", "찰옥수수", "무선 이어폰", "여름 이불")
-- 2~4단어 이내의 짧은 검색어 형태
-- 5개는 서로 다른 카테고리여야 함 (전부 비슷한 종류로 몰지 말 것)
-- 한 줄에 하나씩, 총 5줄만 출력. 번호, 설명, 따옴표 절대 붙이지 말 것`;
-
-// 트렌드 비교를 위해 후보 키워드 5개를 한 번에 뽑아옴 (타겟이 있으면 그 타겟이 관심 가질 만한 카테고리 위주로)
-async function suggestKeywordCandidates(accountId, target) {
-  const account = getAccount(accountId);
-  if (!account) {
-    throw new Error('존재하지 않는 계정입니다');
-  }
-  const apiKey = resolveOpenAiKey(account);
-  if (!apiKey) {
-    throw new Error('OpenAI API 키가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
-  }
-
-  const userMessage =
-    target && target !== '전체'
-      ? `키워드 5개 제안해줘. 타겟은 "${target}"이야, 이 타겟이 관심 가질 만한 카테고리 위주로 골라줘.`
-      : '키워드 5개 제안해줘';
-
-  const res = await axios.post(
-    'https://api.openai.com/v1/chat/completions',
-    {
-      model: 'gpt-4o-mini',
-      max_tokens: 150,
-      temperature: 1,
-      messages: [
-        { role: 'system', content: KEYWORD_CANDIDATES_PROMPT },
-        { role: 'user', content: userMessage },
-      ],
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 20000,
-    }
-  );
-
-  const text = res.data?.choices?.[0]?.message?.content;
-  if (!text) throw new Error('OpenAI에서 키워드를 받지 못했습니다');
-
-  const candidates = text
-    .split('\n')
-    .map((line) => line.replace(/^[\d.\-\s]+/, '').replace(/["'.]/g, '').trim())
-    .filter(Boolean);
-
-  return candidates.length ? candidates : [text.trim()];
-}
-
-module.exports.suggestKeywordCandidates = suggestKeywordCandidates;
