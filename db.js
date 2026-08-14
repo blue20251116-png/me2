@@ -36,6 +36,13 @@ CREATE TABLE IF NOT EXISTS accounts (
 
   anthropic_api_key TEXT,
   openai_api_key TEXT,
+  naver_client_id TEXT,
+  naver_client_secret TEXT,
+
+  autopilot_enabled INTEGER DEFAULT 0,
+  autopilot_next_at TEXT,
+  autopilot_last_keyword TEXT,
+  autopilot_last_target TEXT,
 
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -89,6 +96,12 @@ const migrations = [
   `ALTER TABLE posts ADD COLUMN video_url TEXT`,
   `ALTER TABLE posts ADD COLUMN account_id INTEGER`,
   `ALTER TABLE accounts ADD COLUMN openai_api_key TEXT`,
+  `ALTER TABLE accounts ADD COLUMN autopilot_enabled INTEGER DEFAULT 0`,
+  `ALTER TABLE accounts ADD COLUMN autopilot_next_at TEXT`,
+  `ALTER TABLE accounts ADD COLUMN autopilot_last_keyword TEXT`,
+  `ALTER TABLE accounts ADD COLUMN autopilot_last_target TEXT`,
+  `ALTER TABLE accounts ADD COLUMN naver_client_id TEXT`,
+  `ALTER TABLE accounts ADD COLUMN naver_client_secret TEXT`,
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (e) { /* 컬럼이 이미 있으면 무시 */ }
@@ -173,6 +186,12 @@ const ACCOUNT_UPDATABLE_FIELDS = [
   'coupang_disclosure_template',
   'anthropic_api_key',
   'openai_api_key',
+  'autopilot_enabled',
+  'autopilot_next_at',
+  'autopilot_last_keyword',
+  'autopilot_last_target',
+  'naver_client_id',
+  'naver_client_secret',
 ];
 
 function updateAccount(id, fields) {

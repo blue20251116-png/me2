@@ -32,8 +32,26 @@ async function scrapeProduct(url) {
     );
   }
 
+  // 상세페이지에 들어있는 추가 상품 이미지도 최대한 긁어옴 (썸네일 하나만이 아니라 여러 장 중 고를 수 있게)
+  // 페이지 구조는 사이트가 언제든 바꿀 수 있어서 100% 보장은 안 되는 best-effort 방식
+  const detailImages = new Set([ogImage]);
+  $('img').each((_, el) => {
+    if (detailImages.size >= 8) return; // 너무 많이 긁어오지 않도록 상한
+    const src = $(el).attr('data-src') || $(el).attr('src');
+    if (!src) return;
+    const absoluteUrl = src.startsWith('http') ? src : new URL(src, url).href;
+    const w = Number($(el).attr('width')) || 0;
+    const h = Number($(el).attr('height')) || 0;
+    // 아이콘/로고 같은 작은 이미지는 걸러내고, 상품 사진처럼 보이는 것만 후보로
+    const looksLikeIcon = (w && w < 200) || (h && h < 200) || /icon|logo|sprite|badge/i.test(absoluteUrl);
+    if (!looksLikeIcon && /^https?:\/\//.test(absoluteUrl)) {
+      detailImages.add(absoluteUrl);
+    }
+  });
+
   return {
     imageUrl: ogImage,
+    images: Array.from(detailImages), // 첫 번째가 항상 대표 이미지(og:image)
     title: cleanTitle || null,
     description: ogDescription || null,
     finalUrl: res.request?.res?.responseUrl || url, // 리다이렉트 최종 URL (참고용)

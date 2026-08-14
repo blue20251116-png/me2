@@ -1,6 +1,9 @@
 const cron = require('node-cron');
 const { db, listAccounts, getAccount } = require('./db');
 const { publishPost, publishReply, getMediaInsights } = require('./threadsApi');
+const coupangApi = require('./coupangApi');
+const { generateCaption, suggestKeywordCandidates } = require('./aiCaption');
+const { rankKeywordsByTrend } = require('./naverTrends');
 
 // 링크를 계정별 안내문구 템플릿에 끼워서 댓글용 텍스트 생성
 function buildCommentText(account, link) {
@@ -122,4 +125,83 @@ function startInsightsJob() {
   });
 }
 
-module.exports = { startPublishJob, startInsightsJob };
+module.exports = { startPublishJob, startInsightsJob, startAutopilotJob };
+
+// 60~75분 사이 랜덤 간격 (분 단위) — 매번 정확히 같은 주기로 안 돌게 해서 덜 봇처럼 보이게 함
+function randomIntervalMinutes() {
+  return 60 + Math.random() * 15;
+}
+
+// 오토파일럿이 매번 랜덤으로 골라볼 타겟 후보 (전체 포함, 다양성 확보용)
+const AUTOPILOT_TARGETS = ['전체', '20대 여자', '20대 남자', '30대 여자', '30대 남자', '40대 이상'];
+
+// AI가 키워드 후보 5개 정하기 -> (네이버 데이터랩 연동돼 있으면) 실제 검색 트렌드로 순위 매겨서 1등 선택
+// -> 쿠팡 검색 -> 상위 결과 중 랜덤 픽 -> 타겟에 맞춰 글 생성 -> 예약글로 등록
+// (실제 발행/댓글 등록은 여기서 하지 않고, 방금 만든 예약글을 startPublishJob이 곧바로 집어서 처리함)
+async function runAutopilotOnce(account) {
+  const target = AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
+
+  const candidates = await suggestKeywordCandidates(account.id, target);
+  let keyword = candidates[0];
+  let trendNote = '트렌드 비교 없이 AI 1순위 선택';
+
+  try {
+    const ranked = await rankKeywordsByTrend(account.id, candidates);
+    if (ranked && ranked.length) {
+      keyword = ranked[0].keyword;
+      trendNote = `네이버 데이터랩 트렌드 1위 (평균 지수 ${ranked[0].avgRatio.toFixed(1)})`;
+    }
+  } catch (err) {
+    console.error(`[트렌드 비교 실패] account #${account.id}:`, err.response?.data || err.message);
+    // 트렌드 비교가 실패해도 AI가 고른 1순위 키워드로 그냥 진행
+  }
+
+  const products = await coupangApi.searchProducts(account.id, keyword, 8);
+  if (!products.length) throw new Error(`"${keyword}" 검색 결과가 없습니다`);
+
+  const pool = products.slice(0, Math.min(5, products.length));
+  const picked = pool[Math.floor(Math.random() * pool.length)];
+
+  const texts = await generateCaption(account.id, { productName: picked.name, price: picked.price, target });
+  const text = texts[Math.floor(Math.random() * texts.length)];
+
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO posts (text, link, image_url, scheduled_at, auto_comment_enabled, comment_status, account_id)
+     VALUES (?, ?, ?, ?, 1, 'pending', ?)`
+  ).run(text, picked.url, picked.image, now, account.id);
+
+  db.prepare(`UPDATE accounts SET autopilot_last_keyword = ?, autopilot_last_target = ? WHERE id = ?`).run(
+    keyword,
+    target,
+    account.id
+  );
+  console.log(
+    `[자동발행 예약] account #${account.id} target="${target}" keyword="${keyword}" (${trendNote}) product="${picked.name}"`
+  );
+}
+
+// 1분마다: 자동발행이 켜진 계정 중 예정 시각이 지난 계정을 골라 새 글을 하나 만들고,
+// 다음 실행 시각을 60~75분 뒤 랜덤으로 다시 잡음
+function startAutopilotJob() {
+  cron.schedule('* * * * *', async () => {
+    const now = new Date().toISOString();
+    const dueAccounts = db
+      .prepare(
+        `SELECT * FROM accounts WHERE autopilot_enabled = 1 AND (autopilot_next_at IS NULL OR autopilot_next_at <= ?)`
+      )
+      .all(now);
+
+    for (const account of dueAccounts) {
+      const nextAt = new Date(Date.now() + randomIntervalMinutes() * 60000).toISOString();
+      // 실행 전에 먼저 다음 시각을 잡아둬서, 오래 걸리는 실패가 반복 재시도로 겹치지 않게 함
+      db.prepare(`UPDATE accounts SET autopilot_next_at = ? WHERE id = ?`).run(nextAt, account.id);
+      try {
+        await runAutopilotOnce(account);
+      } catch (err) {
+        const msg = err.response?.data?.error?.message || err.message;
+        console.error(`[자동발행 실패] account #${account.id}:`, msg);
+      }
+    }
+  });
+}

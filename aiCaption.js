@@ -169,7 +169,7 @@ const SYSTEM_PROMPT = `
 해시태그와 링크는 넣지 않는다.
 `;
 
-async function generateCaption(accountId, { productName, price }) {
+async function generateCaption(accountId, { productName, price, target }) {
   const account = getAccount(accountId);
 
   if (!account) {
@@ -186,9 +186,15 @@ async function generateCaption(accountId, { productName, price }) {
     ? `${Number(price).toLocaleString('ko-KR')}원`
     : '';
 
+  const targetText =
+    target && target !== '전체'
+      ? `\n\n이 글을 읽을 타겟은 "${target}"이다. 이 타겟이 실제로 겪을 법한 상황, 말투, 관심사에 맞춰서 써줘 (예: 20대 여자면 자취/화장품/다이어트/연애 관련 일상, 30대 남자면 회사/운동/육아/자취 관련 일상 등 타겟에 맞는 생활 맥락을 자연스럽게 반영).`
+      : '';
+
   const userMessage =
     `상품명: ${productName}` +
     `${priceText ? `\n가격: ${priceText}` : ''}` +
+    targetText +
     `\n\n이 상품을 바탕으로 실제 사람이 Threads에 쓴 것 같은 자연스러운 글 5개를 작성해줘.
 광고문구보다 생활 속 경험담이나 썰 느낌을 우선해줘.`;
 
@@ -277,4 +283,105 @@ async function generateWithOpenAI(apiKey, userMessage) {
 
 module.exports = {
   generateCaption,
+  suggestKeyword,
 };
+
+// AI가 검색 키워드 자체를 정해줌 ("완전 자동발행"에서 사람 개입 없이 상품을 고를 때 사용)
+const KEYWORD_SYSTEM_PROMPT = `너는 쿠팡에서 잘 팔리는 생활용품/식품/뷰티 상품을 Threads에 소개하는 사람이다.
+지금 계절, 요즘 사람들이 실제로 관심 가질 만한 생활 밀착형 상품 카테고리를 하나 골라서
+쿠팡 검색창에 그대로 입력할 만한 한국어 검색 키워드를 딱 하나만 출력해라.
+
+- 브랜드명 없이 일반 명사로 (예: "섬유유연제", "찰옥수수", "무선 이어폰", "여름 이불")
+- 2~4단어 이내의 짧은 검색어 형태
+- 결과는 키워드 텍스트 하나만 출력. 설명, 따옴표, 번호 절대 붙이지 말 것`;
+
+async function suggestKeyword(accountId) {
+  const account = getAccount(accountId);
+  if (!account) {
+    throw new Error('존재하지 않는 계정입니다');
+  }
+  if (!account.openai_api_key) {
+    throw new Error('이 계정에 OpenAI API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
+  }
+
+  const res = await axios.post(
+    'https://api.openai.com/v1/chat/completions',
+    {
+      model: 'gpt-4o-mini',
+      max_tokens: 50,
+      temperature: 1,
+      messages: [
+        { role: 'system', content: KEYWORD_SYSTEM_PROMPT },
+        { role: 'user', content: '키워드 하나 제안해줘' },
+      ],
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${account.openai_api_key}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 20000,
+    }
+  );
+
+  const text = res.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('OpenAI에서 키워드를 받지 못했습니다');
+  return text.trim().split('\n')[0].replace(/["'.]/g, '').trim();
+}
+
+const KEYWORD_CANDIDATES_PROMPT = `너는 쿠팡에서 잘 팔리는 생활용품/식품/뷰티 상품을 Threads에 소개하는 사람이다.
+지금 계절, 요즘 사람들이 실제로 관심 가질 만한 생활 밀착형 상품 카테고리를 서로 다른 5개 골라서
+쿠팡 검색창에 그대로 입력할 만한 한국어 검색 키워드를 5개 출력해라.
+
+- 브랜드명 없이 일반 명사로 (예: "섬유유연제", "찰옥수수", "무선 이어폰", "여름 이불")
+- 2~4단어 이내의 짧은 검색어 형태
+- 5개는 서로 다른 카테고리여야 함 (전부 비슷한 종류로 몰지 말 것)
+- 한 줄에 하나씩, 총 5줄만 출력. 번호, 설명, 따옴표 절대 붙이지 말 것`;
+
+// 트렌드 비교를 위해 후보 키워드 5개를 한 번에 뽑아옴 (타겟이 있으면 그 타겟이 관심 가질 만한 카테고리 위주로)
+async function suggestKeywordCandidates(accountId, target) {
+  const account = getAccount(accountId);
+  if (!account) {
+    throw new Error('존재하지 않는 계정입니다');
+  }
+  if (!account.openai_api_key) {
+    throw new Error('이 계정에 OpenAI API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
+  }
+
+  const userMessage =
+    target && target !== '전체'
+      ? `키워드 5개 제안해줘. 타겟은 "${target}"이야, 이 타겟이 관심 가질 만한 카테고리 위주로 골라줘.`
+      : '키워드 5개 제안해줘';
+
+  const res = await axios.post(
+    'https://api.openai.com/v1/chat/completions',
+    {
+      model: 'gpt-4o-mini',
+      max_tokens: 150,
+      temperature: 1,
+      messages: [
+        { role: 'system', content: KEYWORD_CANDIDATES_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${account.openai_api_key}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 20000,
+    }
+  );
+
+  const text = res.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('OpenAI에서 키워드를 받지 못했습니다');
+
+  const candidates = text
+    .split('\n')
+    .map((line) => line.replace(/^[\d.\-\s]+/, '').replace(/["'.]/g, '').trim())
+    .filter(Boolean);
+
+  return candidates.length ? candidates : [text.trim()];
+}
+
+module.exports.suggestKeywordCandidates = suggestKeywordCandidates;

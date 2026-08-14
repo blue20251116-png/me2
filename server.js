@@ -15,8 +15,9 @@ const {
 const threadsApi = require('./threadsApi');
 const { scrapeProduct } = require('./scraper');
 const coupangApi = require('./coupangApi');
-const { generateCaption } = require('./aiCaption');
-const { startPublishJob, startInsightsJob } = require('./scheduler');
+const { generateCaption, suggestKeyword, suggestKeywordCandidates } = require('./aiCaption');
+const { rankKeywordsByTrend } = require('./naverTrends');
+const { startPublishJob, startInsightsJob, startAutopilotJob } = require('./scheduler');
 
 const app = express();
 app.use(express.json());
@@ -95,6 +96,29 @@ app.delete('/api/accounts/:accountId', requireAccount, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- 자동발행(오토파일럿) ----------
+app.get('/api/accounts/:accountId/autopilot', requireAccount, (req, res) => {
+  const a = req.account;
+  res.json({
+    enabled: !!a.autopilot_enabled,
+    nextAt: a.autopilot_next_at || null,
+    lastKeyword: a.autopilot_last_keyword || null,
+    lastTarget: a.autopilot_last_target || null,
+  });
+});
+
+app.post('/api/accounts/:accountId/autopilot/start', requireAccount, (req, res) => {
+  // 누르자마자 하나 만들어지는 게 아니라 1분 뒤 첫 실행, 이후로는 60~75분 랜덤 간격
+  const firstRunAt = new Date(Date.now() + 60 * 1000).toISOString();
+  updateAccount(req.account.id, { autopilot_enabled: 1, autopilot_next_at: firstRunAt });
+  res.json({ ok: true, nextAt: firstRunAt });
+});
+
+app.post('/api/accounts/:accountId/autopilot/stop', requireAccount, (req, res) => {
+  updateAccount(req.account.id, { autopilot_enabled: 0 });
+  res.json({ ok: true });
+});
+
 // ---------- 연결 상태 ----------
 app.get('/api/accounts/:accountId/connection-status', requireAccount, (req, res) => {
   const a = req.account;
@@ -159,11 +183,38 @@ app.delete('/api/upload-media/:filename', (req, res) => {
 
 // ---------- AI로 스레드 본문 자동 생성 ----------
 app.post('/api/generate-caption', requireAccount, async (req, res) => {
-  const { productName, price } = req.body;
+  const { productName, price, target } = req.body;
   if (!productName) return res.status(400).json({ error: 'productName이 필요합니다' });
   try {
-    const texts = await generateCaption(req.account.id, { productName, price });
+    const texts = await generateCaption(req.account.id, { productName, price, target });
     res.json({ texts });
+  } catch (err) {
+    res.status(422).json({ error: err.response?.data?.error?.message || err.message });
+  }
+});
+
+// ---------- AI가 검색 키워드 자체를 제안 ("AI 자동완성" 흐름) ----------
+// 네이버 데이터랩 키가 연결되어 있으면 후보 5개를 실제 검색 트렌드로 비교해서 1위를 고르고,
+// 없으면 AI가 제안한 후보 중 첫 번째를 그냥 사용
+app.post('/api/suggest-keyword', requireAccount, async (req, res) => {
+  const { target } = req.body || {};
+  try {
+    const candidates = await suggestKeywordCandidates(req.account.id, target);
+    let keyword = candidates[0];
+    let trendUsed = false;
+
+    try {
+      const ranked = await rankKeywordsByTrend(req.account.id, candidates);
+      if (ranked && ranked.length) {
+        keyword = ranked[0].keyword;
+        trendUsed = true;
+      }
+    } catch (trendErr) {
+      // 트렌드 조회 실패해도 AI 1순위 키워드로 그냥 진행
+      console.error('[트렌드 조회 실패]', trendErr.response?.data || trendErr.message);
+    }
+
+    res.json({ keyword, candidates, trendUsed });
   } catch (err) {
     res.status(422).json({ error: err.response?.data?.error?.message || err.message });
   }
@@ -326,6 +377,8 @@ app.get('/api/accounts/:accountId/settings', requireAccount, (req, res) => {
     COUPANG_DISCLOSURE_TEMPLATE: a.coupang_disclosure_template || DEFAULT_DISCLOSURE_TEMPLATE,
     hasAnthropicKey: !!a.anthropic_api_key,
     hasOpenaiKey: !!a.openai_api_key,
+    NAVER_CLIENT_ID: a.naver_client_id || '',
+    hasNaverSecret: !!a.naver_client_secret,
   });
 });
 
@@ -341,6 +394,9 @@ app.post('/api/accounts/:accountId/settings', requireAccount, (req, res) => {
     OPENAI_API_KEY,
     CLEAR_ANTHROPIC_KEY,
     CLEAR_OPENAI_KEY,
+    NAVER_CLIENT_ID,
+    NAVER_CLIENT_SECRET,
+    CLEAR_NAVER_KEY,
   } = req.body;
 
   const fields = {};
@@ -354,6 +410,12 @@ app.post('/api/accounts/:accountId/settings', requireAccount, (req, res) => {
   if (OPENAI_API_KEY) fields.openai_api_key = OPENAI_API_KEY;
   if (CLEAR_ANTHROPIC_KEY) fields.anthropic_api_key = null;
   if (CLEAR_OPENAI_KEY) fields.openai_api_key = null;
+  if (NAVER_CLIENT_ID !== undefined) fields.naver_client_id = NAVER_CLIENT_ID;
+  if (NAVER_CLIENT_SECRET) fields.naver_client_secret = NAVER_CLIENT_SECRET;
+  if (CLEAR_NAVER_KEY) {
+    fields.naver_client_id = null;
+    fields.naver_client_secret = null;
+  }
 
   updateAccount(req.account.id, fields);
   res.json({ ok: true });
@@ -373,4 +435,5 @@ app.listen(PORT, () => {
   console.log(`Threads 스케줄러 서버 http://localhost:${PORT}`);
   startPublishJob();
   startInsightsJob();
+  startAutopilotJob();
 });
