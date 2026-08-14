@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>회원가입</title>
+<link rel="stylesheet" href="style.css" />
+<style>
+  .auth-shell { max-width: 380px; margin: 0 auto; min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; padding: 24px; gap: 14px; }
+  .auth-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px 24px; }
+  .auth-title { font-family: var(--font-display); font-size: 20px; font-weight: 700; margin: 0 0 4px; }
+  .auth-sub { font-size: 13px; color: var(--text-dim); margin: 0 0 20px; }
+  .auth-card form { display: flex; flex-direction: column; gap: 12px; }
+  .auth-switch { text-align: center; font-size: 13px; color: var(--text-dim); margin-top: 16px; }
+  .auth-switch a { color: var(--amber); text-decoration: none; }
+  .pay-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
+  .pay-price { font-family: var(--font-display); font-size: 22px; font-weight: 700; color: var(--amber); margin: 0 0 10px; }
+  .pay-row { font-size: 13px; margin: 6px 0; }
+  .pay-row .l { color: var(--text-dim); }
+  .pay-guide { font-size: 12.5px; color: var(--text-dim); white-space: pre-wrap; margin-top: 10px; line-height: 1.6; }
+  .pay-kakao { display: inline-block; margin-top: 10px; padding: 8px 14px; border-radius: 8px; background: #FEE500; color: #000; font-size: 13px; font-weight: 600; text-decoration: none; }
+</style>
+</head>
+<body style="margin:0; background: var(--bg);">
+  <div class="auth-shell">
+    <div class="pay-card" id="payCard">
+      <p class="pay-price" id="payPrice">불러오는 중…</p>
+      <div class="pay-row"><span class="l">입금 계좌</span> <span id="payBank"></span></div>
+      <p class="pay-guide" id="payGuide"></p>
+      <a href="#" id="payKakaoLink" class="pay-kakao hidden">오픈카톡으로 입금 확인 보내기</a>
+    </div>
+    <div class="auth-card">
+      <h1 class="auth-title">회원가입</h1>
+      <p class="auth-sub">가입 후 관리자 승인이 필요합니다</p>
+      <form id="signupForm">
+        <label>이름<input type="text" name="name" /></label>
+        <label>이메일<input type="email" name="email" required /></label>
+        <label>비밀번호<input type="password" name="password" required minlength="8" /></label>
+        <button type="submit" class="btn-primary">가입 신청</button>
+      </form>
+      <p id="signupMsg" class="msg"></p>
+      <p class="auth-switch">이미 계정이 있으신가요? <a href="/login.html">로그인</a></p>
+    </div>
+  </div>
+  <script>
+    async function loadPaymentInfo() {
+      try {
+        const res = await fetch('/api/site-settings');
+        const data = await res.json();
+        document.getElementById('payPrice').textContent = data.price_label;
+        document.getElementById('payBank').textContent = data.bank_info;
+        document.getElementById('payGuide').textContent = data.payment_guide;
+        if (data.open_kakao_url) {
+          const link = document.getElementById('payKakaoLink');
+          link.href = data.open_kakao_url;
+          link.target = '_blank';
+          link.classList.remove('hidden');
+        }
+      } catch {
+        document.getElementById('payPrice').textContent = '결제 안내를 불러오지 못했어요';
+      }
+    }
+    loadPaymentInfo();
+
+    document.getElementById('signupForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const msg = document.getElementById('signupMsg');
+      try {
+        const res = await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: form.name.value, email: form.email.value, password: form.password.value }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        msg.textContent = data.message;
+        msg.className = 'msg';
+        form.reset();
+      } catch (err) {
+        msg.textContent = err.message;
+        msg.className = 'msg error';
+      }
+    });
+  </script>
+</body>
+</html>

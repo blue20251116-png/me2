@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>관리자</title>
+<link rel="stylesheet" href="style.css" />
+<style>
+  .admin-wrap { max-width: 720px; margin: 0 auto; padding: 20px 16px 60px; }
+  .admin-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .admin-top h1 { font-family: var(--font-display); font-size: 18px; margin: 0; }
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 18px; }
+  .stat-box { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px; text-align: center; }
+  .stat-box .n { font-family: var(--font-mono); font-size: 20px; font-weight: 700; }
+  .stat-box .l { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; }
+  .user-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+  .user-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .user-email { font-size: 13.5px; font-weight: 600; }
+  .user-name { font-size: 11.5px; color: var(--text-dim); }
+  .user-meta { font-size: 11.5px; color: var(--text-dim); margin-top: 4px; font-family: var(--font-mono); }
+  .user-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .user-actions button {
+    font-size: 11.5px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text); cursor: pointer;
+  }
+  .badge { font-size: 10px; font-family: var(--font-mono); padding: 2px 7px; border-radius: 999px; }
+  .badge.pending { color: var(--amber); background: rgba(245,166,35,0.12); }
+  .badge.active { color: var(--green); background: rgba(52,211,153,0.12); }
+  .badge.suspended { color: var(--red); background: rgba(240,101,90,0.12); }
+</style>
+</head>
+<body>
+  <div class="admin-wrap">
+    <div class="admin-top">
+      <h1>관리자</h1>
+      <a href="/" style="color: var(--text-dim); font-size: 12.5px;">← 대시보드로</a>
+    </div>
+    <div class="stat-row">
+      <div class="stat-box"><div class="n" id="statTotal">–</div><div class="l">전체 회원</div></div>
+      <div class="stat-box"><div class="n" id="statPending">–</div><div class="l">승인 대기</div></div>
+      <div class="stat-box"><div class="n" id="statActive">–</div><div class="l">활성</div></div>
+      <div class="stat-box"><div class="n" id="statSuspended">–</div><div class="l">정지</div></div>
+    </div>
+    <div id="userList"></div>
+
+    <h2 style="font-family: var(--font-display); font-size: 15px; margin: 28px 0 10px;">회원가입 화면에 보일 결제 안내</h2>
+    <form id="siteSettingsForm" style="display:flex; flex-direction:column; gap:10px; background: var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px;">
+      <label style="display:flex; flex-direction:column; gap:4px; font-size:12.5px; color: var(--text-dim);">
+        요금 표시
+        <input type="text" name="price_label" style="font-family: var(--font-body); font-size:14px; color: var(--text); background: var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:8px 10px;" />
+      </label>
+      <label style="display:flex; flex-direction:column; gap:4px; font-size:12.5px; color: var(--text-dim);">
+        입금 계좌
+        <input type="text" name="bank_info" style="font-family: var(--font-body); font-size:14px; color: var(--text); background: var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:8px 10px;" />
+      </label>
+      <label style="display:flex; flex-direction:column; gap:4px; font-size:12.5px; color: var(--text-dim);">
+        오픈카톡 링크
+        <input type="text" name="open_kakao_url" placeholder="https://open.kakao.com/..." style="font-family: var(--font-body); font-size:14px; color: var(--text); background: var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:8px 10px;" />
+      </label>
+      <label style="display:flex; flex-direction:column; gap:4px; font-size:12.5px; color: var(--text-dim);">
+        현금영수증 문의 이메일
+        <input type="email" name="tax_email" style="font-family: var(--font-body); font-size:14px; color: var(--text); background: var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:8px 10px;" />
+      </label>
+      <label style="display:flex; flex-direction:column; gap:4px; font-size:12.5px; color: var(--text-dim);">
+        안내 문구 (회원가입 화면에 그대로 표시됨)
+        <textarea name="payment_guide" rows="4" style="font-family: var(--font-body); font-size:13px; color: var(--text); background: var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:8px 10px; resize:vertical;"></textarea>
+      </label>
+      <button type="submit" style="align-self:flex-start; font-size:12.5px; padding:7px 14px; border-radius:8px; border:1px solid var(--border); background: var(--amber); color:#1a1300; font-weight:600; cursor:pointer;">저장</button>
+      <p id="siteSettingsMsg" style="font-size:12.5px; margin:0;"></p>
+    </form>
+  </div>
+
+  <script>
+    function fmt(iso) {
+      if (!iso) return '없음';
+      return new Date(iso).toLocaleString('ko-KR', { year: 'numeric', month: 'numeric', day: 'numeric' });
+    }
+
+    async function loadUsers() {
+      const res = await fetch('/api/admin/users');
+      if (res.status === 403) {
+        document.body.innerHTML = '<p style="padding:40px;text-align:center;color:#8a9099;">관리자만 접근할 수 있습니다.</p>';
+        return;
+      }
+      const users = await res.json();
+
+      document.getElementById('statTotal').textContent = users.length;
+      document.getElementById('statPending').textContent = users.filter((u) => u.status === 'pending').length;
+      document.getElementById('statActive').textContent = users.filter((u) => u.status === 'active').length;
+      document.getElementById('statSuspended').textContent = users.filter((u) => u.status === 'suspended').length;
+
+      document.getElementById('userList').innerHTML = users
+        .map((u) => {
+          const isExpired = u.expires_at && new Date(u.expires_at) < new Date();
+          const badgeStatus = u.status === 'active' && isExpired ? 'suspended' : u.status;
+          const badgeLabel = u.status === 'active' && isExpired ? '만료' : { pending: '대기', active: '활성', suspended: '정지' }[u.status];
+          return `
+        <div class="user-card">
+          <div class="user-top">
+            <div>
+              <span class="user-email">${u.email}</span>
+              <span class="user-name">${u.name || ''}</span>
+            </div>
+            <span class="badge ${badgeStatus}">${badgeLabel}</span>
+          </div>
+          <div class="user-meta">
+            가입 ${fmt(u.created_at)} · 승인 ${fmt(u.approved_at)} · 만료 ${fmt(u.expires_at)} · ${u.role === 'admin' ? '관리자' : u.plan}
+          </div>
+          <div class="user-actions">
+            ${u.status === 'pending' ? `<button data-action="approve" data-id="${u.id}">승인</button>` : ''}
+            ${u.status === 'active' ? `<button data-action="suspend" data-id="${u.id}">정지</button>` : ''}
+            ${u.status === 'suspended' ? `<button data-action="unsuspend" data-id="${u.id}">정지 해제</button>` : ''}
+            ${u.role !== 'admin' ? `<button data-action="grant30" data-id="${u.id}">30일 부여</button>` : ''}
+          </div>
+        </div>`;
+        })
+        .join('');
+
+      document.querySelectorAll('.user-actions button').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const id = btn.dataset.id;
+          const action = btn.dataset.action;
+          const routeMap = { approve: 'approve', suspend: 'suspend', unsuspend: 'unsuspend', grant30: 'grant' };
+          const body = action === 'grant30' ? { days: 30 } : undefined;
+          await fetch(`/api/admin/users/${id}/${routeMap[action]}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: body ? JSON.stringify(body) : undefined,
+          });
+          loadUsers();
+        });
+      });
+    }
+
+    async function loadSiteSettings() {
+      const res = await fetch('/api/admin/site-settings');
+      const data = await res.json();
+      const form = document.getElementById('siteSettingsForm');
+      form.price_label.value = data.price_label || '';
+      form.bank_info.value = data.bank_info || '';
+      form.open_kakao_url.value = data.open_kakao_url || '';
+      form.tax_email.value = data.tax_email || '';
+      form.payment_guide.value = data.payment_guide || '';
+    }
+
+    document.getElementById('siteSettingsForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const msg = document.getElementById('siteSettingsMsg');
+      try {
+        const res = await fetch('/api/admin/site-settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            price_label: form.price_label.value,
+            bank_info: form.bank_info.value,
+            open_kakao_url: form.open_kakao_url.value,
+            tax_email: form.tax_email.value,
+            payment_guide: form.payment_guide.value,
+          }),
+        });
+        if (!res.ok) throw new Error('저장 실패');
+        msg.textContent = '저장 완료 — 회원가입 화면에 바로 반영됩니다';
+        msg.style.color = 'var(--green)';
+      } catch (err) {
+        msg.textContent = '오류: ' + err.message;
+        msg.style.color = 'var(--red)';
+      }
+    });
+
+    loadUsers();
+    loadSiteSettings();
+  </script>
+</body>
+</html>

@@ -15,6 +15,11 @@
           <h1>스레드 자동발행</h1>
           <span id="connStatus" class="conn-badge conn-loading">연결 확인 중…</span>
         </div>
+        <div class="user-menu">
+          <span id="myUserEmail" class="my-user-email"></span>
+          <a id="adminLink" href="/admin" class="my-admin-link hidden">관리자</a>
+          <button type="button" id="logoutBtn" class="my-logout-btn">로그아웃</button>
+        </div>
       </div>
       <div class="account-strip" id="accountStrip">
         <!-- 계정 칩들이 JS로 여기 채워짐 -->
@@ -155,6 +160,24 @@
           <p id="retouchStatus" class="ai-status"></p>
           <div id="detailImagesGallery" class="product-results hidden"></div>
 
+          <div id="lifestylePanel" class="lifestyle-panel hidden">
+            <div class="lifestyle-buttons">
+              <button type="button" id="generateSceneBtn" class="btn-secondary">🏞 상황 만들기</button>
+              <button type="button" id="regenerateSceneBtn" class="btn-secondary hidden">🔁 상황 다시 만들기</button>
+            </div>
+            <div id="sceneBox" class="scene-box hidden">
+              <span class="scene-label">배경 상황</span>
+              <p id="sceneText"></p>
+            </div>
+            <p id="sceneStatus" class="ai-status"></p>
+            <div class="lifestyle-buttons">
+              <button type="button" id="generateImageBtn" class="btn-ai hidden">🖌 라이프스타일 이미지 만들기</button>
+              <button type="button" id="regenerateImageBtn" class="btn-secondary hidden">🔁 이미지 다시 만들기</button>
+            </div>
+            <p id="imageGenStatus" class="ai-status"></p>
+            <p class="hint">실제로 써본 것처럼 위장하는 사진이 아니라, 상품이 자연스러운 배경 속에 놓인 라이프스타일 사진이에요. AI 키가 필요하고, 이미지 생성은 비용이 드니 마음에 안 들 때만 다시 눌러주세요.</p>
+          </div>
+
           <label>발행 예정 시각
             <input type="datetime-local" name="scheduled_at" required />
           </label>
@@ -247,19 +270,13 @@
       </div>
 
       <div class="panel narrow">
-        <h2>AI 글 생성 (Claude 또는 GPT)</h2>
-        <p class="hint">둘 중 하나만 입력하면 됩니다. Anthropic 키가 있으면 그걸 우선 쓰고, 없으면 OpenAI 키를 사용합니다.</p>
+        <h2>AI 글 생성</h2>
+        <p class="hint">OpenAI(GPT) 사용료는 서비스 운영자가 부담하기 때문에, 회원이 직접 OpenAI 키를 넣지 않아도 AI 글쓰기·이미지 생성이 됩니다. 원하시면 Anthropic(Claude) 키를 넣어서 그걸 대신 쓰실 수도 있어요 (선택).</p>
         <form id="anthropicForm">
-          <label>Anthropic API Key <span class="label-note">(console.anthropic.com에서 발급)</span>
+          <label>Anthropic API Key <span class="label-note">(선택, console.anthropic.com에서 발급)</span>
             <div class="key-input-row">
               <input type="password" name="ANTHROPIC_API_KEY" placeholder="sk-ant-... (변경 시에만 입력)" />
               <button type="button" id="clearAnthropicKeyBtn" class="btn-clear-key">지우기</button>
-            </div>
-          </label>
-          <label>OpenAI API Key <span class="label-note">(platform.openai.com에서 발급)</span>
-            <div class="key-input-row">
-              <input type="password" name="OPENAI_API_KEY" placeholder="sk-... (변경 시에만 입력)" />
-              <button type="button" id="clearOpenaiKeyBtn" class="btn-clear-key">지우기</button>
             </div>
           </label>
           <button type="submit" class="btn-secondary">저장</button>
