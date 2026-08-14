@@ -19,6 +19,7 @@ db.exec(`
 -- 계정 하나 = 스레드 계정 하나 + 그 계정에 딸린 쿠팡파트너스/AI 설정
 CREATE TABLE IF NOT EXISTS accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,                     -- 이 스레드 계정을 소유한 회원 (SaaS 회원별 데이터 분리용)
   label TEXT NOT NULL,                 -- 화면에 표시할 이름 (예: 홈템픽, 젠틀블루)
 
   threads_app_id TEXT,
@@ -84,7 +85,100 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+-- SaaS 회원 계정 (스레드 "account"와는 다른 개념 — 여기 "user"가 로그인하는 서비스 회원)
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  name TEXT,
+  role TEXT DEFAULT 'user',            -- user | admin
+  status TEXT DEFAULT 'pending',       -- pending | active | suspended
+  plan TEXT DEFAULT 'pro',
+  daily_publish_limit INTEGER DEFAULT 20,
+  max_threads_accounts INTEGER DEFAULT 1,
+  expires_at TEXT,
+  approved_at TEXT,
+  approved_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- AI 생성/발행 비용을 회원별로 추적하기 위한 최소 로그 (관리자 화면에서 사용량 확인용)
+CREATE TABLE IF NOT EXISTS usage_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  type TEXT NOT NULL,   -- 'text' (글/키워드/상황 생성) | 'image' (라이프스타일 이미지 생성)
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- 회원가입 화면 등에 보여줄 결제 안내(계좌/오픈카톡/문구). 관리자가 admin 페이지에서 직접 수정.
+CREATE TABLE IF NOT EXISTS site_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
 `);
+
+const DEFAULT_SITE_SETTINGS = {
+  price_label: '19,900원 / 월',
+  bank_info: '새마을금고 9003296753264 (예금주: 박건우)',
+  open_kakao_url: '',
+  tax_email: 'zsdg181@naver.com',
+  payment_guide:
+    '가입 신청 후 위 계좌로 입금해주세요.\n' +
+    '입금 후 오픈카톡으로 "입금자명 + 스레드 아이디"를 보내주시면 확인 후 승인해드립니다.\n' +
+    '현금영수증이 필요하시면 발행에 필요한 정보를 이메일로 보내주세요.',
+};
+
+function seedSiteSettingsIfEmpty() {
+  for (const [key, value] of Object.entries(DEFAULT_SITE_SETTINGS)) {
+    const existing = db.prepare('SELECT 1 FROM site_settings WHERE key = ?').get(key);
+    if (!existing) {
+      db.prepare('INSERT INTO site_settings (key, value) VALUES (?, ?)').run(key, value);
+    }
+  }
+}
+seedSiteSettingsIfEmpty();
+
+function getSiteSettings() {
+  const rows = db.prepare('SELECT key, value FROM site_settings').all();
+  const result = { ...DEFAULT_SITE_SETTINGS };
+  for (const r of rows) result[r.key] = r.value;
+  return result;
+}
+
+function updateSiteSettings(fields) {
+  const allowed = Object.keys(DEFAULT_SITE_SETTINGS);
+  for (const [key, value] of Object.entries(fields)) {
+    if (!allowed.includes(key)) continue;
+    db.prepare(
+      `INSERT INTO site_settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run(key, value);
+  }
+}
+
+
+// 최초 관리자 자동 생성/승격 — 회원가입 경로로는 admin이 될 수 없고, 오직 서버 환경변수로만 부트스트랩됨
+function bootstrapAdmin() {
+  const email = process.env.ADMIN_EMAIL;
+  const password = process.env.ADMIN_PASSWORD;
+  if (!email || !password) return;
+
+  const { hashPassword } = require('./auth');
+  const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (existing) {
+    if (existing.role !== 'admin' || existing.status !== 'active') {
+      db.prepare(`UPDATE users SET role = 'admin', status = 'active' WHERE id = ?`).run(existing.id);
+    }
+  } else {
+    db.prepare(
+      `INSERT INTO users (email, password_hash, name, role, status, plan, expires_at)
+       VALUES (?, ?, ?, 'admin', 'active', 'pro', NULL)`
+    ).run(email, hashPassword(password), '관리자');
+  }
+  // 회원 시스템 도입 전에 만들어진 계정들(user_id 없음)을 관리자에게 자동으로 붙여줌
+  assignOrphanAccountsToAdmin();
+}
 
 // posts에 account_id 컬럼이 없던 예전 DB를 위한 마이그레이션
 const migrations = [
@@ -102,6 +196,7 @@ const migrations = [
   `ALTER TABLE accounts ADD COLUMN autopilot_last_target TEXT`,
   `ALTER TABLE accounts ADD COLUMN naver_client_id TEXT`,
   `ALTER TABLE accounts ADD COLUMN naver_client_secret TEXT`,
+  `ALTER TABLE accounts ADD COLUMN user_id INTEGER`,
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (e) { /* 컬럼이 이미 있으면 무시 */ }
@@ -149,26 +244,44 @@ function migrateLegacySettingsToAccount() {
 }
 migrateLegacySettingsToAccount();
 
-// ---- 계정 CRUD ----
-function listAccounts() {
+// ---- 계정 CRUD (회원별로 분리) ----
+function listAccounts(userId) {
   return db
     .prepare(
       `SELECT id, label, threads_username,
               (threads_access_token IS NOT NULL) AS connected
-       FROM accounts ORDER BY id ASC`
+       FROM accounts WHERE user_id = ? ORDER BY id ASC`
     )
-    .all();
+    .all(userId);
+}
+
+// 오토파일럿/예약발행 크론이 회원 구분 없이 전체 계정을 순회해야 할 때 쓰는 시스템 전용 함수.
+// API 라우트에서는 절대 쓰지 말 것 (회원별 데이터 분리를 우회하게 됨).
+function listAllAccountsForSystem() {
+  return db.prepare(`SELECT id FROM accounts ORDER BY id ASC`).all();
 }
 
 function getAccount(id) {
   return db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
 }
 
-function createAccount(label) {
+function countAccountsForUser(userId) {
+  return db.prepare('SELECT COUNT(*) c FROM accounts WHERE user_id = ?').get(userId).c;
+}
+
+function createAccount(label, userId) {
   const info = db
-    .prepare(`INSERT INTO accounts (label, coupang_disclosure_template) VALUES (?, ?)`)
-    .run(label, DEFAULT_DISCLOSURE_TEMPLATE);
+    .prepare(`INSERT INTO accounts (label, user_id, coupang_disclosure_template) VALUES (?, ?, ?)`)
+    .run(label, userId, DEFAULT_DISCLOSURE_TEMPLATE);
   return info.lastInsertRowid;
+}
+
+// 회원 시스템 도입 전에 만들어진 계정(user_id가 비어있음)을 관리자 회원에게 자동으로 귀속시킴.
+// 이렇게 안 하면 회원 시스템 붙인 직후 기존에 쓰던 스레드 계정들이 아무 회원 것도 아니게 되어 사라져 보임.
+function assignOrphanAccountsToAdmin() {
+  const admin = db.prepare(`SELECT id FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1`).get();
+  if (!admin) return;
+  db.prepare('UPDATE accounts SET user_id = ? WHERE user_id IS NULL').run(admin.id);
 }
 
 const ACCOUNT_UPDATABLE_FIELDS = [
@@ -208,12 +321,121 @@ function deleteAccount(id) {
   db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
 }
 
+// ---- 회원(users) 관련 함수 ----
+function createUser(email, passwordHash, name) {
+  const info = db
+    .prepare(`INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)`)
+    .run(email, passwordHash, name || null);
+  return info.lastInsertRowid;
+}
+
+function getUserByEmail(email) {
+  return db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+}
+
+function getUserById(id) {
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+}
+
+function listUsers() {
+  return db.prepare('SELECT * FROM users ORDER BY created_at DESC').all();
+}
+
+function approveUser(id, approvedBy) {
+  db.prepare(
+    `UPDATE users SET status = 'active', approved_at = datetime('now'), approved_by = ? WHERE id = ?`
+  ).run(approvedBy, id);
+}
+
+// ---- 발행량/사용량 제한 (플랜 정책) ----
+// 관리자는 요금제 제약을 받지 않음 (서비스 운영/테스트 목적 계정이라 일반 회원과 다름)
+function canPublish(userId) {
+  const user = getUserById(userId);
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) c FROM posts
+       WHERE status = 'posted' AND posted_at >= ?
+         AND account_id IN (SELECT id FROM accounts WHERE user_id = ?)`
+    )
+    .get(startOfDay.toISOString(), userId);
+  return row.c < user.daily_publish_limit;
+}
+
+function canAddThreadsAccount(userId) {
+  const user = getUserById(userId);
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  return countAccountsForUser(userId) < user.max_threads_accounts;
+}
+
+function logUsage(userId, type) {
+  db.prepare(`INSERT INTO usage_events (user_id, type) VALUES (?, ?)`).run(userId, type);
+}
+
+function getTodayUsage(userId) {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const rows = db
+    .prepare(`SELECT type, COUNT(*) c FROM usage_events WHERE user_id = ? AND created_at >= ? GROUP BY type`)
+    .all(userId, startOfDay.toISOString());
+  const result = { text: 0, image: 0 };
+  for (const r of rows) result[r.type] = r.c;
+
+  const publishedToday = db
+    .prepare(
+      `SELECT COUNT(*) c FROM posts
+       WHERE status = 'posted' AND posted_at >= ?
+         AND account_id IN (SELECT id FROM accounts WHERE user_id = ?)`
+    )
+    .get(startOfDay.toISOString(), userId).c;
+
+  return { ...result, publishedToday };
+}
+
+function setUserStatus(id, status) {
+  db.prepare(`UPDATE users SET status = ? WHERE id = ?`).run(status, id);
+}
+
+// days만큼 이용기간을 늘림 (기존 만료일이 미래면 거기서부터, 지났거나 없으면 오늘부터 카운트)
+function extendUserExpiry(id, days) {
+  const user = getUserById(id);
+  if (!user) throw new Error('존재하지 않는 회원입니다');
+  const now = new Date();
+  const base =
+    user.expires_at && new Date(user.expires_at) > now ? new Date(user.expires_at) : now;
+  base.setDate(base.getDate() + days);
+  const newExpiry = base.toISOString();
+  db.prepare(`UPDATE users SET expires_at = ? WHERE id = ?`).run(newExpiry, id);
+  return newExpiry;
+}
+
 module.exports = {
   db,
   DEFAULT_DISCLOSURE_TEMPLATE,
   listAccounts,
+  listAllAccountsForSystem,
   getAccount,
   createAccount,
   updateAccount,
   deleteAccount,
+  countAccountsForUser,
+  bootstrapAdmin,
+  createUser,
+  getUserByEmail,
+  getUserById,
+  listUsers,
+  approveUser,
+  setUserStatus,
+  extendUserExpiry,
+  canPublish,
+  canAddThreadsAccount,
+  logUsage,
+  getTodayUsage,
+  getSiteSettings,
+  updateSiteSettings,
 };

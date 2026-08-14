@@ -1,6 +1,12 @@
 const axios = require('axios');
 const { getAccount } = require('./db');
 
+// SaaS 전환: 일반 회원에게 OpenAI 키를 직접 받지 않고, 운영자가 등록한 서버 환경변수(OPENAI_API_KEY)를
+// 우선 사용한다. 아직 env가 없는 로컬 개발/과거 계정 호환을 위해 계정별 저장 키로 폴백은 남겨둠.
+function resolveOpenAiKey(account) {
+  return process.env.OPENAI_API_KEY || account?.openai_api_key || null;
+}
+
 const SYSTEM_PROMPT = `
 너는 한국 Threads(스레드)에 실제로 자주 글을 올리는 사람이다.
 
@@ -169,16 +175,17 @@ const SYSTEM_PROMPT = `
 해시태그와 링크는 넣지 않는다.
 `;
 
-async function generateCaption(accountId, { productName, price, target }) {
+async function generateCaption(accountId, { productName, price, target, scene }) {
   const account = getAccount(accountId);
 
   if (!account) {
     throw new Error('존재하지 않는 계정입니다');
   }
 
-  if (!account.openai_api_key) {
+  const apiKey = resolveOpenAiKey(account);
+  if (!apiKey) {
     throw new Error(
-      '이 계정에 OpenAI API 키가 설정되지 않았습니다 (연결 설정에서 입력)'
+      'OpenAI API 키가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)'
     );
   }
 
@@ -191,15 +198,24 @@ async function generateCaption(accountId, { productName, price, target }) {
       ? `\n\n이 글을 읽을 타겟은 "${target}"이다. 이 타겟이 실제로 겪을 법한 상황, 말투, 관심사에 맞춰서 써줘 (예: 20대 여자면 자취/화장품/다이어트/연애 관련 일상, 30대 남자면 회사/운동/육아/자취 관련 일상 등 타겟에 맞는 생활 맥락을 자연스럽게 반영).`
       : '';
 
+  // 이미지와 짝을 맞출 배경 상황이 있으면, 글의 장소/상황도 그 배경과 자연스럽게 맞춰줌
+  // (이미지가 카페 사진인데 글은 집 얘기를 하는 식으로 어긋나지 않게)
+  const sceneText = scene
+    ? `\n\n같이 쓸 사진의 배경: ${scene.location || ''} (${scene.context || ''}). ` +
+      `글의 배경/상황도 이 사진과 자연스럽게 맞아떨어지게 써줘. 다만 있지도 않은 세부 체험을 ` +
+      `과장해서 지어내지는 말고, 사진 배경과 어색하지 않게 이어지는 정도로만.`
+    : '';
+
   const userMessage =
     `상품명: ${productName}` +
     `${priceText ? `\n가격: ${priceText}` : ''}` +
     targetText +
+    sceneText +
     `\n\n이 상품을 바탕으로 실제 사람이 Threads에 쓴 것 같은 자연스러운 글 5개를 작성해줘.
 광고문구보다 생활 속 경험담이나 썰 느낌을 우선해줘.`;
 
   return generateWithOpenAI(
-    account.openai_api_key,
+    apiKey,
     userMessage
   );
 }
@@ -300,8 +316,9 @@ async function suggestKeyword(accountId) {
   if (!account) {
     throw new Error('존재하지 않는 계정입니다');
   }
-  if (!account.openai_api_key) {
-    throw new Error('이 계정에 OpenAI API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
+  const apiKey = resolveOpenAiKey(account);
+  if (!apiKey) {
+    throw new Error('OpenAI API 키가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
   }
 
   const res = await axios.post(
@@ -317,7 +334,7 @@ async function suggestKeyword(accountId) {
     },
     {
       headers: {
-        Authorization: `Bearer ${account.openai_api_key}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       timeout: 20000,
@@ -344,8 +361,9 @@ async function suggestKeywordCandidates(accountId, target) {
   if (!account) {
     throw new Error('존재하지 않는 계정입니다');
   }
-  if (!account.openai_api_key) {
-    throw new Error('이 계정에 OpenAI API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
+  const apiKey = resolveOpenAiKey(account);
+  if (!apiKey) {
+    throw new Error('OpenAI API 키가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
   }
 
   const userMessage =
@@ -366,7 +384,7 @@ async function suggestKeywordCandidates(accountId, target) {
     },
     {
       headers: {
-        Authorization: `Bearer ${account.openai_api_key}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       timeout: 20000,

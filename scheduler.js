@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { db, listAccounts, getAccount } = require('./db');
+const { db, listAllAccountsForSystem, getAccount, canPublish } = require('./db');
 const { publishPost, publishReply, getMediaInsights } = require('./threadsApi');
 const coupangApi = require('./coupangApi');
 const { generateCaption, suggestKeywordCandidates } = require('./aiCaption');
@@ -35,7 +35,7 @@ async function postAffiliateComment(account, post, parentMediaId) {
 function startPublishJob() {
   cron.schedule('* * * * *', async () => {
     const now = new Date().toISOString();
-    const accounts = listAccounts();
+    const accounts = listAllAccountsForSystem();
 
     for (const accountSummary of accounts) {
       const account = getAccount(accountSummary.id);
@@ -46,6 +46,15 @@ function startPublishJob() {
         .all(account.id, now);
 
       for (const post of duePosts) {
+        // 회원 전체 계정 합산 하루 발행 한도 체크 (계정별이 아니라 회원 전체 합산 — 요금제 정책)
+        if (account.user_id && !canPublish(account.user_id)) {
+          db.prepare(`UPDATE posts SET status = 'failed', error_message = ? WHERE id = ?`).run(
+            '오늘 발행 가능 횟수를 다 썼습니다 (요금제 하루 한도 초과)',
+            post.id
+          );
+          console.log(`[발행 차단] account #${account.id} post #${post.id}: 하루 발행 한도 초과`);
+          continue;
+        }
         try {
           const mediaId = await publishPost(account.id, {
             text: post.text,
@@ -87,7 +96,7 @@ function startInsightsJob() {
   cron.schedule('*/10 * * * *', async () => {
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
-    const accounts = listAccounts();
+    const accounts = listAllAccountsForSystem();
 
     for (const accountSummary of accounts) {
       const postedToday = db

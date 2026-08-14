@@ -3,6 +3,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const session = require('express-session');
 const {
   db,
   listAccounts,
@@ -11,22 +12,159 @@ const {
   updateAccount,
   deleteAccount,
   DEFAULT_DISCLOSURE_TEMPLATE,
+  bootstrapAdmin,
+  createUser,
+  getUserByEmail,
+  getUserById,
+  listUsers,
+  approveUser,
+  setUserStatus,
+  extendUserExpiry,
+  canAddThreadsAccount,
+  canPublish,
+  logUsage,
+  getTodayUsage,
+  countAccountsForUser,
+  getSiteSettings,
+  updateSiteSettings,
 } = require('./db');
+const { hashPassword, verifyPassword, requireAuth, requireAdmin } = require('./auth');
 const threadsApi = require('./threadsApi');
 const { scrapeProduct } = require('./scraper');
 const coupangApi = require('./coupangApi');
 const { generateCaption, suggestKeyword, suggestKeywordCandidates } = require('./aiCaption');
+const { generateScene, generateLifestyleImage } = require('./aiImage');
 const { rankKeywordsByTrend } = require('./naverTrends');
 const { startPublishJob, startInsightsJob, startAutopilotJob } = require('./scheduler');
 
+bootstrapAdmin();
+
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.set('trust proxy', 1); // Railway 등 프록시 뒤에서 세션 쿠키가 정상 동작하도록
 
-// 직접 업로드한 사진/영상 저장 폴더 (Threads API가 공개 URL을 요구하므로 정적 파일로 서빙)
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || 'threads-scheduler-dev-secret-change-me',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      maxAge: 1000 * 60 * 60 * 24 * 30, // 30일
+      secure: process.env.NODE_ENV === 'production',
+    },
+  })
+);
+
+// ---------- 공개 라우트 (로그인 없이 접근 가능) ----------
+app.use(express.static(path.join(__dirname, 'public'), { index: false })); // css/js/로그인 화면 등 정적 자원
+app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+app.get('/signup.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'signup.html')));
+app.get('/status.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'status.html')));
+
+// 결제 안내(계좌/오픈카톡/문구) — 로그인 전에도 회원가입 화면에서 봐야 하므로 공개
+app.get('/api/site-settings', (req, res) => {
+  res.json(getSiteSettings());
+});
+
+app.post('/api/auth/signup', (req, res) => {
+  const { email, password, name } = req.body || {};
+  if (!email || !password) return res.status(400).json({ error: '이메일과 비밀번호가 필요합니다' });
+  if (getUserByEmail(email)) return res.status(400).json({ error: '이미 가입된 이메일입니다' });
+  try {
+    createUser(email, hashPassword(password), name);
+    res.json({ ok: true, message: '가입 신청 완료 — 관리자 승인 후 이용 가능합니다' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const { email, password } = req.body || {};
+  const user = getUserByEmail(email);
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    return res.status(401).json({ error: '이메일 또는 비밀번호가 올바르지 않습니다' });
+  }
+  const isExpired = user.expires_at && new Date(user.expires_at) < new Date();
+  const effectiveStatus = user.status === 'active' && isExpired ? 'expired' : user.status;
+  if (effectiveStatus !== 'active') {
+    return res.status(403).json({ error: '로그인할 수 없는 계정 상태입니다', status: effectiveStatus });
+  }
+  req.session.userId = user.id;
+  res.json({ ok: true, role: user.role });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => res.json({ ok: true }));
+});
+
+app.get('/api/auth/me', (req, res) => {
+  if (!req.session?.userId) return res.status(401).json({ error: '로그인이 필요합니다' });
+  const user = getUserById(req.session.userId);
+  if (!user) return res.status(401).json({ error: '로그인이 필요합니다' });
+  res.json({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    status: user.status,
+    plan: user.plan,
+    expires_at: user.expires_at,
+    daily_publish_limit: user.daily_publish_limit,
+    max_threads_accounts: user.max_threads_accounts,
+    threads_account_count: countAccountsForUser(user.id),
+    today_usage: getTodayUsage(user.id),
+  });
+});
+
+// 직접 업로드한 사진/영상 저장 폴더 (Threads API가 공개 URL을 요구하므로 정적 파일로 서빙 — 이건 Meta 서버가
+// 세션 쿠키 없이 접근해야 하므로 인증 게이트보다 반드시 앞에 있어야 함. 파일명이 랜덤이라 추측 접근은 어려움)
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
+
+// ---------- 여기부터는 로그인 + 승인(active) 상태여야만 통과 ----------
+app.use(requireAuth);
+
+app.get('/admin', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+app.get('/admin.html', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+
+app.get('/api/admin/users', requireAdmin, (req, res) => {
+  res.json(listUsers().map((u) => ({ ...u, password_hash: undefined })));
+});
+
+app.post('/api/admin/users/:id/approve', requireAdmin, (req, res) => {
+  approveUser(Number(req.params.id), req.currentUser.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/users/:id/suspend', requireAdmin, (req, res) => {
+  setUserStatus(Number(req.params.id), 'suspended');
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/users/:id/unsuspend', requireAdmin, (req, res) => {
+  setUserStatus(Number(req.params.id), 'active');
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/users/:id/grant', requireAdmin, (req, res) => {
+  const days = Number(req.body?.days) || 30;
+  const newExpiry = extendUserExpiry(Number(req.params.id), days);
+  res.json({ ok: true, expires_at: newExpiry });
+});
+
+// 계좌/오픈카톡/안내문구 — 회원가입 화면에 보여줄 내용을 관리자가 직접 쓰고 고칠 수 있게
+app.get('/api/admin/site-settings', requireAdmin, (req, res) => {
+  res.json(getSiteSettings());
+});
+
+app.post('/api/admin/site-settings', requireAdmin, (req, res) => {
+  updateSiteSettings(req.body || {});
+  res.json({ ok: true });
+});
+
+app.use(express.static(path.join(__dirname, 'public'))); // index.html(대시보드)은 인증 통과 후에만
 
 const ALLOWED_MEDIA_TYPES = /^(image\/(jpeg|png|gif|webp)|video\/mp4|video\/quicktime)$/;
 const upload = multer({
@@ -65,23 +203,28 @@ function requireAccount(req, res, next) {
   if (!accountId) return res.status(400).json({ error: 'accountId가 필요합니다' });
   const account = getAccount(accountId);
   if (!account) return res.status(404).json({ error: '존재하지 않는 계정입니다' });
+  // 소유권 검증: 다른 회원의 스레드 계정을 accountId만 바꿔서 접근하는 걸 서버에서 차단
+  if (account.user_id !== req.currentUser.id) {
+    return res.status(403).json({ error: '본인 소유의 계정만 이용할 수 있습니다' });
+  }
   req.account = account;
   next();
 }
 
 // ---------- 계정 관리 ----------
 app.get('/api/accounts', (req, res) => {
-  res.json(listAccounts());
+  res.json(listAccounts(req.currentUser.id));
 });
 
 app.post('/api/accounts', (req, res) => {
   const { label } = req.body;
   if (!label || !label.trim()) return res.status(400).json({ error: '계정 이름을 입력해주세요' });
-  const existing = listAccounts();
-  if (existing.length >= 5) {
-    return res.status(400).json({ error: '계정은 최대 5개까지 만들 수 있습니다' });
+  if (!canAddThreadsAccount(req.currentUser.id)) {
+    return res.status(400).json({
+      error: `현재 플랜에서는 Threads 계정을 최대 ${req.currentUser.max_threads_accounts}개까지 연결할 수 있습니다.`,
+    });
   }
-  const id = createAccount(label.trim());
+  const id = createAccount(label.trim(), req.currentUser.id);
   res.json({ id });
 });
 
@@ -187,6 +330,7 @@ app.post('/api/generate-caption', requireAccount, async (req, res) => {
   if (!productName) return res.status(400).json({ error: 'productName이 필요합니다' });
   try {
     const texts = await generateCaption(req.account.id, { productName, price, target });
+    logUsage(req.currentUser.id, 'text');
     res.json({ texts });
   } catch (err) {
     res.status(422).json({ error: err.response?.data?.error?.message || err.message });
@@ -200,6 +344,7 @@ app.post('/api/suggest-keyword', requireAccount, async (req, res) => {
   const { target } = req.body || {};
   try {
     const candidates = await suggestKeywordCandidates(req.account.id, target);
+    logUsage(req.currentUser.id, 'text');
     let keyword = candidates[0];
     let trendUsed = false;
 
@@ -252,6 +397,47 @@ app.post('/api/scrape-product', async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(422).json({ error: err.message });
+  }
+});
+
+// ---------- 상품 라이프스타일 상황(Scene) 생성 ----------
+app.post('/api/generate-scene', requireAccount, async (req, res) => {
+  const { productName, price, target } = req.body;
+  if (!productName) return res.status(400).json({ error: 'productName이 필요합니다' });
+  try {
+    const scene = await generateScene(req.account.id, { productName, price, target });
+    logUsage(req.currentUser.id, 'text');
+    res.json({ scene });
+  } catch (err) {
+    res.status(422).json({ error: err.response?.data?.error?.message || err.message });
+  }
+});
+
+// 이미지 생성은 비용이 크므로, 같은 계정이 동시에 두 번 요청하는 걸(연타/중복 네트워크 재시도) 막아둠
+const imageGenerationLocks = new Set();
+
+// ---------- 상품 라이프스타일 이미지 생성 ----------
+app.post('/api/generate-lifestyle-image', requireAccount, async (req, res) => {
+  const { productName, productImage, scene } = req.body;
+  if (!productName || !productImage) {
+    return res.status(400).json({ error: 'productName과 productImage가 필요합니다' });
+  }
+  if (imageGenerationLocks.has(req.account.id)) {
+    return res.status(429).json({ error: '이미 이미지 생성 중입니다, 잠시 후 다시 시도해주세요' });
+  }
+  imageGenerationLocks.add(req.account.id);
+  try {
+    const result = await generateLifestyleImage(
+      req.account.id,
+      { productName, productImageUrl: productImage, scene },
+      getPublicBaseUrl(req, req.account)
+    );
+    logUsage(req.currentUser.id, 'image');
+    res.json(result);
+  } catch (err) {
+    res.status(422).json({ error: err.response?.data?.error?.message || err.message });
+  } finally {
+    imageGenerationLocks.delete(req.account.id);
   }
 });
 
