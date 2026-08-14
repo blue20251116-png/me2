@@ -102,6 +102,24 @@ html, body {
 }
 .btn-clear-key:hover { color: var(--red); border-color: var(--red); }
 
+.autopilot-panel { border-left: 3px solid var(--amber); }
+.autopilot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 4px;
+}
+.autopilot-status-text {
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.autopilot-status-text.on { color: var(--green); }
+.autopilot-status-text.off { color: var(--text-dim); }
+#autopilotToggleBtn.on { background: var(--red); color: #fff; border-color: var(--red); }
+#autopilotToggleBtn.off { background: var(--green); color: #06180f; border-color: var(--green); }
+
 .btn-danger {
   font-family: var(--font-body);
   font-weight: 600;
@@ -297,7 +315,7 @@ label {
   flex-direction: column;
   gap: 6px;
 }
-input, textarea {
+input, select, textarea {
   font-family: var(--font-body);
   font-size: 14px;
   color: var(--text);
@@ -307,7 +325,7 @@ input, textarea {
   padding: 10px 12px;
   resize: vertical;
 }
-input:focus, textarea:focus {
+input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--amber);
 }
@@ -544,6 +562,22 @@ input:focus, textarea:focus {
   font-weight: 600;
   cursor: pointer;
 }
+
+#detailImagesGallery {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.detail-img-thumb {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid var(--border);
+  cursor: pointer;
+  background: var(--surface-2);
+}
+.detail-img-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.detail-img-thumb.selected { border-color: var(--green); }
 
 .posts-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .posts-table th {

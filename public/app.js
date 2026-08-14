@@ -93,6 +93,7 @@ async function refreshActiveTabData() {
   loadConnectionStatus();
   loadDashboard();
   loadSettings();
+  loadAutopilotStatus();
   const activeTab = document.querySelector('.nav-btn.active')?.dataset.tab;
   if (activeTab === 'posts') loadPosts();
 }
@@ -223,7 +224,7 @@ async function loadDashboard() {
 let currentProduct = { name: '', price: null };
 
 // ---- AI로 본문 자동 생성 (5개 후보 중 선택) ----
-document.getElementById('aiGenerateBtn').addEventListener('click', async () => {
+async function runAiGenerate() {
   const btn = document.getElementById('aiGenerateBtn');
   const status = document.getElementById('aiGenerateStatus');
   const textArea = document.querySelector('#composeForm textarea[name="text"]');
@@ -233,7 +234,7 @@ document.getElementById('aiGenerateBtn').addEventListener('click', async () => {
   if (!productName) {
     status.textContent = '먼저 상품을 검색하거나 링크를 넣어주세요';
     status.className = 'ai-status error';
-    return;
+    return false;
   }
 
   btn.disabled = true;
@@ -246,7 +247,11 @@ document.getElementById('aiGenerateBtn').addEventListener('click', async () => {
     const res = await apiFetch('/api/generate-caption', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productName, price: currentProduct.price }),
+      body: JSON.stringify({
+        productName,
+        price: currentProduct.price,
+        target: document.getElementById('composeTargetSelect').value,
+      }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
@@ -270,15 +275,23 @@ document.getElementById('aiGenerateBtn').addEventListener('click', async () => {
       });
     });
 
+    // 자동완성 흐름에서는 첫 번째 버전을 기본으로 바로 채워줌 (원하면 다른 버전으로 클릭해서 교체 가능)
+    textArea.value = data.texts[0];
+    candidatesBox.querySelector('.ai-candidate')?.classList.add('selected');
+
     status.textContent = `${data.texts.length}개 완성 · 마음에 드는 걸 눌러서 본문에 채우세요`;
     status.className = 'ai-status ok';
+    return true;
   } catch (err) {
     status.textContent = '실패: ' + err.message;
     status.className = 'ai-status error';
+    return false;
   } finally {
     btn.disabled = false;
   }
-});
+}
+
+document.getElementById('aiGenerateBtn').addEventListener('click', runAiGenerate);
 
 // ---- 쿠팡파트너스 상품 검색 ----
 function fmtPrice(n) {
@@ -333,6 +346,122 @@ async function searchCoupangProducts() {
   }
 }
 
+// ---- 완전 자동발행(오토파일럿) ----
+function fmtDateTime(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+async function loadAutopilotStatus() {
+  if (!activeAccountId) return;
+  const textEl = document.getElementById('autopilotStatusText');
+  const btn = document.getElementById('autopilotToggleBtn');
+  const detail = document.getElementById('autopilotDetail');
+  try {
+    const res = await apiFetch(`/api/accounts/${activeAccountId}/autopilot`);
+    const data = await res.json();
+    const lastInfo = data.lastKeyword
+      ? ` · 직전 키워드: "${data.lastKeyword}"${data.lastTarget ? ` (타겟: ${data.lastTarget})` : ''}`
+      : '';
+    if (data.enabled) {
+      textEl.textContent = '켜짐';
+      textEl.className = 'autopilot-status-text on';
+      btn.textContent = '중지';
+      btn.className = 'btn-secondary on';
+      detail.textContent = data.nextAt ? `다음 자동 발행: ${fmtDateTime(data.nextAt)}${lastInfo}` : '';
+    } else {
+      textEl.textContent = '꺼짐';
+      textEl.className = 'autopilot-status-text off';
+      btn.textContent = '시작';
+      btn.className = 'btn-secondary off';
+      detail.textContent = data.lastKeyword ? `마지막으로 썼던${lastInfo}` : '';
+    }
+  } catch {
+    textEl.textContent = '상태를 불러오지 못했어요';
+    textEl.className = 'autopilot-status-text off';
+  }
+}
+
+document.getElementById('autopilotToggleBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('autopilotToggleBtn');
+  const isOn = btn.classList.contains('on');
+  btn.disabled = true;
+  try {
+    if (isOn) {
+      if (!confirm('자동발행을 중지할까요? 이미 예약된 글은 그대로 발행됩니다.')) {
+        btn.disabled = false;
+        return;
+      }
+      await apiFetch(`/api/accounts/${activeAccountId}/autopilot/stop`, { method: 'POST' });
+    } else {
+      if (
+        !confirm(
+          '자동발행을 켜면 앞으로 60~75분마다 AI가 알아서 상품을 고르고 글을 써서 예약·발행합니다. 계속할까요?'
+        )
+      ) {
+        btn.disabled = false;
+        return;
+      }
+      await apiFetch(`/api/accounts/${activeAccountId}/autopilot/start`, { method: 'POST' });
+    }
+    await loadAutopilotStatus();
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---- AI 완전 자동완성: 키워드 제안 → 상품 검색 → 랜덤 픽 → 글쓰기까지 한번에 ----
+document.getElementById('aiAutoCompleteBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('aiAutoCompleteBtn');
+  const status = document.getElementById('aiAutoCompleteStatus');
+  const target = document.getElementById('autoCompleteTargetSelect').value;
+
+  btn.disabled = true;
+  try {
+    status.textContent = 'AI가 검색 키워드 정하는 중…';
+    status.className = 'ai-status';
+    const kwRes = await apiFetch('/api/suggest-keyword', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target }),
+    });
+    const kwData = await kwRes.json();
+    if (!kwRes.ok) throw new Error(kwData.error);
+    const keyword = kwData.keyword;
+    const trendNote = kwData.trendUsed ? ' (네이버 데이터랩 트렌드 1위)' : '';
+
+    status.textContent = `"${keyword}"${trendNote} 검색 중…`;
+    const searchRes = await apiFetch(`/api/coupang/search?keyword=${encodeURIComponent(keyword)}&limit=8`);
+    const searchData = await searchRes.json();
+    if (!searchRes.ok) throw new Error(searchData.error);
+    if (!searchData.products.length) throw new Error(`"${keyword}" 검색 결과가 없어요, 다시 눌러보세요`);
+
+    // 상위 결과 중 랜덤으로 하나 선택 (매번 같은 것만 고르지 않도록)
+    const pickPool = searchData.products.slice(0, Math.min(5, searchData.products.length));
+    const picked = pickPool[Math.floor(Math.random() * pickPool.length)];
+    applyPickedProduct(picked);
+
+    // 검색창/결과 목록에도 반영해서 뭘 골랐는지 보이게
+    document.getElementById('productSearchInput').value = keyword;
+    document.getElementById('productSearchMsg').textContent = `AI가 "${keyword}"${trendNote}로 검색해서 이 상품을 골랐어요: ${picked.name}`;
+    document.getElementById('productSearchMsg').className = 'msg';
+    // 본문 작성 폼의 타겟도 자동완성에서 고른 타겟과 맞춰줌
+    document.getElementById('composeTargetSelect').value = target;
+
+    status.textContent = '글 쓰는 중…';
+    const ok = await runAiGenerate();
+    status.textContent = ok
+      ? `완료! "${keyword}" → "${picked.name}" 상품으로 글 5개 준비됐어요, 마음에 드는 버전 골라주세요`
+      : '상품은 골랐는데 글쓰기에서 오류가 났어요, 아래에서 다시 시도해보세요';
+    status.className = ok ? 'ai-status ok' : 'ai-status error';
+  } catch (err) {
+    status.textContent = '실패: ' + err.message;
+    status.className = 'ai-status error';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 function applyPickedProduct(p) {
   const form = document.getElementById('composeForm');
   form.link.value = p.url;
@@ -345,6 +474,8 @@ function applyPickedProduct(p) {
   document.getElementById('videoPreviewBox').classList.add('hidden');
   document.getElementById('imagePreviewImg').src = p.image;
   document.getElementById('imagePreviewBox').classList.remove('hidden');
+  document.getElementById('imageToolsRow').classList.remove('hidden');
+  document.getElementById('detailImagesGallery').classList.add('hidden');
   const scrapeStatus = document.getElementById('scrapeStatus');
   scrapeStatus.textContent = '상품 검색 결과에서 링크·사진을 채웠어요 · 이제 "AI로 글 써주기"를 눌러보세요';
   scrapeStatus.className = 'scrape-status ok';
@@ -430,6 +561,67 @@ document.getElementById('removeVideoBtn').addEventListener('click', removeUpload
 // ---- 링크 입력 시 상품 이미지/제목 자동 가져오기 ----
 let scrapeTimer = null;
 let lastScrapedLink = '';
+let currentDetailImages = [];
+
+// ---- 상세페이지 사진 더 보기 (갤러리에서 골라서 대표 이미지로 교체) ----
+document.getElementById('showDetailImagesBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('showDetailImagesBtn');
+  const gallery = document.getElementById('detailImagesGallery');
+  const status = document.getElementById('retouchStatus');
+  const link = document.getElementById('composeForm').link.value.trim();
+  if (!link) {
+    status.textContent = '먼저 상품 링크가 있어야 상세 사진을 가져올 수 있어요';
+    status.className = 'ai-status error';
+    return;
+  }
+
+  btn.disabled = true;
+  status.textContent = '상세페이지 사진 불러오는 중…';
+  status.className = 'ai-status';
+  try {
+    // 이미 스크래핑해둔 후보가 있으면 재사용, 없으면 다시 가져옴
+    if (!currentDetailImages.length) {
+      const res = await fetch('/api/scrape-product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: link }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      currentDetailImages = data.images || [data.imageUrl];
+    }
+
+    const currentImg = document.getElementById('composeForm').image_url.value;
+    gallery.innerHTML = currentDetailImages
+      .map(
+        (src, i) => `
+      <div class="detail-img-thumb ${src === currentImg ? 'selected' : ''}" data-idx="${i}">
+        <img src="${src}" alt="" onerror="this.parentElement.style.display='none'" />
+      </div>`
+      )
+      .join('');
+    gallery.classList.remove('hidden');
+
+    gallery.querySelectorAll('.detail-img-thumb').forEach((thumb) => {
+      thumb.addEventListener('click', () => {
+        const src = currentDetailImages[Number(thumb.dataset.idx)];
+        const form = document.getElementById('composeForm');
+        form.image_url.value = src;
+        document.getElementById('imagePreviewImg').src = src;
+        gallery.querySelectorAll('.detail-img-thumb').forEach((t) => t.classList.remove('selected'));
+        thumb.classList.add('selected');
+      });
+    });
+
+    status.textContent = `${currentDetailImages.length}장 찾았어요 · 마음에 드는 사진을 눌러서 대표 이미지로 바꾸세요`;
+    status.className = 'ai-status ok';
+  } catch (err) {
+    status.textContent = '상세 사진을 못 가져왔어요: ' + err.message;
+    status.className = 'ai-status error';
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 async function runScrape(link) {
   const statusEl = document.getElementById('scrapeStatus');
@@ -452,6 +644,9 @@ async function runScrape(link) {
     imageInput.value = data.imageUrl;
     previewImg.src = data.imageUrl;
     previewBox.classList.remove('hidden');
+    document.getElementById('imageToolsRow').classList.remove('hidden');
+    document.getElementById('detailImagesGallery').classList.add('hidden');
+    currentDetailImages = data.images || [data.imageUrl];
 
     if (data.title) {
       currentProduct = { name: data.title, price: null };
@@ -524,6 +719,10 @@ document.getElementById('composeForm').addEventListener('submit', async (e) => {
     document.getElementById('aiGenerateStatus').textContent = '';
     document.getElementById('aiCandidates').classList.add('hidden');
     document.getElementById('aiCandidates').innerHTML = '';
+    document.getElementById('imageToolsRow').classList.add('hidden');
+    document.getElementById('detailImagesGallery').classList.add('hidden');
+    document.getElementById('retouchStatus').textContent = '';
+    currentDetailImages = [];
     lastScrapedLink = '';
     uploadedFilename = null;
     currentProduct = { name: '', price: null };
@@ -590,6 +789,10 @@ async function loadSettings() {
   aForm.ANTHROPIC_API_KEY.placeholder = data.hasAnthropicKey ? '저장됨 (변경 시에만 입력)' : 'sk-ant-... (변경 시에만 입력)';
   aForm.OPENAI_API_KEY.placeholder = data.hasOpenaiKey ? '저장됨 (변경 시에만 입력)' : 'sk-... (변경 시에만 입력)';
 
+  const nForm = document.getElementById('naverForm');
+  nForm.NAVER_CLIENT_ID.value = data.NAVER_CLIENT_ID || '';
+  nForm.NAVER_CLIENT_SECRET.placeholder = data.hasNaverSecret ? '저장됨 (변경 시에만 입력)' : '';
+
   disclosureTemplate = data.COUPANG_DISCLOSURE_TEMPLATE || '';
   document.getElementById('disclosureForm').template.value = disclosureTemplate;
 
@@ -641,6 +844,49 @@ async function clearAiKey(clearField) {
 
 document.getElementById('clearAnthropicKeyBtn').addEventListener('click', () => clearAiKey('CLEAR_ANTHROPIC_KEY'));
 document.getElementById('clearOpenaiKeyBtn').addEventListener('click', () => clearAiKey('CLEAR_OPENAI_KEY'));
+
+document.getElementById('naverForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const msg = document.getElementById('naverMsg');
+  try {
+    const res = await apiFetch(`/api/accounts/${activeAccountId}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        NAVER_CLIENT_ID: form.NAVER_CLIENT_ID.value,
+        NAVER_CLIENT_SECRET: form.NAVER_CLIENT_SECRET.value,
+      }),
+    });
+    if (!res.ok) throw new Error('저장 실패');
+    msg.textContent = '저장 완료';
+    msg.className = 'msg';
+    form.NAVER_CLIENT_SECRET.value = '';
+    loadSettings();
+  } catch (err) {
+    msg.textContent = '오류: ' + err.message;
+    msg.className = 'msg error';
+  }
+});
+
+document.getElementById('clearNaverKeyBtn').addEventListener('click', async () => {
+  const msg = document.getElementById('naverMsg');
+  if (!confirm('네이버 API 키를 지울까요?')) return;
+  try {
+    const res = await apiFetch(`/api/accounts/${activeAccountId}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ CLEAR_NAVER_KEY: true }),
+    });
+    if (!res.ok) throw new Error('삭제 실패');
+    msg.textContent = '삭제 완료';
+    msg.className = 'msg';
+    loadSettings();
+  } catch (err) {
+    msg.textContent = '오류: ' + err.message;
+    msg.className = 'msg error';
+  }
+});
 
 document.getElementById('coupangForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -709,5 +955,7 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
   loadConnectionStatus();
   loadDashboard();
   loadSettings();
+  loadAutopilotStatus();
   setInterval(loadDashboard, 30000);
+  setInterval(loadAutopilotStatus, 60000);
 })();

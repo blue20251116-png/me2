@@ -54,6 +54,33 @@
 
     <!-- 글 예약 -->
     <section id="tab-compose" class="tab-panel">
+      <div class="panel narrow autopilot-panel">
+        <h2>🚀 완전 자동발행</h2>
+        <p class="hint">켜두면 서버가 알아서 60~75분마다 무작위 간격으로 상품을 고르고 글을 써서 예약·발행까지 합니다. 사람이 붙어있지 않아도 계속 돌아가요.</p>
+        <div class="autopilot-row">
+          <span id="autopilotStatusText" class="autopilot-status-text">상태 확인 중…</span>
+          <button type="button" id="autopilotToggleBtn" class="btn-secondary">시작</button>
+        </div>
+        <p id="autopilotDetail" class="hint"></p>
+      </div>
+
+      <div class="panel narrow">
+        <h2>AI 자동완성</h2>
+        <p class="hint">버튼 하나로 AI가 검색 키워드부터 상품 선택, 글쓰기까지 전부 알아서 합니다. 네이버 데이터랩 키가 연결되어 있으면 후보 키워드를 실제 검색 트렌드로 비교해서 고릅니다.</p>
+        <label>타겟 독자
+          <select id="autoCompleteTargetSelect">
+            <option value="전체">전체</option>
+            <option value="20대 여자">20대 여자</option>
+            <option value="20대 남자">20대 남자</option>
+            <option value="30대 여자">30대 여자</option>
+            <option value="30대 남자">30대 남자</option>
+            <option value="40대 이상">40대 이상</option>
+          </select>
+        </label>
+        <button type="button" id="aiAutoCompleteBtn" class="btn-ai" style="width:100%; padding:12px; font-size:14px; margin-top:8px;">🤖 AI가 상품 고르고 글까지 다 써줘</button>
+        <p id="aiAutoCompleteStatus" class="ai-status"></p>
+      </div>
+
       <div class="panel narrow">
         <h2>쿠팡파트너스 상품 검색</h2>
         <p class="hint">키워드로 검색하면 파트너스 링크·사진·가격까지 자동으로 채워집니다.</p>
@@ -68,6 +95,16 @@
       <div class="panel narrow">
         <h2>새 글 예약</h2>
         <form id="composeForm">
+          <label>타겟 독자
+            <select id="composeTargetSelect">
+              <option value="전체">전체</option>
+              <option value="20대 여자">20대 여자</option>
+              <option value="20대 남자">20대 남자</option>
+              <option value="30대 여자">30대 여자</option>
+              <option value="30대 남자">30대 남자</option>
+              <option value="40대 이상">40대 이상</option>
+            </select>
+          </label>
           <label>본문
             <div class="textarea-toolbar">
               <button type="button" id="aiGenerateBtn" class="btn-ai">✨ AI로 글 써주기</button>
@@ -111,6 +148,12 @@
             <video id="videoPreviewEl" controls></video>
             <button type="button" id="removeVideoBtn" class="remove-media-btn">✕ 첨부 삭제</button>
           </div>
+
+          <div id="imageToolsRow" class="upload-row hidden">
+            <button type="button" id="showDetailImagesBtn" class="btn-secondary">🖼 상세페이지 사진 더 보기</button>
+          </div>
+          <p id="retouchStatus" class="ai-status"></p>
+          <div id="detailImagesGallery" class="product-results hidden"></div>
 
           <label>발행 예정 시각
             <input type="datetime-local" name="scheduled_at" required />
@@ -183,6 +226,24 @@
           <button type="submit" class="btn-secondary">저장</button>
         </form>
         <p id="coupangMsg" class="msg"></p>
+      </div>
+
+      <div class="panel narrow">
+        <h2>네이버 데이터랩 API 연결 (선택)</h2>
+        <p class="hint">developers.naver.com에서 발급받은 Client ID/Secret을 입력하면, "완전 자동발행"과 "AI 자동완성"에서 후보 키워드를 실제 검색 트렌드로 비교해서 고릅니다. 없어도 AI가 알아서 키워드를 고르니 필수는 아니에요.</p>
+        <form id="naverForm">
+          <label>Client ID
+            <input type="text" name="NAVER_CLIENT_ID" placeholder="네이버 개발자센터에서 발급" />
+          </label>
+          <label>Client Secret
+            <div class="key-input-row">
+              <input type="password" name="NAVER_CLIENT_SECRET" placeholder="변경 시에만 입력" />
+              <button type="button" id="clearNaverKeyBtn" class="btn-clear-key">지우기</button>
+            </div>
+          </label>
+          <button type="submit" class="btn-secondary">저장</button>
+        </form>
+        <p id="naverMsg" class="msg"></p>
       </div>
 
       <div class="panel narrow">
