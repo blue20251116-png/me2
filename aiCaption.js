@@ -552,6 +552,99 @@ async function generateWithOpenAI(apiKey, userMessage) {
   return splitVariants(text);
 }
 
+// ----------------------------------------------------
+// AI가 검색 키워드 후보 자체를 제안 ("완전 자동발행" / "AI 자동완성"에서 사용)
+// ----------------------------------------------------
+// 이전 버전 aiCaption.js를 통째로 교체하면서 이 함수 자체가 통째로 빠져있었음
+// (scheduler.js/server.js는 계속 이 함수를 import해서 호출하고 있었고, 그래서
+// "suggestKeywordCandidates is not a function" 에러로 오토파일럿이 계속 실패했던 것)
+function makeKeywordSystemPrompt() {
+  const { currentDate, currentSeason } = getKoreaContext();
+  return `너는 쇼핑 쇼츠/쓰레드 콘텐츠를 위해 쿠팡에서 검색할 상품 키워드를 제안하는 사람이다.
+
+현재 날짜: ${currentDate}
+현재 계절: ${currentSeason}
+
+주어진 타겟 독자에 맞춰서, 쿠팡에 검색했을 때
+실제로 팔리는 구체적인 상품 카테고리 키워드 5개를 제안해라.
+
+조건:
+- 너무 광범위한 단어(예: "여성 옷", "주방용품") 대신
+  구체적인 상품군(예: "여름 원피스", "고체 레몬즙", "주방 수납장")으로 제안
+- 현재 계절/시기와 어울리는 키워드를 우선 고려 (계절 안 맞는 상품 억지로 넣지 않기)
+- 타겟 독자가 실제로 관심 가질 만한 카테고리로
+- 매번 똑같은 키워드만 반복하지 않기 위해 다양한 카테고리를 섞을 것
+
+출력 형식: 키워드만 한 줄에 하나씩, 총 5줄. 번호나 설명, 따옴표 붙이지 말 것.`;
+}
+
+function parseKeywordList(text) {
+  const list = text
+    .split('\n')
+    .map((line) => line.replace(/^[\d\.\-\*\s]+/, '').trim())
+    .filter(Boolean);
+  if (!list.length) throw new Error('키워드 후보를 받지 못했습니다');
+  return list.slice(0, 5);
+}
+
+async function suggestKeywordCandidates(accountId, target) {
+  const account = getAccount(accountId);
+  const targetText = target && target !== '전체' ? `타겟 독자: ${target}` : '타겟 독자: 전체 연령/성별';
+  const userMessage = `${targetText}\n\n위 시스템 규칙에 맞는 검색 키워드 5개를 제안해줘.`;
+
+  let text;
+  if (account?.anthropic_api_key) {
+    const res = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-sonnet-4-6',
+        max_tokens: 300,
+        temperature: 0.9,
+        system: makeKeywordSystemPrompt(),
+        messages: [{ role: 'user', content: userMessage }],
+      },
+      {
+        headers: {
+          'x-api-key': account.anthropic_api_key,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        timeout: 20000,
+      }
+    );
+    text = res.data?.content?.find((b) => b.type === 'text')?.text;
+  } else if (account?.openai_api_key) {
+    const res = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o-mini',
+        max_tokens: 300,
+        temperature: 0.9,
+        messages: [
+          { role: 'system', content: makeKeywordSystemPrompt() },
+          { role: 'user', content: userMessage },
+        ],
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${account.openai_api_key}`,
+          'content-type': 'application/json',
+        },
+        timeout: 20000,
+      }
+    );
+    text = res.data?.choices?.[0]?.message?.content;
+  } else {
+    throw new Error('이 계정에 Anthropic 또는 OpenAI API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
+  }
+
+  if (!text) throw new Error('키워드 후보를 받지 못했습니다');
+  return parseKeywordList(text);
+}
+
 module.exports = {
   generateCaption,
+  suggestKeywordCandidates,
+  // server.js가 import는 하지만 실제로 호출하는 곳은 없는 죽은 import — 에러 방지용으로만 별칭 export
+  suggestKeyword: suggestKeywordCandidates,
 };
