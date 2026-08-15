@@ -381,21 +381,24 @@ function makeSystemPrompt() {
 각 버전 사이에는 반드시 아래처럼
 --- 한 줄만 넣는다.
 
-첫 번째 글
+<글 1 내용>
 ---
-두 번째 글
+<글 2 내용>
 ---
-세 번째 글
+<글 3 내용>
 ---
-네 번째 글
+<글 4 내용>
 ---
-다섯 번째 글
+<글 5 내용>
 
+위 <글 1 내용> 같은 꺾쇠괄호 표시는 실제 게시물 본문이 들어갈 자리라는 표시일 뿐,
+절대 그대로 출력하거나 "첫 번째 글", "두 번째 글" 같은 문구로 바꿔서 넣지 않는다.
 번호,
 "버전 1",
+"첫 번째 글" 같은 순번 표현,
 설명,
 따옴표,
-제목은 붙이지 않는다.
+제목은 절대 붙이지 않는다 — 각 글은 실제 게시물 본문 그 자체로 바로 시작해야 한다.
 
 최종 출력에는 게시물 본문 5개와 --- 구분자만 출력한다.
 `;
@@ -475,16 +478,24 @@ function filterWeatherMismatch(variants) {
   return variants;
 }
 
+// 모델이 "첫 번째 글" 같은 순번 라벨을 실제 본문 첫 줄로 착각해서 넣는 경우가 있어서
+// (예: 본문이 "세 번째 글\n아기 기저귀는..."처럼 시작) 맨 앞줄에 이 패턴이 단독으로 있으면 제거한다
+const LEADING_ORDINAL_LABEL = /^(첫|두|세|네|다섯)\s*번째\s*글\s*\n+/;
+
+function stripLeadingOrdinalLabel(text) {
+  return text.replace(LEADING_ORDINAL_LABEL, '');
+}
+
 // ----------------------------------------------------
 // AI 결과 5개 분리
 // ----------------------------------------------------
 function splitVariants(text) {
   const variants = text
     .split(/\n\s*---\s*\n/)
-    .map((v) => v.trim())
+    .map((v) => stripLeadingOrdinalLabel(v.trim()).trim())
     .filter(Boolean);
 
-  const parsed = variants.length ? variants.slice(0, 5) : [text.trim()];
+  const parsed = variants.length ? variants.slice(0, 5) : [stripLeadingOrdinalLabel(text.trim()).trim()];
   return filterWeatherMismatch(parsed);
 }
 
