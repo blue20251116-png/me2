@@ -1,5 +1,17 @@
 const axios = require('axios');
-const { getAccount } = require('./db');
+const { getAccount, getSystemApiSettings } = require('./db');
+
+// SaaS 전환 이후 OpenAI는 회원 개별 키가 아니라 운영자가 등록한 공용 키(system_api_settings)를
+// 우선 쓰기로 했는데(아이Image.js와 동일 원칙), 이 파일(aiCaption.js)만 공용키 조회 없이
+// account 개별 키만 보고 있어서 "API 키가 설정되지 않았습니다" 오류가 났었다 — 여기서 통일한다.
+// Anthropic 키는 공용화 대상이 아니라서(system_api_settings에 없음) 계정 개별 키만 확인한다.
+function resolveModelKeys(account) {
+  const shared = getSystemApiSettings();
+  return {
+    anthropicKey: account?.anthropic_api_key || null,
+    openaiKey: shared.openai_api_key || process.env.OPENAI_API_KEY || account?.openai_api_key || null,
+  };
+}
 
 // ----------------------------------------------------
 // 한국 날짜 / 계절 계산
@@ -417,16 +429,18 @@ ${priceText ? `가격: ${priceText}` : ''}
 날씨는 임의로 만들어내지 마.
 `.trim();
 
-  if (account?.anthropic_api_key) {
+  const { anthropicKey, openaiKey } = resolveModelKeys(account);
+
+  if (anthropicKey) {
     return generateWithAnthropic(
-      account.anthropic_api_key,
+      anthropicKey,
       userMessage
     );
   }
 
-  if (account?.openai_api_key) {
+  if (openaiKey) {
     return generateWithOpenAI(
-      account.openai_api_key,
+      openaiKey,
       userMessage
     );
   }
@@ -589,11 +603,12 @@ function parseKeywordList(text) {
 
 async function suggestKeywordCandidates(accountId, target) {
   const account = getAccount(accountId);
+  const { anthropicKey, openaiKey } = resolveModelKeys(account);
   const targetText = target && target !== '전체' ? `타겟 독자: ${target}` : '타겟 독자: 전체 연령/성별';
   const userMessage = `${targetText}\n\n위 시스템 규칙에 맞는 검색 키워드 5개를 제안해줘.`;
 
   let text;
-  if (account?.anthropic_api_key) {
+  if (anthropicKey) {
     const res = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
@@ -605,7 +620,7 @@ async function suggestKeywordCandidates(accountId, target) {
       },
       {
         headers: {
-          'x-api-key': account.anthropic_api_key,
+          'x-api-key': anthropicKey,
           'anthropic-version': '2023-06-01',
           'content-type': 'application/json',
         },
@@ -613,7 +628,7 @@ async function suggestKeywordCandidates(accountId, target) {
       }
     );
     text = res.data?.content?.find((b) => b.type === 'text')?.text;
-  } else if (account?.openai_api_key) {
+  } else if (openaiKey) {
     const res = await axios.post(
       'https://api.openai.com/v1/chat/completions',
       {
@@ -627,7 +642,7 @@ async function suggestKeywordCandidates(accountId, target) {
       },
       {
         headers: {
-          Authorization: `Bearer ${account.openai_api_key}`,
+          Authorization: `Bearer ${openaiKey}`,
           'content-type': 'application/json',
         },
         timeout: 20000,
