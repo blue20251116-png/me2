@@ -503,6 +503,89 @@ async function publishPost(
 
 
 // ============================================================
+// 캐러셀(2장 이상) 발행 — 라이프스타일 이미지 + 상세페이지 사진
+// ============================================================
+
+// 캐러셀은 자식 이미지 컨테이너들을 먼저 각각 만든 뒤(is_carousel_item=true, 텍스트 없음),
+// 그 id들을 모아 media_type=CAROUSEL인 부모 컨테이너를 만들고 그걸 publish한다.
+async function createCarouselChildContainer(accountId, imageUrl, accessToken) {
+  try {
+    const res = await axios.post(
+      `${GRAPH_BASE}/me/threads`,
+      null,
+      {
+        params: {
+          media_type: 'IMAGE',
+          image_url: imageUrl,
+          is_carousel_item: true,
+          access_token: accessToken,
+        },
+        timeout: 30000,
+      }
+    );
+    const id = res.data?.id;
+    if (!id) throw new Error('캐러셀 자식 컨테이너 응답에 id가 없습니다');
+    return id;
+  } catch (err) {
+    logThreadsError('CAROUSEL_CHILD_CREATE', err, { accountId, imageUrl });
+    throw err;
+  }
+}
+
+async function publishCarouselPost(accountId, { text, imageUrls }) {
+  const account = getAccount(accountId);
+  if (!account) throw new Error('존재하지 않는 계정입니다');
+  if (!account.threads_access_token) {
+    throw new Error('스레드 Access Token이 없습니다. 계정을 다시 연결해주세요.');
+  }
+  if (!account.threads_user_id) {
+    throw new Error('Threads User ID가 없습니다. 계정을 다시 연결해주세요.');
+  }
+  const urls = (imageUrls || []).filter(Boolean);
+  if (urls.length < 2) {
+    // 이미지가 1장뿐이면 캐러셀을 만들 이유가 없으니 일반 발행으로 처리
+    return publishPost(accountId, { text, imageUrl: urls[0] });
+  }
+
+  const accessToken = account.threads_access_token;
+
+  console.log(`[Threads][CAROUSEL_CREATE] 시작 account=${accountId} images=${urls.length}`);
+
+  const childIds = [];
+  for (const url of urls) {
+    childIds.push(await createCarouselChildContainer(accountId, url, accessToken));
+    // 연속 생성 시 레이트리밋/전파 지연 완화
+    await sleep(1000);
+  }
+
+  let creationId;
+  try {
+    const createRes = await axios.post(
+      `${GRAPH_BASE}/me/threads`,
+      null,
+      {
+        params: {
+          media_type: 'CAROUSEL',
+          children: childIds.join(','),
+          text,
+          access_token: accessToken,
+        },
+        timeout: 30000,
+      }
+    );
+    creationId = createRes.data?.id;
+    if (!creationId) throw new Error('캐러셀 부모 컨테이너 응답에 id가 없습니다');
+    console.log(`[Threads][CAROUSEL_CREATE] 성공 account=${accountId} creationId=${creationId}`);
+  } catch (err) {
+    logThreadsError('CAROUSEL_CREATE', err, { accountId, userId: account.threads_user_id });
+    throw err;
+  }
+
+  await sleep(1500);
+  return publishContainer(creationId, accessToken);
+}
+
+// ============================================================
 // 댓글 / 답글 발행
 // ============================================================
 
@@ -693,6 +776,7 @@ module.exports = {
   refreshLongLivedToken,
   fetchProfile,
   publishPost,
+  publishCarouselPost,
   publishReply,
   getMediaInsights,
 };

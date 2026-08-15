@@ -258,6 +258,8 @@ const migrations = [
   `ALTER TABLE accounts ADD COLUMN naver_client_id TEXT`,
   `ALTER TABLE accounts ADD COLUMN naver_client_secret TEXT`,
   `ALTER TABLE accounts ADD COLUMN user_id INTEGER`,
+  // 캐러셀(2장) 발행 지원: 라이프스타일 이미지(image_url) + 상세페이지 사진(extra_image_url)
+  `ALTER TABLE posts ADD COLUMN extra_image_url TEXT`,
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (e) { /* 컬럼이 이미 있으면 무시 */ }
@@ -475,8 +477,27 @@ function extendUserExpiry(id, days) {
   return newExpiry;
 }
 
+// req 객체가 없는 크론(scheduler.js)에서도 이미지 절대경로를 만들 수 있게 해주는 헬퍼.
+// 계정별 redirect_uri -> 서버 공용 설정 -> 환경변수 순으로 배포 주소를 추정한다.
+function getPublicBaseUrlForAccount(account) {
+  const shared = getSystemApiSettings();
+  const candidate =
+    account?.threads_redirect_uri || shared.threads_redirect_uri || process.env.THREADS_REDIRECT_URI || null;
+  if (candidate) {
+    try {
+      const u = new URL(candidate);
+      return `${u.protocol}//${u.host}`;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
+  return `http://localhost:${process.env.PORT || 3000}`;
+}
+
 module.exports = {
   db,
+  getPublicBaseUrlForAccount,
   DEFAULT_DISCLOSURE_TEMPLATE,
   listAccounts,
   listAllAccountsForSystem,

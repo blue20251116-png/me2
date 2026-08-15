@@ -498,20 +498,22 @@ app.post('/api/generate-lifestyle-image', requireAccount, async (req, res) => {
 
 // ---------- 글 등록 (예약) ----------
 app.post('/api/posts', requireAccount, (req, res) => {
-  const { text, link, image_url, video_url, scheduled_at, auto_comment_enabled } = req.body;
+  const { text, link, image_url, extra_image_url, video_url, scheduled_at, auto_comment_enabled } = req.body;
   if (!text || !scheduled_at) {
     return res.status(400).json({ error: 'text와 scheduled_at은 필수입니다' });
   }
   const info = db
     .prepare(
-      `INSERT INTO posts (account_id, text, link, image_url, video_url, scheduled_at, auto_comment_enabled, comment_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO posts (account_id, text, link, image_url, extra_image_url, video_url, scheduled_at, auto_comment_enabled, comment_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       req.account.id,
       text,
       link || null,
       image_url || null,
+      // 영상이 있으면 2번째 이미지(캐러셀)는 의미가 없으니 무시
+      video_url ? null : extra_image_url || null,
       video_url || null,
       scheduled_at,
       auto_comment_enabled === false ? 0 : 1,

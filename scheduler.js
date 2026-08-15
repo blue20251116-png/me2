@@ -1,9 +1,11 @@
 const cron = require('node-cron');
-const { db, listAllAccountsForSystem, getAccount, canPublish } = require('./db');
-const { publishPost, publishReply, getMediaInsights } = require('./threadsApi');
+const { db, listAllAccountsForSystem, getAccount, canPublish, getPublicBaseUrlForAccount } = require('./db');
+const { publishPost, publishCarouselPost, publishReply, getMediaInsights } = require('./threadsApi');
 const coupangApi = require('./coupangApi');
 const { generateCaption, suggestKeywordCandidates } = require('./aiCaption');
 const { rankKeywordsByTrend } = require('./naverTrends');
+const { generateScene, generateLifestyleImage } = require('./aiImage');
+const { scrapeProduct } = require('./scraper');
 
 // 링크를 계정별 안내문구 템플릿에 끼워서 댓글용 텍스트 생성
 function buildCommentText(account, link) {
@@ -56,11 +58,18 @@ function startPublishJob() {
           continue;
         }
         try {
-          const mediaId = await publishPost(account.id, {
-            text: post.text,
-            imageUrl: post.image_url,
-            videoUrl: post.video_url,
-          });
+          // extra_image_url이 있으면(라이프스타일+상세페이지 2장) 캐러셀로, 없으면 기존처럼 단일 이미지/영상으로 발행
+          const mediaId =
+            post.image_url && post.extra_image_url
+              ? await publishCarouselPost(account.id, {
+                  text: post.text,
+                  imageUrls: [post.image_url, post.extra_image_url],
+                })
+              : await publishPost(account.id, {
+                  text: post.text,
+                  imageUrl: post.image_url,
+                  videoUrl: post.video_url,
+                });
           db.prepare(
             `UPDATE posts SET status = 'posted', threads_media_id = ?, posted_at = ? WHERE id = ?`
           ).run(mediaId, new Date().toISOString(), post.id);
@@ -174,11 +183,44 @@ async function runAutopilotOnce(account) {
   const texts = await generateCaption(account.id, { productName: picked.name, price: picked.price, target });
   const text = texts[Math.floor(Math.random() * texts.length)];
 
+  // 1장(원본 상품컷)이 기본값. 라이프스타일 이미지 생성이 성공하면
+  // [라이프스타일, 상세페이지 사진] 2장 캐러셀로 업그레이드하고, 실패하면 조용히 원본 1장 폴백으로 유지한다.
+  let imageUrl = picked.image;
+  let extraImageUrl = null;
+  let imageMode = '원본 상품컷 1장';
+
+  try {
+    const publicBaseUrl = getPublicBaseUrlForAccount(account);
+    const scene = await generateScene(account.id, { productName: picked.name, price: picked.price, target });
+    const lifestyle = await generateLifestyleImage(
+      account.id,
+      { productName: picked.name, productImageUrl: picked.image, scene },
+      publicBaseUrl
+    );
+    const lifestyleUrl = lifestyle.images?.[0]?.url;
+    if (!lifestyleUrl) throw new Error('라이프스타일 이미지 URL이 비어있습니다');
+
+    // 두 번째 장(상세페이지 사진)은 best-effort — 실패해도 라이프스타일 1장만으로는 발행 가능
+    let detailImage = null;
+    try {
+      const detail = await scrapeProduct(picked.url);
+      detailImage = (detail.images || []).find((u) => u !== picked.image) || detail.imageUrl || null;
+    } catch (scrapeErr) {
+      console.error(`[상세페이지 사진 수집 실패] account #${account.id}:`, scrapeErr.message);
+    }
+
+    imageUrl = lifestyleUrl;
+    extraImageUrl = detailImage && detailImage !== lifestyleUrl ? detailImage : null;
+    imageMode = extraImageUrl ? '라이프스타일+상세페이지 2장 캐러셀' : '라이프스타일 1장';
+  } catch (imgErr) {
+    console.error(`[라이프스타일 이미지 생성 실패, 원본 사진으로 폴백] account #${account.id}:`, imgErr.message);
+  }
+
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO posts (text, link, image_url, scheduled_at, auto_comment_enabled, comment_status, account_id)
-     VALUES (?, ?, ?, ?, 1, 'pending', ?)`
-  ).run(text, picked.url, picked.image, now, account.id);
+    `INSERT INTO posts (text, link, image_url, extra_image_url, scheduled_at, auto_comment_enabled, comment_status, account_id)
+     VALUES (?, ?, ?, ?, ?, 1, 'pending', ?)`
+  ).run(text, picked.url, imageUrl, extraImageUrl, now, account.id);
 
   db.prepare(`UPDATE accounts SET autopilot_last_keyword = ?, autopilot_last_target = ? WHERE id = ?`).run(
     keyword,
@@ -186,7 +228,7 @@ async function runAutopilotOnce(account) {
     account.id
   );
   console.log(
-    `[자동발행 예약] account #${account.id} target="${target}" keyword="${keyword}" (${trendNote}) product="${picked.name}"`
+    `[자동발행 예약] account #${account.id} target="${target}" keyword="${keyword}" (${trendNote}) product="${picked.name}" image="${imageMode}"`
   );
 }
 
