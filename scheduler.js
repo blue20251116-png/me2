@@ -5,7 +5,6 @@ const coupangApi = require('./coupangApi');
 const { generateCaption, suggestKeywordCandidates } = require('./aiCaption');
 const { rankKeywordsByTrend } = require('./naverTrends');
 const { generateScene, generateLifestyleImage } = require('./aiImage');
-const { scrapeProduct } = require('./scraper');
 
 // 링크를 계정별 안내문구 템플릿에 끼워서 댓글용 텍스트 생성
 function buildCommentText(account, link) {
@@ -200,18 +199,12 @@ async function runAutopilotOnce(account) {
     const lifestyleUrl = lifestyle.images?.[0]?.url;
     if (!lifestyleUrl) throw new Error('라이프스타일 이미지 URL이 비어있습니다');
 
-    // 두 번째 장(상세페이지 사진)은 best-effort — 실패해도 라이프스타일 1장만으로는 발행 가능
-    let detailImage = null;
-    try {
-      const detail = await scrapeProduct(picked.url);
-      detailImage = (detail.images || []).find((u) => u !== picked.image) || detail.imageUrl || null;
-    } catch (scrapeErr) {
-      console.error(`[상세페이지 사진 수집 실패] account #${account.id}:`, scrapeErr.message);
-    }
-
+    // 상세페이지 크롤링은 쿠팡이 서버 IP발 요청을 봇으로 차단해서 계속 실패했음.
+    // 크롤링할 필요 없이, 쿠팡파트너스 Open API가 이미 정식으로 준 원본 상품 썸네일(picked.image)을
+    // 2번째 캐러셀 이미지로 그대로 쓴다 — 실패할 여지 자체가 없음
     imageUrl = lifestyleUrl;
-    extraImageUrl = detailImage && detailImage !== lifestyleUrl ? detailImage : null;
-    imageMode = extraImageUrl ? '라이프스타일+상세페이지 2장 캐러셀' : '라이프스타일 1장';
+    extraImageUrl = picked.image;
+    imageMode = '라이프스타일+원본 상품컷 2장 캐러셀';
   } catch (imgErr) {
     console.error(`[라이프스타일 이미지 생성 실패, 원본 사진으로 폴백] account #${account.id}:`, imgErr.message);
   }
