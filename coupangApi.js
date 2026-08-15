@@ -77,6 +77,37 @@ async function createDeeplink(accountId, urls) {
   }));
 }
 
+// 골드박스(오늘의 특가) 조회 — 카테고리를 우리가 지정하지 않고, 쿠팡이 지금 실제로 미는 특가 상품을
+// 카테고리 상관없이 통째로 준다. 식품이 실제로 잘 팔리는 날엔 골드박스에도 식품이 많이 걸리기 때문에,
+// 카테고리 비중을 우리가 손으로 정하지 않고도 실제 판매 데이터를 자연스럽게 반영할 수 있다.
+// 주의: goldbox 엔드포인트 경로는 공식 문서를 직접 열람하지 못한 상태로 구현한 것이라 100% 확정은 아님 —
+// 아래에서 실패하면 기존 카테고리 랜덤 방식으로, 그마저 실패하면 키워드 검색으로 순서대로 폴백한다
+async function getGoldboxProducts(accountId, limit = 20) {
+  const account = getAccount(accountId);
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (account.coupang_sub_id) params.set('subId', account.coupang_sub_id);
+
+  const path = '/v2/providers/affiliate_open_api/apis/openapi/products/goldbox';
+  const pathWithQuery = `${path}?${params.toString()}`;
+
+  const res = await axios.get(`${DOMAIN}${pathWithQuery}`, {
+    headers: { Authorization: buildAuthHeader(account, 'GET', pathWithQuery) },
+    timeout: 10000,
+  });
+
+  const list = res.data?.data || [];
+  return list.map((p) => ({
+    productId: p.productId,
+    name: p.productName,
+    image: p.productImage,
+    price: p.productPrice,
+    url: p.productUrl,
+    isRocket: !!p.isRocket,
+    isFreeShipping: !!p.isFreeShipping,
+    discountRate: p.discountRate || null,
+  }));
+}
+
 // 카테고리별 베스트 상품 조회 — 키워드 검색과 별개인 쿠팡파트너스 랭킹 기반 엔드포인트.
 // 검색 API는 "그 키워드에 걸리는 상품"을 주는 거라 실제 잘 팔리는지는 보장 안 되는데,
 // 이건 쿠팡이 매기는 카테고리별 베스트셀러 순위를 그대로 준다.
@@ -125,4 +156,10 @@ async function getBestCategoryProducts(accountId, categoryId, limit = 20) {
   }));
 }
 
-module.exports = { searchProducts, createDeeplink, getBestCategoryProducts, BEST_CATEGORY_IDS };
+module.exports = {
+  searchProducts,
+  createDeeplink,
+  getBestCategoryProducts,
+  getGoldboxProducts,
+  BEST_CATEGORY_IDS,
+};

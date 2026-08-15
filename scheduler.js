@@ -152,8 +152,10 @@ function randomIntervalMinutes() {
 // 오토파일럿이 매번 랜덤으로 골라볼 타겟 후보 (전체 포함, 다양성 확보용)
 const AUTOPILOT_TARGETS = ['전체', '20대 여자', '20대 남자', '30대 여자', '30대 남자', '40대 이상'];
 
-// 쿠팡 카테고리별 베스트 상품 랭킹에서 우선 고르고 -> 안 되면(카테고리 코드 문제 등) 기존 AI 키워드 검색으로 폴백
-// -> 타겟에 맞춰 글 생성 -> 예약글로 등록
+// 쿠팡 골드박스(오늘의 특가)에서 우선 고르고 -> 실패하면 카테고리 베스트 랭킹 -> 그마저 실패하면
+// AI 키워드 검색까지, 순서대로 폴백한다. 골드박스는 카테고리를 우리가 정하지 않고 쿠팡이 실제로 미는
+// 특가 상품을 통째로 주기 때문에, 식품 등 특정 카테고리 비중을 우리가 손으로 정할 필요가 없다 —
+// 실제로 식품이 잘 팔리는 날엔 골드박스에도 식품이 많이 걸리고, 그렇게 자연스럽게 반영된다
 // (실제 발행/댓글 등록은 여기서 하지 않고, 방금 만든 예약글을 startPublishJob이 곧바로 집어서 처리함)
 async function runAutopilotOnce(account) {
   const target = AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
@@ -163,43 +165,59 @@ async function runAutopilotOnce(account) {
   let trendNote;
 
   try {
-    // 실제 쿠팡 판매 랭킹 기준 베스트셀러를 직접 받아옴 (AI가 키워드 추측하는 것보다 신뢰도 높음)
-    const categoryNames = Object.keys(coupangApi.BEST_CATEGORY_IDS);
-    const categoryName = categoryNames[Math.floor(Math.random() * categoryNames.length)];
-    const categoryId = coupangApi.BEST_CATEGORY_IDS[categoryName];
-    const bestList = await coupangApi.getBestCategoryProducts(account.id, categoryId, 20);
-    if (!bestList.length) throw new Error(`"${categoryName}" 베스트 상품 목록이 비어있습니다`);
+    // 1순위: 골드박스 — 카테고리 상관없이 쿠팡이 지금 실제로 미는 특가/베스트 상품
+    const goldbox = await coupangApi.getGoldboxProducts(account.id, 30);
+    if (!goldbox.length) throw new Error('골드박스 상품 목록이 비어있습니다');
 
-    const pool = bestList.slice(0, Math.min(10, bestList.length));
+    const pool = goldbox.slice(0, Math.min(15, goldbox.length));
     picked = pool[Math.floor(Math.random() * pool.length)];
-    keyword = categoryName;
-    trendNote = `쿠팡 베스트카테고리 랭킹${picked.rank ? ` (${picked.rank}위)` : ''}`;
-  } catch (bestErr) {
+    keyword = picked.name;
+    trendNote = `쿠팡 골드박스 특가${picked.discountRate ? ` (${picked.discountRate}% 할인)` : ''}`;
+  } catch (goldboxErr) {
     console.error(
-      `[베스트카테고리 조회 실패, AI 키워드 검색으로 폴백] account #${account.id}:`,
-      bestErr.response?.data || bestErr.message
+      `[골드박스 조회 실패, 카테고리 베스트 랭킹으로 폴백] account #${account.id}:`,
+      goldboxErr.response?.data || goldboxErr.message
     );
 
-    const candidates = await suggestKeywordCandidates(account.id, target);
-    keyword = candidates[0];
-    trendNote = '트렌드 비교 없이 AI 1순위 선택';
-
     try {
-      const ranked = await rankKeywordsByTrend(account.id, candidates);
-      if (ranked && ranked.length) {
-        keyword = ranked[0].keyword;
-        trendNote = `네이버 데이터랩 트렌드 1위 (평균 지수 ${ranked[0].avgRatio.toFixed(1)})`;
+      // 2순위: 카테고리 베스트 랭킹 — 13개 카테고리 중 균등 랜덤 (특정 카테고리 가중치 없음)
+      const categoryNames = Object.keys(coupangApi.BEST_CATEGORY_IDS);
+      const categoryName = categoryNames[Math.floor(Math.random() * categoryNames.length)];
+      const categoryId = coupangApi.BEST_CATEGORY_IDS[categoryName];
+      const bestList = await coupangApi.getBestCategoryProducts(account.id, categoryId, 20);
+      if (!bestList.length) throw new Error(`"${categoryName}" 베스트 상품 목록이 비어있습니다`);
+
+      const bestPool = bestList.slice(0, Math.min(10, bestList.length));
+      picked = bestPool[Math.floor(Math.random() * bestPool.length)];
+      keyword = categoryName;
+      trendNote = `쿠팡 베스트카테고리 랭킹${picked.rank ? ` (${picked.rank}위)` : ''}`;
+    } catch (bestErr) {
+      console.error(
+        `[베스트카테고리 조회도 실패, AI 키워드 검색으로 폴백] account #${account.id}:`,
+        bestErr.response?.data || bestErr.message
+      );
+
+      const candidates = await suggestKeywordCandidates(account.id, target);
+      keyword = candidates[0];
+      trendNote = '트렌드 비교 없이 AI 1순위 선택';
+
+      try {
+        const ranked = await rankKeywordsByTrend(account.id, candidates);
+        if (ranked && ranked.length) {
+          keyword = ranked[0].keyword;
+          trendNote = `네이버 데이터랩 트렌드 1위 (평균 지수 ${ranked[0].avgRatio.toFixed(1)})`;
+        }
+      } catch (err) {
+        console.error(`[트렌드 비교 실패] account #${account.id}:`, err.response?.data || err.message);
+        // 트렌드 비교가 실패해도 AI가 고른 1순위 키워드로 그냥 진행
       }
-    } catch (err) {
-      console.error(`[트렌드 비교 실패] account #${account.id}:`, err.response?.data || err.message);
-      // 트렌드 비교가 실패해도 AI가 고른 1순위 키워드로 그냥 진행
+
+      const products = await coupangApi.searchProducts(account.id, keyword, 8);
+      if (!products.length) throw new Error(`"${keyword}" 검색 결과가 없습니다`);
+
+      const pool = products.slice(0, Math.min(5, products.length));
+      picked = pool[Math.floor(Math.random() * pool.length)];
     }
-
-    const products = await coupangApi.searchProducts(account.id, keyword, 8);
-    if (!products.length) throw new Error(`"${keyword}" 검색 결과가 없습니다`);
-
-    const pool = products.slice(0, Math.min(5, products.length));
-    picked = pool[Math.floor(Math.random() * pool.length)];
   }
 
   const texts = await generateCaption(account.id, { productName: picked.name, price: picked.price, target });
