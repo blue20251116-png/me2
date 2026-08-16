@@ -3,6 +3,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { getSystemApiSettings } = require('./db');
 
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -12,14 +13,32 @@ const FFMPEG_TIMEOUT_MS = 15000;
 const MAX_DOWNLOAD_BYTES = 12 * 1024 * 1024;
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-function publicBaseUrlFromAccount(account) {
-  if (!account?.threads_redirect_uri) return '';
+function normalizeBaseUrl(value) {
+  if (!value) return '';
   try {
-    const u = new URL(account.threads_redirect_uri);
+    const u = new URL(value);
     return `${u.protocol}//${u.host}`;
   } catch {
     return '';
   }
+}
+
+function publicBaseUrlFromAccount(account) {
+  // 1순위: Railway/운영환경에서 명시한 공개 서비스 URL
+  const explicit = normalizeBaseUrl(process.env.PUBLIC_BASE_URL || process.env.RAILWAY_PUBLIC_DOMAIN);
+  if (explicit) return explicit;
+
+  // 2순위: 관리자 공용 Threads callback URL의 origin 사용
+  try {
+    const shared = getSystemApiSettings();
+    const sharedBase = normalizeBaseUrl(shared?.threads_redirect_uri);
+    if (sharedBase) return sharedBase;
+  } catch {
+    // 시스템 설정 조회 실패 시 아래 fallback으로 진행
+  }
+
+  // 3순위: 구버전 계정별 redirect URI 호환
+  return normalizeBaseUrl(account?.threads_redirect_uri);
 }
 
 function runFfmpeg(args) {
@@ -120,7 +139,11 @@ async function cropYoutubeThumbnail({ account, thumbnailUrl, videoId }) {
   if (!account?.id || !thumbnailUrl) throw new Error('썸네일 크롭 정보가 부족합니다');
 
   const baseUrl = publicBaseUrlFromAccount(account);
-  if (!baseUrl) throw new Error('공개 서비스 URL을 확인할 수 없습니다');
+  if (!baseUrl) {
+    throw new Error(
+      '공개 서비스 URL을 확인할 수 없습니다. PUBLIC_BASE_URL 또는 관리자 Threads callback URL을 확인하세요'
+    );
+  }
 
   cleanupOldFiles();
 
