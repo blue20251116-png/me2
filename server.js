@@ -3,6 +3,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const crypto = require('crypto');
 const session = require('express-session');
 const {
   db,
@@ -41,6 +42,7 @@ const { generateScene, generateLifestyleImage } = require('./aiImage');
 const { rankKeywordsByTrend } = require('./naverTrends');
 const { startPublishJob, startInsightsJob, startAutopilotJob } = require('./scheduler');
 const youtubeApi = require('./youtubeApi');
+const videoFrames = require('./videoFrames');
 
 bootstrapAdmin();
 
@@ -225,9 +227,21 @@ app.post('/api/admin/system-api-settings', requireAdmin, (req, res) => {
 app.use(express.static(path.join(__dirname, 'public'))); // index.html(대시보드)은 인증 통과 후에만
 
 const ALLOWED_MEDIA_TYPES = /^(image\/(jpeg|png|gif|webp)|video\/mp4|video\/quicktime)$/;
+// 영상 프레임 추출(POST /api/video/frames)이 "이 영상이 정말 이 계정 소유인지"를 파일 경로만으로
+// 판단할 수 있도록, 영상 파일은 계정별 하위 폴더(uploads/videos/<accountId>/)에 저장한다.
+// 이미지는 기존과 동일하게 uploadsDir 바로 아래에 평평하게 저장 (기존 동작 유지).
+// 이 라우트는 requireAccount가 upload.single(...)보다 먼저 실행되므로, 아래 destination
+// 콜백이 호출되는 시점에는 이미 req.account가 채워져 있다.
 const upload = multer({
   storage: multer.diskStorage({
-    destination: uploadsDir,
+    destination: (req, file, cb) => {
+      if (file.mimetype.startsWith('video/') && req.account) {
+        const dir = path.join(uploadsDir, 'videos', String(req.account.id));
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        return cb(null, dir);
+      }
+      cb(null, uploadsDir);
+    },
     filename: (req, file, cb) => {
       const ext = path.extname(file.originalname) || '';
       const safeName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
@@ -387,15 +401,101 @@ app.get('/auth/callback', async (req, res) => {
 // ---------- 직접 업로드한 사진/영상 첨부 ----------
 app.post('/api/upload-media', requireAccount, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다' });
-  const url = `${getPublicBaseUrl(req, req.account)}/uploads/${req.file.filename}`;
+  // 영상은 uploads/videos/<accountId>/ 하위에 저장되므로, 실제 저장 위치를 그대로 반영해 URL을 만든다
+  // (이미지는 기존처럼 uploadsDir 바로 아래라 relPath === filename과 동일함)
+  const relPath = path.relative(uploadsDir, req.file.path).split(path.sep).join('/');
+  const url = `${getPublicBaseUrl(req, req.account)}/uploads/${relPath}`;
   const mediaType = req.file.mimetype.startsWith('video/') ? 'video' : 'image';
   res.json({ url, filename: req.file.filename, mediaType });
 });
 
 app.delete('/api/upload-media/:filename', (req, res) => {
   const filename = path.basename(req.params.filename); // 경로 조작 방지
-  const filePath = path.join(uploadsDir, filename);
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  // 이미지(평면 위치)를 먼저 확인하고, 없으면 계정별 영상 폴더들에서 찾아 삭제한다
+  const flatPath = path.join(uploadsDir, filename);
+  if (fs.existsSync(flatPath)) {
+    fs.unlinkSync(flatPath);
+    return res.json({ ok: true });
+  }
+  const videosDir = path.join(uploadsDir, 'videos');
+  if (fs.existsSync(videosDir)) {
+    for (const accountDir of fs.readdirSync(videosDir)) {
+      const candidate = path.join(videosDir, accountDir, filename);
+      if (fs.existsSync(candidate)) {
+        fs.unlinkSync(candidate);
+        break;
+      }
+    }
+  }
+  res.json({ ok: true });
+});
+
+// ---------- 영상 프레임 추출 (업로드한 영상 → 게시용 사진 후보) ----------
+// 다운로드/타 사용자 영상 처리 아님 — 오직 "이 계정이 방금 직접 업로드한 영상"만 대상으로 한다.
+// 소유권은 파일 경로 구조로 강제된다: 영상은 uploads/videos/<accountId>/에, 추출된 프레임은
+// uploads/frames/<accountId>/<jobId>/에 저장되고, 두 라우트 모두 req.account.id로만 그 경로를
+// 직접 조립한다 — 클라이언트가 accountId나 다른 경로 조각을 넣어도 그 값은 절대 쓰이지 않는다.
+const videoFrameLocks = new Set(); // 계정당 동시 추출 1개로 제한 (연타/중복 방지, 인스턴스 로컬)
+
+app.post('/api/video/frames', requireAccount, async (req, res) => {
+  const { filename } = req.body || {};
+  if (!filename) return res.status(400).json({ error: 'filename이 필요합니다' });
+
+  if (videoFrameLocks.has(req.account.id)) {
+    return res.status(429).json({ error: '이미 처리 중인 영상이 있습니다. 완료 후 다시 시도해주세요.' });
+  }
+
+  // 클라이언트가 보낸 filename은 basename만 신뢰하고, 실제 경로는 서버가 "현재 로그인 계정 자신의
+  // 영상 폴더" 기준으로만 조립한다 — 다른 계정 폴더를 가리킬 방법이 없다 (path traversal 방지 포함).
+  const safeFilename = path.basename(String(filename));
+  const videoPath = path.join(uploadsDir, 'videos', String(req.account.id), safeFilename);
+
+  if (!fs.existsSync(videoPath)) {
+    return res.status(404).json({ error: '영상 파일을 찾을 수 없습니다. 먼저 영상을 업로드해주세요.' });
+  }
+
+  videoFrameLocks.add(req.account.id);
+  try {
+    const availability = await videoFrames.checkFfmpegAvailable();
+    if (!availability.available) {
+      return res
+        .status(503)
+        .json({ error: '현재 서버에서 영상 프레임 추출 기능을 사용할 수 없습니다. FFmpeg 설치 상태를 확인해주세요.' });
+    }
+
+    const jobId = crypto.randomUUID();
+    const outputDir = path.join(uploadsDir, 'frames', String(req.account.id), jobId);
+
+    const { duration, frames } = await videoFrames.extractFrames({ videoPath, outputDir });
+
+    const baseUrl = getPublicBaseUrl(req, req.account);
+    const framesOut = frames.map((f) => ({
+      id: `frame_${f.filename.replace(/[^0-9]/g, '')}`,
+      time: f.time,
+      url: `${baseUrl}/uploads/frames/${req.account.id}/${jobId}/${f.filename}`,
+    }));
+
+    res.json({ success: true, jobId, duration, frames: framesOut });
+  } catch (err) {
+    if (err.message === '영상 처리 시간이 초과되었습니다.') {
+      return res.status(504).json({ error: err.message });
+    }
+    if (err.message === '영상 파일을 분석할 수 없습니다.') {
+      return res.status(422).json({ error: err.message });
+    }
+    console.error('[영상 프레임 추출 오류]', err.message);
+    res.status(500).json({ error: '영상 처리 중 오류가 발생했습니다.' });
+  } finally {
+    videoFrameLocks.delete(req.account.id);
+  }
+});
+
+// 선택되지 않은(또는 취소된) 추출 작업을 정리. jobId는 항상 req.account.id 하위에서만 찾으므로
+// 다른 계정의 작업 폴더는 애초에 경로 자체가 만들어지지 않는다 (403 대신 자연히 접근 불가).
+app.delete('/api/video/frames/:jobId', requireAccount, (req, res) => {
+  const jobId = path.basename(req.params.jobId);
+  const dir = path.join(uploadsDir, 'frames', String(req.account.id), jobId);
+  videoFrames.deleteFramesDir(dir);
   res.json({ ok: true });
 });
 

@@ -1,0 +1,6 @@
+# Railway가 Nixpacks로 빌드할 때 FFmpeg/FFprobe를 함께 설치하기 위한 설정.
+# 영상 프레임 추출 기능(videoFrames.js)에서 사용합니다.
+# Nixpacks를 쓰지 않는 다른 빌더(Docker 등)로 배포한다면 이 파일은 무시되며,
+# 해당 이미지에 ffmpeg를 직접 설치해야 합니다 (README "영상 프레임(장면) 추출" 항목 참고).
+[phases.setup]
+nixPkgs = ["ffmpeg"]
