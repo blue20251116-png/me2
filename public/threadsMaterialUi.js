@@ -1,21 +1,13 @@
 (() => {
-  // 글 예약 화면은 '소재 찾기 → 본문/댓글 확인 → 예약' 흐름만 남긴다.
-  // 기존 기능 코드는 다른 스크립트가 참조할 수 있으므로 DOM을 삭제하지 않고 화면에서만 숨긴다.
   function hideComposeClutter() {
     const hide = el => { if (el) el.style.display = 'none'; };
-
-    // 독립 카드: AI 자동완성 / 관련 쇼츠 찾기
     document.querySelectorAll('#tab-compose .panel').forEach(card => {
       const title = String(card.querySelector('h2')?.textContent || '').trim();
       if (title === 'AI 자동완성' || title.includes('관련 쇼츠 찾기')) hide(card);
     });
-
-    // 완전 자동발행 카드 안의 소스/영상 옵션은 숨기고 시작/상태만 유지
     hide(document.getElementById('autopilotYoutubeToggle')?.closest('label'));
     hide(document.getElementById('autopilotYoutubeOrderSelect')?.closest('label'));
     hide(document.getElementById('autopilotFrameMediaToggle')?.closest('label'));
-
-    // 새 글 예약 하단의 AI 상황/라이프스타일 이미지 생성 UI 제거
     hide(document.getElementById('lifestylePanel'));
   }
 
@@ -60,6 +52,7 @@
     results.innerHTML=lastItems.map((x,i)=>`<div class="product-card" style="align-items:flex-start;gap:10px;">${x.thumbnail?`<img src="${esc(x.thumbnail)}" style="width:82px;height:82px;object-fit:cover;border-radius:12px;" onerror="this.style.display='none'">`:''}<div class="p-info" style="min-width:0;flex:1;"><div style="font-size:12px;font-weight:700;margin-bottom:4px;">@${esc(x.username||'threads')}</div><div class="p-name" style="white-space:normal;line-height:1.45;">${esc(compact(x.text)||'소재')}</div><div class="p-price" style="margin-top:5px;">${x.hasVideo?`🎬 영상 ${x.videoCount||1}`:''}${x.hasVideo&&x.imageCount?' · ':''}${x.imageCount?`🖼 사진 ${x.imageCount}`:''}</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><button type="button" class="pick-btn threads-material-use" data-idx="${i}">이 소재로 글 만들기</button><a class="btn-secondary" href="${esc(x.url)}" target="_blank" rel="noopener" style="padding:7px 10px;text-decoration:none;font-size:12px;">원문 보기</a></div></div></div>`).join('');
     results.querySelectorAll('.threads-material-use').forEach(b=>b.onclick=()=>prepare(Number(b.dataset.idx),b));
   }
+
   async function search(){if(searchBtn.disabled)return;searchBtn.disabled=true;results.innerHTML='';setMsg('새 소재를 찾는 중…');try{const r=await fetchWithTimeout('/api/threads/material-search?limit=10',{},22000);const d=await r.json();if(!r.ok)throw new Error(d.error||'소재 찾기 실패');render(d.items||[]);}catch(e){setMsg(e?.name==='AbortError'?'찾는 시간이 너무 길어 중단했어요. 다시 눌러주세요.':'소재를 가져오지 못했어요. 잠시 후 다시 눌러주세요.','error');}finally{searchBtn.disabled=false;}}
   function selectVersion(i){const ta=form.querySelector('textarea[name="text"]');if(generatedTexts[i]&&ta)ta.value=generatedTexts[i];showComment(generatedComments[i]||'');}
 
@@ -67,26 +60,30 @@
     const item=lastItems[i]; if(!item)return; const mode=inferMode(item),old=btn.textContent; btn.disabled=true;btn.textContent='준비 중…';setMsg('선택한 게시물의 글·댓글·원본 미디어를 확인하는 중…');
     try{
       const writePromise=fetchWithTimeout('/api/threads/material-write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceText:item.text||'',sourceUrl:item.url||'',username:item.username||'',mode,images:item.images||[],hasVideo:!!item.hasVideo})},35000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'글 생성 실패');return d;});
-      const videoPromise=item.hasVideo?fetchWithTimeout('/api/threads/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:item.url})},35000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'영상 가져오기 실패');return d;}):Promise.resolve(null);
-      const [wr,ir]=await Promise.allSettled([writePromise,videoPromise]); if(wr.status!=='fulfilled')throw new Error(wr.reason?.message||'글 생성 실패');
+
+      // 목록 화면의 hasVideo 판정은 Threads DOM 때문에 틀릴 수 있다.
+      // 따라서 사용자가 소재를 선택하면 게시물 URL에서 실제 영상 추출을 항상 한 번 시도한다.
+      // 성공하면 영상 게시물로 확정하고 poster/thumbnail 이미지는 모두 버린다.
+      const videoPromise=fetchWithTimeout('/api/threads/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:item.url})},35000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'영상 없음');return d;});
+
+      const [wr,ir]=await Promise.allSettled([writePromise,videoPromise]);
+      if(wr.status!=='fulfilled')throw new Error(wr.reason?.message||'글 생성 실패');
       generatedTexts=wr.value.texts||[];generatedComments=wr.value.comments||[];activeMaterial=true;
       const ta=form.querySelector('textarea[name="text"]');if(generatedTexts[0]&&ta)ta.value=generatedTexts[0];showComment(generatedComments[0]||'');
       const box=document.getElementById('aiCandidates');if(box&&generatedTexts.length){box.innerHTML=generatedTexts.map((t,n)=>`<div class="ai-candidate ${n===0?'selected':''}" data-threads-idx="${n}"><span class="pick-label">버전 ${n+1} · 클릭해서 교체</span><p style="white-space:pre-wrap;">${esc(t)}</p></div>`).join('');box.classList.remove('hidden');box.querySelectorAll('.ai-candidate').forEach(c=>c.onclick=()=>{box.querySelectorAll('.ai-candidate').forEach(z=>z.classList.remove('selected'));c.classList.add('selected');selectVersion(Number(c.dataset.threadsIdx));});}
 
       const exactImages=(wr.value.sourceMedia?.images||item.images||[]).filter(Boolean);
       const importedVideo=(ir.status==='fulfilled'&&ir.value?.url)?ir.value.url:'';
+      const actualVideo=!!importedVideo;
 
-      // 핵심: 원본이 영상 게시물이면 Threads가 렌더링한 poster/thumbnail 이미지를 게시 이미지로 취급하지 않는다.
-      // 영상 게시물은 반드시 가져온 원본 영상을 그대로 사용한다. 그래야 '영상 → 사진화'가 발생하지 않는다.
-      if(item.hasVideo){
-        if(!importedVideo)throw new Error('선택한 게시물의 원본 영상을 가져오지 못했습니다.');
+      if(actualVideo){
         activeMediaItems=[{type:'VIDEO',url:importedVideo}];
       }else{
         activeMediaItems=exactImages.slice(0,10).map(url=>({type:'IMAGE',url}));
       }
 
       const im=document.getElementById('imageUrlInput'),ex=document.getElementById('extraImageUrlInput'),v=document.getElementById('videoUrlInput');
-      if(item.hasVideo){
+      if(actualVideo){
         if(im)im.value='';
         if(ex)ex.value='';
         if(v)v.value=importedVideo;
@@ -97,8 +94,8 @@
       }
 
       showMediaPreview(activeMediaItems);
-      if(!activeMediaItems.length)throw new Error('선택한 게시물의 미디어를 가져오지 못했습니다.');
-      setMsg(`완료 · 글 ${generatedTexts.length}개 · ${item.hasVideo?'원본 영상':'원본 사진 '+activeMediaItems.length+'개'} 가져왔어요.`);form.scrollIntoView({behavior:'smooth',block:'start'});
+      if(!activeMediaItems.length)throw new Error('선택한 게시물의 원본 미디어를 가져오지 못했습니다.');
+      setMsg(`완료 · 글 ${generatedTexts.length}개 · ${actualVideo?'원본 영상':'원본 사진 '+activeMediaItems.length+'개'} 가져왔어요.`);form.scrollIntoView({behavior:'smooth',block:'start'});
     }catch(e){activeMaterial=false;activeMediaItems=[];setMsg(e.message||'글 준비에 실패했어요. 다시 시도해주세요.','error');}finally{btn.disabled=false;btn.textContent=old;}
   }
 
