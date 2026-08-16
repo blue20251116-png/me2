@@ -21,11 +21,22 @@ function isCoupangLink(link) {
   return /(^|\.)coupang\.com|link\.coupang\.com/i.test(String(link || ''));
 }
 
+function isNaverConnectLink(link) {
+  try {
+    const u = new URL(String(link || '').trim());
+    const h = u.hostname.toLowerCase();
+    return u.protocol === 'https:' && (h === 'naver.me' || h.endsWith('.naver.me') || h === 'naver.com' || h.endsWith('.naver.com'));
+  } catch {
+    return false;
+  }
+}
+
 function buildDisclosureText(account, link) {
   if (!link) return '';
   if (isCoupangLink(link)) return (account.coupang_disclosure_template || '{link}').replace('{link}', link);
-  // 네이버 쇼핑 커넥트 등 수동 제휴 링크는 쿠팡 고지문을 잘못 붙이지 않는다.
-  // 프로그램별 대가성 표시는 사용자가 본문/댓글에 직접 입력한다.
+  if (isNaverConnectLink(link)) {
+    return `네이버 쇼핑 커넥트 활동을 통해 수수료를 제공받을 수 있습니다.\n${String(link).trim()}`;
+  }
   return String(link).trim();
 }
 
@@ -79,7 +90,6 @@ async function buildCommentText(account, post) {
 }
 
 async function postAffiliateComment(account, post, parentMediaId) {
-  // 레시피 댓글은 제휴 링크가 없어도 재료/조리법 전달을 위해 게시한다.
   if (!post.auto_comment_enabled) return;
   if (!post.link && !post.recipe_comment_text) return;
   try {
@@ -147,7 +157,6 @@ function startInsightsJob() {
 
 function randomIntervalMinutes() { return 60 + Math.random() * 15; }
 const AUTOPILOT_TARGETS = ['전체', '20대 여자', '20대 남자', '30대 여자', '30대 남자', '40대 이상'];
-// 자동화는 레시피 또는 상품형만 사용한다. 일상/잡담형은 생성하지 않는다.
 function chooseContentMode() { return Math.random() < 0.70 ? 'recipe' : 'product'; }
 function saveAutopilotPost({ accountId, text, link, imageUrl, extraImageUrl, recipeCommentText = null }) {
   db.prepare(`INSERT INTO posts (text,link,image_url,extra_image_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text) VALUES (?,?,?,?,?,1,'pending',?,?)`).run(text, link || null, imageUrl || null, extraImageUrl || null, new Date().toISOString(), accountId, recipeCommentText);
@@ -156,7 +165,6 @@ function recordAutopilotLast(accountId, keyword, target) { db.prepare(`UPDATE ac
 function throwIfCoupangRateLimited(err) { if (coupangApi.isRateLimitError?.(err)) throw err; }
 
 async function runContentOnlyAutopilot(account, target) {
-  // 쿠팡 API 키가 없어도 일상글로 빠지지 않고 레시피만 만든다.
   const r = await generateContentOnlyRecipe(account.id, target);
   saveAutopilotPost({ accountId: account.id, text: r.text, link: null, imageUrl: r.imageUrl, extraImageUrl: r.extraImageUrl, recipeCommentText: r.recipeCommentText });
   recordAutopilotLast(account.id, r.keyword, target);
@@ -207,7 +215,6 @@ async function pickRegularProduct(account, target) {
 async function runAutopilotOnce(account) {
   const target = AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
 
-  // 쿠팡 API 키가 없는 계정은 상품 API를 호출하지 않고 레시피 자동화만 실행한다.
   if (!hasCoupangKeys(account)) {
     console.log(`[Autopilot][RECIPE ONLY] account=${account.id} 쿠팡 API 키 없음 → 레시피 모드`);
     await runContentOnlyAutopilot(account, target);
@@ -265,7 +272,6 @@ function startAutopilotJob() {
       const account = getAccount(summary.id);
       if (!account.autopilot_enabled) { nextRunAt.delete(account.id); continue; }
 
-      // 쿠팡 키가 없는 계정은 쿠팡 cooldown과 무관하게 레시피 자동화를 계속 실행한다.
       if (hasCoupangKeys(account)) {
         const cooldown = coupangApi.getApiCooldown?.(account.id);
         if (cooldown) { console.log(`[Coupang][AUTOPILOT SKIP] account=${account.id} cooldown_until=${cooldown.cooldown_until}`); continue; }
