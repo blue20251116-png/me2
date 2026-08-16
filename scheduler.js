@@ -30,8 +30,6 @@ const { rankKeywordsByTrend } = require('./naverTrends');
 const { findAutopilotYoutubeSource } = require('./youtubeSourcing');
 const { buildRecipeAutopilot } = require('./recipeAutomation');
 
-// 레시피형 댓글 원문을 예약 시점에 저장하기 위한 최소 마이그레이션.
-// 기존 DB/신규 DB 모두 안전하게 동작하도록 scheduler 로드 시 한 번 보장한다.
 try {
   db.exec(`ALTER TABLE posts ADD COLUMN recipe_comment_text TEXT`);
 } catch {
@@ -41,6 +39,30 @@ try {
 function buildDisclosureText(account, link) {
   const template = account.coupang_disclosure_template || '{link}';
   return template.replace('{link}', link);
+}
+
+function trimToLimit(text, limit) {
+  const normalized = String(text || '').trim();
+  if (normalized.length <= limit) return normalized;
+  if (limit <= 1) return normalized.slice(0, Math.max(0, limit));
+  return `${normalized.slice(0, limit - 1).trimEnd()}…`;
+}
+
+function combineCommentSafely(prefixText, disclosure, maxLength = 480) {
+  const safeDisclosure = String(disclosure || '').trim();
+  const separator = prefixText && safeDisclosure ? '\n\n' : '';
+
+  // 고지문+링크는 보존한다. 만약 고지문 자체가 지나치게 길다면 Threads 하드 한도 아래로만 자른다.
+  if (!prefixText) return trimToLimit(safeDisclosure, maxLength);
+  if (!safeDisclosure) return trimToLimit(prefixText, maxLength);
+
+  const availableForPrefix = maxLength - safeDisclosure.length - separator.length;
+  if (availableForPrefix <= 0) {
+    return trimToLimit(safeDisclosure, maxLength);
+  }
+
+  const safePrefix = trimToLimit(prefixText, availableForPrefix);
+  return `${safePrefix}${separator}${safeDisclosure}`;
 }
 
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -66,14 +88,13 @@ function mediaSourceFilesExist(media) {
 async function buildCommentText(account, post) {
   const disclosure = buildDisclosureText(account, post.link);
 
-  // 레시피형은 예약 생성 단계에서 상세 레시피 댓글을 완성해 저장한다.
   if (post.recipe_comment_text) {
-    return `${post.recipe_comment_text}\n\n${disclosure}`;
+    return combineCommentSafely(post.recipe_comment_text, disclosure, 480);
   }
 
   try {
     const lead = await generateAffiliateLead(account.id, { postText: post.text });
-    if (lead) return `${lead}\n\n${disclosure}`;
+    if (lead) return combineCommentSafely(lead, disclosure, 480);
   } catch (err) {
     console.error(
       `[댓글 연결문구 생성 실패, 고지문만 사용] account #${account.id} post #${post.id}:`,
@@ -81,7 +102,7 @@ async function buildCommentText(account, post) {
     );
   }
 
-  return disclosure;
+  return trimToLimit(disclosure, 480);
 }
 
 async function postAffiliateComment(account, post, parentMediaId) {
@@ -89,6 +110,7 @@ async function postAffiliateComment(account, post, parentMediaId) {
 
   try {
     const commentText = await buildCommentText(account, post);
+    console.log(`[댓글 길이] account #${account.id} post #${post.id}: ${commentText.length}자`);
     const commentMediaId = await publishReply(account.id, parentMediaId, commentText);
 
     db.prepare(
@@ -251,8 +273,6 @@ const AUTOPILOT_TARGETS = [
   '40대 이상',
 ];
 
-// 수익화 우선 비율:
-// recipe 60% / story 25% / product 15%
 function chooseContentMode() {
   const r = Math.random();
   if (r < 0.6) return 'recipe';
@@ -334,9 +354,7 @@ async function pickRegularProduct(account, target) {
       const bestPool = bestList.slice(0, Math.min(10, bestList.length));
       picked = bestPool[Math.floor(Math.random() * bestPool.length)];
       keyword = categoryName;
-      trendNote = `쿠팡 베스트카테고리 랭킹${
-        picked.rank ? ` (${picked.rank}위)` : ''
-      }`;
+      trendNote = `쿠팡 베스트카테고리 랭킹${picked.rank ? ` (${picked.rank}위)` : ''}`;
     } catch (bestErr) {
       console.error(
         `[베스트카테고리 조회도 실패, AI 키워드 검색으로 폴백] account #${account.id}:`,
@@ -371,16 +389,9 @@ async function pickRegularProduct(account, target) {
 }
 
 async function runAutopilotOnce(account) {
-  const target =
-    AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
-
+  const target = AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
   let contentMode = chooseContentMode();
 
-  // ==================================================
-  // 60% 레시피형
-  // 레시피 주제 → 관련 짧은 YouTube 영상 → 상세 레시피 생성
-  // → 비밀 소스 키워드 → 쿠팡 검색 → 상세 레시피 댓글 + 쿠파스 링크
-  // ==================================================
   if (contentMode === 'recipe') {
     try {
       const recipeResult = await buildRecipeAutopilot({ account, target });
@@ -401,7 +412,6 @@ async function runAutopilotOnce(account) {
       );
       return;
     } catch (err) {
-      // 레시피형 실패가 전체 자동화를 막지 않도록 일반 상품형으로 폴백.
       console.log(
         `[Recipe] 레시피형 생성 실패 — 일반 상품형으로 폴백: ${err.response?.data?.error?.message || err.message}`
       );
@@ -422,10 +432,6 @@ async function runAutopilotOnce(account) {
       price: picked.price,
       target,
     });
-
-    imageUrl = null;
-    extraImageUrl = null;
-    imageSourceLabel = '없음';
   } else {
     let youtubeSource = null;
 
@@ -451,20 +457,15 @@ async function runAutopilotOnce(account) {
     text = texts[Math.floor(Math.random() * texts.length)];
 
     imageUrl = picked.image || null;
-    extraImageUrl = null;
     imageSourceLabel = imageUrl ? '원본 상품컷 1장' : '없음';
 
     if (youtubeSource?.thumbnail) {
       imageUrl = youtubeSource.thumbnail;
       extraImageUrl = picked.image || null;
-      imageSourceLabel = extraImageUrl
-        ? 'YouTube 썸네일 + 상품컷'
-        : 'YouTube 썸네일 1장';
+      imageSourceLabel = extraImageUrl ? 'YouTube 썸네일 + 상품컷' : 'YouTube 썸네일 1장';
 
       console.log(
-        `[Media] YouTube 썸네일 사용 — "${youtubeSource.title}"${
-          extraImageUrl ? ' + 상품 이미지' : ''
-        }`
+        `[Media] YouTube 썸네일 사용 — "${youtubeSource.title}"${extraImageUrl ? ' + 상품 이미지' : ''}`
       );
     }
 
@@ -478,9 +479,7 @@ async function runAutopilotOnce(account) {
             );
             imageUrl = media.image_url;
             extraImageUrl = media.extra_image_url || null;
-            imageSourceLabel = extraImageUrl
-              ? '업로드 프레임 2장'
-              : '업로드 프레임 1장';
+            imageSourceLabel = extraImageUrl ? '업로드 프레임 2장' : '업로드 프레임 1장';
             markMediaSourceUsed(media.id);
           } else {
             console.log(
@@ -489,10 +488,7 @@ async function runAutopilotOnce(account) {
           }
         }
       } catch (err) {
-        console.log(
-          '[Media] 프레임 매칭 중 오류 — YouTube/상품 이미지 fallback 유지:',
-          err.message
-        );
+        console.log('[Media] 프레임 매칭 중 오류 — YouTube/상품 이미지 fallback 유지:', err.message);
       }
     }
   }
@@ -525,14 +521,9 @@ function startAutopilotJob() {
       .all(now);
 
     for (const account of dueAccounts) {
-      const nextAt = new Date(
-        Date.now() + randomIntervalMinutes() * 60000
-      ).toISOString();
+      const nextAt = new Date(Date.now() + randomIntervalMinutes() * 60000).toISOString();
 
-      db.prepare(`UPDATE accounts SET autopilot_next_at = ? WHERE id = ?`).run(
-        nextAt,
-        account.id
-      );
+      db.prepare(`UPDATE accounts SET autopilot_next_at = ? WHERE id = ?`).run(nextAt, account.id);
 
       try {
         await runAutopilotOnce(account);
