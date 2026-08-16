@@ -815,6 +815,7 @@ module.exports = {
   generateCaption,
   suggestKeywordCandidates,
   suggestYoutubeSearchKeywords,
+  resolveModelKeys,
   // server.js가 import는 하지만 실제로 호출하는 곳은 없는 죽은 import — 에러 방지용으로만 별칭 export
   suggestKeyword: suggestKeywordCandidates,
 };

@@ -46,8 +46,25 @@ CREATE TABLE IF NOT EXISTS accounts (
   autopilot_last_target TEXT,
   autopilot_youtube_source_enabled INTEGER DEFAULT 1,
   autopilot_youtube_order TEXT DEFAULT 'relevance',
+  autopilot_frame_media_enabled INTEGER DEFAULT 0,
 
   created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- 계정별로 "이 상품(키워드)에는 이 영상/프레임이 어울린다"를 최소한으로 기억해두는 테이블.
+-- 수동으로 영상 업로드 → 프레임 선택까지 마친 결과를 저장해두면, 완전자동화가 나중에 같은/비슷한
+-- 상품을 고를 때 다시 검색·추출 없이 재사용할 수 있다. 대규모 미디어 라이브러리가 아니라
+-- "상품 키워드 → 마지막으로 고른 이미지 조합" 최소 매핑만 저장한다.
+CREATE TABLE IF NOT EXISTS media_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL,
+  product_keyword TEXT NOT NULL,   -- 정규화된 상품명(소문자/공백 정리) — 완전자동화가 유사 매칭할 때 사용
+  frame_job_id TEXT,
+  image_url TEXT,
+  extra_image_url TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  last_used_at TEXT,
+  use_count INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS posts (
@@ -266,6 +283,8 @@ const migrations = [
   // 완전자동화(오토파일럿)가 관련 YouTube 콘텐츠를 소재로 참고할지 여부 — 기본 ON
   `ALTER TABLE accounts ADD COLUMN autopilot_youtube_source_enabled INTEGER DEFAULT 1`,
   `ALTER TABLE accounts ADD COLUMN autopilot_youtube_order TEXT DEFAULT 'relevance'`,
+  // 완전자동화가 수동으로 골라둔 영상 프레임(media_sources)을 게시 이미지로 재사용할지 여부 — 기본 OFF
+  `ALTER TABLE accounts ADD COLUMN autopilot_frame_media_enabled INTEGER DEFAULT 0`,
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (e) { /* 컬럼이 이미 있으면 무시 */ }
@@ -374,6 +393,7 @@ const ACCOUNT_UPDATABLE_FIELDS = [
   'autopilot_last_target',
   'autopilot_youtube_source_enabled',
   'autopilot_youtube_order',
+  'autopilot_frame_media_enabled',
   'naver_client_id',
   'naver_client_secret',
 ];
@@ -503,6 +523,78 @@ function getPublicBaseUrlForAccount(account) {
   return `http://localhost:${process.env.PORT || 3000}`;
 }
 
+// ---- media_sources: "이 상품 키워드에는 이 영상/프레임이 어울린다" 최소 매핑 ----
+// 대규모 미디어 라이브러리가 아니라, 완전자동화가 나중에 비슷한 상품을 고를 때 수동으로
+// 골라둔 이미지 조합을 재사용할 수 있게 하는 최소한의 연결 정보만 저장한다.
+function normalizeKeyword(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// 상품명 두 개가 얼마나 겹치는지 — 2글자 이상 단어 기준 겹치는 단어 수 (단순 근사치)
+function keywordOverlapScore(a, b) {
+  const wordsA = new Set(a.split(' ').filter((w) => w.length >= 2));
+  const wordsB = new Set(b.split(' ').filter((w) => w.length >= 2));
+  let overlap = 0;
+  for (const w of wordsA) if (wordsB.has(w)) overlap++;
+  return overlap;
+}
+
+// 같은 계정 + 같은 상품 키워드로 이미 저장된 게 있으면 갱신, 없으면 새로 저장 (계정당 키워드 1개만 유지)
+function saveMediaSource(accountId, { productName, frameJobId, imageUrl, extraImageUrl }) {
+  const keyword = normalizeKeyword(productName);
+  if (!keyword || !imageUrl) return null;
+  const existing = db
+    .prepare('SELECT id FROM media_sources WHERE account_id = ? AND product_keyword = ?')
+    .get(accountId, keyword);
+  if (existing) {
+    db.prepare(
+      `UPDATE media_sources SET frame_job_id = ?, image_url = ?, extra_image_url = ?, created_at = datetime('now')
+       WHERE id = ?`
+    ).run(frameJobId || null, imageUrl, extraImageUrl || null, existing.id);
+    return existing.id;
+  }
+  const info = db
+    .prepare(
+      `INSERT INTO media_sources (account_id, product_keyword, frame_job_id, image_url, extra_image_url)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(accountId, keyword, frameJobId || null, imageUrl, extraImageUrl || null);
+  return info.lastInsertRowid;
+}
+
+// productName과 가장 겹치는 media_sources 행을 찾는다. 겹치는 단어가 없으면 null.
+// 동점이면 최근에 덜 쓰인(last_used_at이 이르거나 없는) 쪽을 우선해서, 같은 이미지만 계속
+// 반복 사용되지 않도록 최소한의 다양성을 준다.
+function findMediaSourceForProduct(accountId, productName) {
+  const target = normalizeKeyword(productName);
+  if (!target) return null;
+  const rows = db.prepare('SELECT * FROM media_sources WHERE account_id = ?').all(accountId);
+  let best = null;
+  let bestScore = 0;
+  for (const row of rows) {
+    const score = keywordOverlapScore(target, row.product_keyword || '');
+    if (score <= 0) continue;
+    if (
+      score > bestScore ||
+      (score === bestScore && best && (row.last_used_at || '') < (best.last_used_at || ''))
+    ) {
+      best = row;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function markMediaSourceUsed(id) {
+  db.prepare(`UPDATE media_sources SET last_used_at = datetime('now'), use_count = use_count + 1 WHERE id = ?`).run(
+    id
+  );
+}
+
 module.exports = {
   db,
   getPublicBaseUrlForAccount,
@@ -532,4 +624,7 @@ module.exports = {
   updateSystemApiSettings,
   hasAdmin,
   createInitialAdmin,
+  saveMediaSource,
+  findMediaSourceForProduct,
+  markMediaSourceUsed,
 };

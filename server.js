@@ -32,6 +32,8 @@ const {
   updateSystemApiSettings,
   hasAdmin,
   createInitialAdmin,
+  saveMediaSource,
+  findMediaSourceForProduct,
 } = require('./db');
 const { hashPassword, verifyPassword, requireAuth, requireAdmin } = require('./auth');
 const threadsApi = require('./threadsApi');
@@ -43,6 +45,7 @@ const { rankKeywordsByTrend } = require('./naverTrends');
 const { startPublishJob, startInsightsJob, startAutopilotJob } = require('./scheduler');
 const youtubeApi = require('./youtubeApi');
 const videoFrames = require('./videoFrames');
+const frameVision = require('./frameVision');
 
 bootstrapAdmin();
 
@@ -325,6 +328,8 @@ app.get('/api/accounts/:accountId/autopilot', requireAccount, (req, res) => {
         ? true
         : !!a.autopilot_youtube_source_enabled,
     youtubeOrder: a.autopilot_youtube_order || 'relevance',
+    // 업로드 영상 프레임(media_sources) 자동 사용 옵션 — 기본 OFF
+    frameMediaEnabled: !!a.autopilot_frame_media_enabled,
   });
 });
 
@@ -336,6 +341,13 @@ app.post('/api/accounts/:accountId/autopilot/youtube-settings', requireAccount, 
     autopilot_youtube_source_enabled: enabled ? 1 : 0,
     autopilot_youtube_order: allowedOrders.includes(order) ? order : 'relevance',
   });
+  res.json({ ok: true });
+});
+
+// 완전자동화의 "업로드 영상 프레임 자동 사용" ON/OFF 저장
+app.post('/api/accounts/:accountId/autopilot/frame-media-settings', requireAccount, (req, res) => {
+  const { enabled } = req.body || {};
+  updateAccount(req.account.id, { autopilot_frame_media_enabled: enabled ? 1 : 0 });
   res.json({ ok: true });
 });
 
@@ -475,6 +487,18 @@ app.post('/api/video/frames', requireAccount, async (req, res) => {
       url: `${baseUrl}/uploads/frames/${req.account.id}/${jobId}/${f.filename}`,
     }));
 
+    // AI 추천(POST /api/video/frames/:jobId/recommend)이 나중에 클라이언트를 신뢰하지 않고도
+    // 이 작업의 프레임 목록을 다시 구성할 수 있도록, 파일명만 최소한으로 기록해둔다.
+    try {
+      fs.writeFileSync(
+        path.join(outputDir, 'manifest.json'),
+        JSON.stringify({ duration, frames: frames.map((f) => ({ time: f.time, filename: f.filename })) })
+      );
+    } catch (manifestErr) {
+      // manifest 기록 실패는 AI 추천 기능만 못 쓰게 될 뿐 — 프레임 추출 자체는 이미 성공했으므로 무시
+      console.log('[영상 프레임] manifest 기록 실패:', manifestErr.message);
+    }
+
     res.json({ success: true, jobId, duration, frames: framesOut });
   } catch (err) {
     if (err.message === '영상 처리 시간이 초과되었습니다.') {
@@ -497,6 +521,63 @@ app.delete('/api/video/frames/:jobId', requireAccount, (req, res) => {
   const dir = path.join(uploadsDir, 'frames', String(req.account.id), jobId);
   videoFrames.deleteFramesDir(dir);
   res.json({ ok: true });
+});
+
+// ---------- AI 베스트컷 추천 (이미 추출된 프레임을 OpenAI Vision으로 분석) ----------
+// 실패해도(Key 없음/네트워크 오류/응답 파싱 실패 등) 전체 기능이 죽지 않도록 422로 부드럽게 응답한다 —
+// 프론트는 이 경우 "AI 추천 없이 수동 선택 가능" 상태로 넘어가면 된다.
+const visionLocks = new Set(); // 계정당 동시 분석 1개 (연타 방지, imageGenerationLocks와 동일 패턴)
+
+app.post('/api/video/frames/:jobId/recommend', requireAccount, async (req, res) => {
+  const jobId = path.basename(req.params.jobId);
+  const jobDir = path.join(uploadsDir, 'frames', String(req.account.id), jobId);
+  const manifestPath = path.join(jobDir, 'manifest.json');
+
+  if (!fs.existsSync(manifestPath)) {
+    return res.status(404).json({ error: '프레임 작업을 찾을 수 없습니다. 먼저 프레임을 추출해주세요.' });
+  }
+  if (visionLocks.has(req.account.id)) {
+    return res.status(429).json({ error: '이미 분석 중입니다, 잠시 후 다시 시도해주세요' });
+  }
+
+  visionLocks.add(req.account.id);
+  try {
+    // 클라이언트가 보낸 프레임 목록을 신뢰하지 않고, 이 계정 자신의 작업 폴더에 실제로 존재하는
+    // manifest+파일만 근거로 분석 대상을 구성한다 (다른 회원 프레임을 분석시킬 방법이 없음).
+    let manifest;
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch {
+      return res.status(500).json({ error: '프레임 정보를 읽을 수 없습니다.' });
+    }
+
+    const baseUrl = getPublicBaseUrl(req, req.account);
+    const frames = (manifest.frames || [])
+      .filter((f) => fs.existsSync(path.join(jobDir, f.filename)))
+      .map((f) => ({
+        id: `frame_${f.filename.replace(/[^0-9]/g, '')}`,
+        url: `${baseUrl}/uploads/frames/${req.account.id}/${jobId}/${f.filename}`,
+      }));
+
+    if (!frames.length) {
+      return res.status(404).json({ error: '분석할 프레임이 없습니다.' });
+    }
+
+    const recommendations = await frameVision.analyzeFrames(req.account.id, frames);
+    const ranked = frameVision.rankRecommendations(recommendations);
+    logUsage(req.currentUser.id, 'image');
+
+    res.json({
+      success: true,
+      recommendations,
+      recommended: ranked.slice(0, 2).map((r) => r.frameId), // Threads 이미지 최대 2장에 맞춰 상위 2개만
+    });
+  } catch (err) {
+    console.log('[Vision] 분석 실패 — 수동 선택으로 폴백:', err.response?.data?.error?.message || err.message);
+    res.status(422).json({ error: 'AI 추천을 사용할 수 없습니다. 프레임을 직접 선택해주세요.' });
+  } finally {
+    visionLocks.delete(req.account.id);
+  }
 });
 
 // ---------- AI로 스레드 본문 자동 생성 ----------
@@ -657,7 +738,17 @@ app.post('/api/generate-lifestyle-image', requireAccount, async (req, res) => {
 
 // ---------- 글 등록 (예약) ----------
 app.post('/api/posts', requireAccount, (req, res) => {
-  const { text, link, image_url, extra_image_url, video_url, scheduled_at, auto_comment_enabled } = req.body;
+  const {
+    text,
+    link,
+    image_url,
+    extra_image_url,
+    video_url,
+    scheduled_at,
+    auto_comment_enabled,
+    product_name,
+    frame_job_id,
+  } = req.body;
   if (!text || !scheduled_at) {
     return res.status(400).json({ error: 'text와 scheduled_at은 필수입니다' });
   }
@@ -678,6 +769,22 @@ app.post('/api/posts', requireAccount, (req, res) => {
       auto_comment_enabled === false ? 0 : 1,
       link ? 'pending' : 'none'
     );
+
+  // 영상 프레임(+상품 이미지) 조합으로 게시한 경우, 나중에 완전자동화가 비슷한 상품을 고를 때
+  // 재사용할 수 있도록 이 조합을 최소한으로 기억해둔다 (선택 사항 — 프레임을 안 썼으면 아무 일도 안 함).
+  if (product_name && frame_job_id && image_url) {
+    try {
+      saveMediaSource(req.account.id, {
+        productName: product_name,
+        frameJobId: frame_job_id,
+        imageUrl: image_url,
+        extraImageUrl: extra_image_url || null,
+      });
+    } catch (err) {
+      console.log('[Media] media_source 저장 실패(게시 자체는 정상 진행):', err.message);
+    }
+  }
+
   res.json({ id: info.lastInsertRowid });
 });
 

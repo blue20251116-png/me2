@@ -1,9 +1,13 @@
 const cron = require('node-cron');
+const path = require('path');
+const fs = require('fs');
 const {
   db,
   listAllAccountsForSystem,
   getAccount,
   canPublish,
+  findMediaSourceForProduct,
+  markMediaSourceUsed,
 } = require('./db');
 
 const {
@@ -38,6 +42,29 @@ function buildDisclosureText(account, link) {
     account.coupang_disclosure_template || '{link}';
 
   return template.replace('{link}', link);
+}
+
+// media_sources에 저장된 image_url/extra_image_url이 실제로 아직 디스크에 남아있는지 확인.
+// URL은 "<baseUrl>/uploads/frames/<accountId>/<jobId>/frame_NN.jpg" 형태이므로, "/uploads/" 뒤
+// 경로만 떼어내 uploadsDir 기준으로 실존 여부를 확인한다. Railway처럼 재배포로 로컬 파일이
+// 사라질 수 있는 환경에서, DB 레코드만 남고 실제 파일은 없는 상태를 걸러내기 위함이다.
+const uploadsDir = path.join(__dirname, 'uploads');
+function localPathFromUploadUrl(url) {
+  if (!url) return null;
+  const marker = '/uploads/';
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  const relPath = url.slice(idx + marker.length);
+  return path.join(uploadsDir, relPath);
+}
+function mediaSourceFilesExist(media) {
+  const primary = localPathFromUploadUrl(media.image_url);
+  if (!primary || !fs.existsSync(primary)) return false;
+  if (media.extra_image_url) {
+    const extra = localPathFromUploadUrl(media.extra_image_url);
+    if (!extra || !fs.existsSync(extra)) return false;
+  }
+  return true;
 }
 
 
@@ -762,7 +789,7 @@ async function runAutopilotOnce(
 
   let imageUrl = null;
 
-  const extraImageUrl = null;
+  let extraImageUrl = null;
 
 
   // ==================================================
@@ -852,8 +879,35 @@ async function runAutopilotOnce(
         )
       ];
 
-    imageUrl =
-      picked.image || null;
+    // ================================================
+    // 완전자동화 옵션 "업로드 영상 프레임 자동 사용"이 켜져 있으면(기본 OFF), 수동으로 이미
+    // 골라둔 영상 프레임(media_sources)이 이 상품과 이름이 겹치는지 확인해서 있으면 재사용한다.
+    // 이 단계도 절대 예외를 던지지 않는다 — 실패/불일치/파일 소실 시 조용히 기존 상품사진으로
+    // 되돌아간다(완전자동화 전체를 막지 않음). Railway가 재배포되어 프레임 파일이 사라졌을 수도
+    // 있으므로, DB에 기록만 있고 실제 파일이 없으면 사용하지 않는다.
+    // ================================================
+
+    imageUrl = picked.image || null;
+    extraImageUrl = null;
+
+    if (account.autopilot_frame_media_enabled) {
+      try {
+        const media = findMediaSourceForProduct(account.id, picked.name);
+        if (media && media.image_url) {
+          const filesExist = mediaSourceFilesExist(media);
+          if (filesExist) {
+            console.log(`[Media] 연결된 영상 프레임 확인 — "${picked.name}" ↔ "${media.product_keyword}"`);
+            imageUrl = media.image_url;
+            extraImageUrl = media.extra_image_url || null;
+            markMediaSourceUsed(media.id);
+          } else {
+            console.log('[Media] 저장된 프레임 파일을 찾을 수 없음(재배포로 소실 추정) — 상품 이미지로 진행');
+          }
+        }
+      } catch (err) {
+        console.log('[Media] 프레임 매칭 중 오류, 상품 이미지로 진행:', err.message);
+      }
+    }
   }
 
 
