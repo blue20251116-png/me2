@@ -7,6 +7,50 @@ function getOpenAIKey(accountId) {
   return shared.openai_api_key || process.env.OPENAI_API_KEY || account?.openai_api_key || null;
 }
 
+function cleanThreadsReplyBlock(value) {
+  let s = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+
+  // Threads 상세화면에서 댓글 본문 앞에 붙는 UI/통계 문자열 제거
+  s = s.replace(/^스레드\s*조회\s*[\d.,천만억]+회\s*/i, '');
+  s = s.replace(/^(?:인기순|최신순|전체)\s*/i, '');
+
+  // 하나의 큰 DOM 블록에 원글 + 작성자 답글이 함께 잡힌 경우,
+  // 마지막 "작성자" 마커 이후의 실제 답글만 사용한다.
+  const authorMatches = [...s.matchAll(/\b작성자\b\s*/g)];
+  if (authorMatches.length) {
+    const last = authorMatches[authorMatches.length - 1];
+    s = s.slice(last.index + last[0].length).trim();
+  }
+
+  // 작성자 아이디/시간, 반응수 등 Threads UI 조각 제거
+  s = s.replace(/(?:^|\s)@?[A-Za-z0-9._]{2,64}\s+(?:방금|\d+\s*(?:분|시간|일))\s*[·•]?\s*/g, ' ');
+  s = s.replace(/\s(?:\d+\s+){2,5}(?=@?[A-Za-z0-9._]{2,64}\s+(?:방금|\d+\s*(?:분|시간|일)))/g, ' ');
+
+  // 제휴 링크와 광고 고지문은 사실 자료에서 제거한다.
+  s = s.replace(/https?:\/\/\S+/gi, ' ');
+  s = s.replace(/\b(?:link\.coupang\.com|naver\.me)\/\S*/gi, ' ');
+  s = s.replace(/(?:이\s*포스팅은|본\s*포스팅은)?\s*쿠팡\s*파트너스[^.!?]*(?:제공받습니다|받습니다|발생합니다)?[.!?]?/gi, ' ');
+  s = s.replace(/네이버\s*쇼핑\s*커넥트[^.!?]*(?:제공받을\s*수\s*있습니다|받습니다)?[.!?]?/gi, ' ');
+
+  // 남아 있는 UI 라벨 정리
+  s = s.replace(/\b(?:좋아요|답글|리포스트|공유)\b/g, ' ');
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+function sanitizeAuthorReplies(authorReplies) {
+  const raw = String(authorReplies || '').trim();
+  if (!raw) return '';
+  const blocks = raw.split(/\n\n+/).map(cleanThreadsReplyBlock).filter(Boolean);
+  const unique = [];
+  for (const block of blocks) {
+    if (block.length < 6) continue;
+    if (!unique.includes(block)) unique.push(block);
+  }
+  return unique.slice(0, 8).join('\n\n');
+}
+
 function detectRecipe(sourceText, authorReplies, requestedMode) {
   if (requestedMode === 'recipe') return true;
   const t = `${String(sourceText || '')}\n${String(authorReplies || '')}`.toLowerCase();
@@ -18,7 +62,9 @@ function detectRecipe(sourceText, authorReplies, requestedMode) {
 async function generateFromThreadsMaterial(accountId, { keyword, sourceText, authorReplies = '', mode = 'product' }) {
   const apiKey = getOpenAIKey(accountId);
   if (!apiKey) throw new Error('관리자 OpenAI API 키가 설정되어 있지 않습니다.');
-  const isRecipe = detectRecipe(sourceText, authorReplies, mode);
+
+  const cleanedReplies = sanitizeAuthorReplies(authorReplies);
+  const isRecipe = detectRecipe(sourceText, cleanedReplies, mode);
 
   const styleRules = `
 한국 Threads에서 실제 사람이 바로 쓴 것처럼 작성한다.
@@ -77,6 +123,7 @@ async function generateFromThreadsMaterial(accountId, { keyword, sourceText, aut
 - 원문 정보가 부족하면 존재하지 않는 섹션을 억지로 채우지 않는다.
 - '재료는 따로 없음', '그냥 먹으면 됨', '효과 짱임' 같은 근거 없는 문장은 금지한다.
 - 음슴체는 금지한다.
+- Threads 화면의 조회수, 작성자 아이디, 작성시간, 반응수 같은 UI 문자열을 댓글에 절대 출력하지 않는다.
 
 [댓글 기본 출력 구조]
 원문에 해당 정보가 있는 항목만 사용한다.
@@ -136,6 +183,7 @@ async function generateFromThreadsMaterial(accountId, { keyword, sourceText, aut
 - 추가 정보가 거의 없더라도 원문에서 확인되는 핵심 포인트를 짧게 정리해서 comment를 반드시 만든다.
 - '재료 · 만드는 법 · 추가 설명이 여기에 들어갑니다' 같은 placeholder 문구는 절대 출력하지 않는다.
 - 음슴체는 사용하지 않는다.
+- Threads 화면의 조회수, 작성자 아이디, 작성시간, 반응수 같은 UI 문자열을 댓글에 절대 출력하지 않는다.
 
 반드시 JSON만 출력한다. 형식은 {"items":[{"text":"본문","comment":"추가 설명 댓글"}, ...]} 이고 정확히 5개를 만든다.`;
 
@@ -145,9 +193,10 @@ async function generateFromThreadsMaterial(accountId, { keyword, sourceText, aut
 ${String(sourceText || '').trim().slice(0, 5000)}
 
 [같은 게시물 작성자가 직접 남긴 추가 설명/댓글 - 사실 자료 B]
-${String(authorReplies || '').trim().slice(0, 5000) || '(추가 설명 없음)'}
+${cleanedReplies.slice(0, 5000) || '(추가 설명 없음)'}
 
 A와 B에 실제로 존재하는 정보만 사실로 사용할 것.
+B에는 Threads 화면의 UI/조회수/작성자명/작성시간/반응수 같은 문자열이 제거된 실제 추가 설명만 들어 있다.
 레시피로 판단되면 A와 B 전체를 읽고 재료, 계량, 소스, 조리 순서, 핵심 포인트를 comment에 최대한 빠짐없이 반영할 것.
 일반 상품/생활 소재여도 comment를 비우지 말고 B의 추가 설명을 우선 반영해 유용한 후속 댓글을 작성할 것.
 원문에 없는 재료, 계량, 효능, 체중 변화, 경험은 절대 추가하지 말 것.
@@ -170,9 +219,9 @@ comment도 한 덩어리로 붙이지 말고 읽기 쉽게 줄을 나눌 것.`;
     : [];
   if (!items.length) throw new Error('AI 글 생성 결과를 읽지 못했습니다.');
 
-  // 모든 소재는 후속 댓글을 가져야 한다. 모델이 비운 경우에는 원문/작성자 댓글의
-  // 확인 가능한 내용만 사용해 짧은 fallback 댓글을 만든다.
-  const fallbackSource = String(authorReplies || sourceText || '').replace(/\s+/g, ' ').trim();
+  // 모든 소재는 후속 댓글을 가져야 한다. 모델이 비운 경우에도 UI 찌꺼기가 아닌
+  // 정제된 작성자 설명 또는 원문만 사용한다.
+  const fallbackSource = String(cleanedReplies || sourceText || '').replace(/\s+/g, ' ').trim();
   for (const item of items) {
     if (!item.comment) {
       item.comment = fallbackSource
