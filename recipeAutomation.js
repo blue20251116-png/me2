@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { getAccount, getSystemApiSettings } = require('./db');
+const { getAccount, getSystemApiSettings, getPexelsApiKey } = require('./db');
 const youtubeApi = require('./youtubeApi');
 const coupangApi = require('./coupangApi');
 const { searchFoodPhotos } = require('./pexelsApi');
@@ -89,9 +89,9 @@ async function findRecipeVideo(accountId, topic, order = 'relevance') {
 }
 
 async function findRecipePhotos(recipe, topic) {
-  const apiKey = process.env.PEXELS_API_KEY;
+  const apiKey = getPexelsApiKey() || process.env.PEXELS_API_KEY;
   if (!apiKey) {
-    console.log('[Recipe] Pexels API Key 없음 — 레시피 이미지는 생략');
+    console.log('[Recipe] Pexels API Key 없음 — 관리자 페이지에서 키를 저장해주세요');
     return [];
   }
 
@@ -303,7 +303,6 @@ async function buildRecipeAutopilot({ account, target }) {
   const topic = pickRecipeTopic();
   console.log(`[Recipe] 레시피형 시작 — 주제="${topic}"`);
 
-  // YouTube는 레시피 내용 참고용으로만 사용하고 게시 이미지는 사용하지 않는다.
   const video = await findRecipeVideo(
     account.id,
     topic,
@@ -311,13 +310,8 @@ async function buildRecipeAutopilot({ account, target }) {
   );
 
   const recipe = await generateRecipe(account.id, topic, video);
-
-  // 쿠팡 상품은 댓글의 제휴 링크를 만들기 위해서만 선택한다.
-  // 상품컷은 레시피 게시 이미지에 절대 넣지 않는다.
   const product = await chooseCoupangProduct(account.id, recipe.coupangSearchKeyword);
 
-  // 현재 posts 구조가 image_url + extra_image_url 2장을 안정적으로 지원하므로
-  // 서로 다른 Pexels 완성 요리사진을 최대 2장 사용한다.
   const foodPhotos = await findRecipePhotos(recipe, topic);
   const imageUrl = foodPhotos[0]?.imageUrl || null;
   const extraImageUrl = foodPhotos[1]?.imageUrl || null;
