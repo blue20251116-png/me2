@@ -1,191 +1,212 @@
 const axios = require('axios');
 const crypto = require('crypto');
-const { getAccount } = require('./db');
+const { getAccount, db } = require('./db');
 
 const DOMAIN = 'https://api-gateway.coupang.com';
 const PARTNERS_BASE = '/v2/providers/affiliate_open_api/apis/openapi/v1';
+const SEARCH_CACHE_MS = 24 * 60 * 60 * 1000;
+const EMPTY_CACHE_MS = 60 * 60 * 1000;
+const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+// API 과호출 방지용 영구 캐시/쿨다운. Railway Volume의 SQLite에 같이 보존된다.
+db.exec(`
+CREATE TABLE IF NOT EXISTS coupang_api_cache (
+  account_id INTEGER NOT NULL,
+  cache_key TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY(account_id, cache_key)
+);
+CREATE TABLE IF NOT EXISTS coupang_api_state (
+  account_id INTEGER PRIMARY KEY,
+  cooldown_until TEXT,
+  cooldown_reason TEXT,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+`);
 
 function buildAuthHeader(account, method, pathWithQuery) {
   if (!account?.coupang_access_key || !account?.coupang_secret_key) {
     throw new Error('이 계정에 쿠팡파트너스 Access Key/Secret Key가 설정되지 않았습니다');
   }
-
   const [path, query = ''] = pathWithQuery.split('?');
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
-  const signedDate =
-    String(now.getUTCFullYear()).slice(2) +
-    pad(now.getUTCMonth() + 1) +
-    pad(now.getUTCDate()) +
-    'T' +
-    pad(now.getUTCHours()) +
-    pad(now.getUTCMinutes()) +
-    pad(now.getUTCSeconds()) +
-    'Z';
-
+  const signedDate = String(now.getUTCFullYear()).slice(2) + pad(now.getUTCMonth() + 1) + pad(now.getUTCDate()) + 'T' + pad(now.getUTCHours()) + pad(now.getUTCMinutes()) + pad(now.getUTCSeconds()) + 'Z';
   const message = signedDate + method + path + query;
-  const signature = crypto
-    .createHmac('sha256', account.coupang_secret_key)
-    .update(message)
-    .digest('hex');
-
+  const signature = crypto.createHmac('sha256', account.coupang_secret_key).update(message).digest('hex');
   return `CEA algorithm=HmacSHA256, access-key=${account.coupang_access_key}, signed-date=${signedDate}, signature=${signature}`;
 }
 
-function assertPartnersSuccess(data, label) {
+function makeRateLimitError(message, cooldownUntil) {
+  const err = new Error(message);
+  err.code = 'COUPANG_RATE_LIMIT';
+  err.isCoupangRateLimit = true;
+  err.cooldownUntil = cooldownUntil || null;
+  return err;
+}
+
+function parseRetryTime(message) {
+  const text = String(message || '');
+  // 쿠팡 응답 예: 2026-08-17T20:39:29.417388350 이후에 다시 시도
+  const m = text.match(/(20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)/);
+  if (!m) return null;
+  const normalized = m[1].replace(/\.(\d{3})\d+$/, '.$1');
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+function setCooldown(accountId, reason, explicitUntil) {
+  const until = explicitUntil || new Date(Date.now() + DEFAULT_RATE_LIMIT_COOLDOWN_MS).toISOString();
+  db.prepare(`INSERT INTO coupang_api_state(account_id,cooldown_until,cooldown_reason,updated_at)
+    VALUES(?,?,?,datetime('now'))
+    ON CONFLICT(account_id) DO UPDATE SET cooldown_until=excluded.cooldown_until,cooldown_reason=excluded.cooldown_reason,updated_at=datetime('now')`)
+    .run(accountId, until, String(reason || '쿠팡 API 호출 제한'));
+  console.error(`[Coupang][COOLDOWN] account=${accountId} until=${until} reason="${String(reason || '').slice(0,220)}"`);
+  return until;
+}
+
+function getCooldown(accountId) {
+  const row = db.prepare('SELECT cooldown_until,cooldown_reason FROM coupang_api_state WHERE account_id=?').get(accountId);
+  if (!row?.cooldown_until) return null;
+  if (Date.parse(row.cooldown_until) <= Date.now()) {
+    db.prepare('DELETE FROM coupang_api_state WHERE account_id=?').run(accountId);
+    return null;
+  }
+  return row;
+}
+
+function assertNotCoolingDown(accountId) {
+  const row = getCooldown(accountId);
+  if (!row) return;
+  throw makeRateLimitError(`쿠팡 API 보호 대기 중입니다. ${row.cooldown_until} 이후 다시 시도합니다. (${row.cooldown_reason || '호출 제한'})`, row.cooldown_until);
+}
+
+function cacheGet(accountId, cacheKey) {
+  const row = db.prepare('SELECT payload,expires_at FROM coupang_api_cache WHERE account_id=? AND cache_key=?').get(accountId, cacheKey);
+  if (!row) return null;
+  if (Date.parse(row.expires_at) <= Date.now()) {
+    db.prepare('DELETE FROM coupang_api_cache WHERE account_id=? AND cache_key=?').run(accountId, cacheKey);
+    return null;
+  }
+  try { return JSON.parse(row.payload); } catch { return null; }
+}
+
+function cacheSet(accountId, cacheKey, payload, ttlMs) {
+  const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+  db.prepare(`INSERT INTO coupang_api_cache(account_id,cache_key,payload,expires_at,created_at)
+    VALUES(?,?,?,?,datetime('now'))
+    ON CONFLICT(account_id,cache_key) DO UPDATE SET payload=excluded.payload,expires_at=excluded.expires_at,created_at=datetime('now')`)
+    .run(accountId, cacheKey, JSON.stringify(payload || []), expiresAt);
+}
+
+function isRateLimitPayload(data, httpStatus) {
+  const rCode = String(data?.rCode ?? '');
+  const msg = String(data?.rMessage || data?.message || '');
+  return httpStatus === 429 || (httpStatus === 403 && /사용 횟수|rate|limit|초과/i.test(msg)) || (rCode === '403' && /사용 횟수|rate|limit|초과/i.test(msg));
+}
+
+function assertPartnersSuccess(accountId, data, label, httpStatus) {
   const rCode = data?.rCode;
+  if (isRateLimitPayload(data, httpStatus)) {
+    const msg = `${label} 실패: rCode=${rCode ?? httpStatus} ${data?.rMessage || data?.message || 'API 호출 제한'}`.trim();
+    const until = setCooldown(accountId, msg, parseRetryTime(msg));
+    throw makeRateLimitError(msg, until);
+  }
   if (rCode != null && String(rCode) !== '0') {
     throw new Error(`${label} 실패: rCode=${rCode} ${data?.rMessage || ''}`.trim());
   }
 }
 
 function mapProduct(p) {
-  return {
-    productId: p.productId,
-    name: p.productName,
-    image: p.productImage,
-    price: p.productPrice,
-    url: p.productUrl,
-    isRocket: !!p.isRocket,
-    isFreeShipping: !!p.isFreeShipping,
-    rank: p.rank || null,
-    categoryName: p.categoryName || null,
-  };
+  return { productId:p.productId, name:p.productName, image:p.productImage, price:p.productPrice, url:p.productUrl, isRocket:!!p.isRocket, isFreeShipping:!!p.isFreeShipping, rank:p.rank||null, categoryName:p.categoryName||null };
 }
 
 async function signedGet(accountId, pathWithQuery, label) {
+  assertNotCoolingDown(accountId);
   const account = getAccount(accountId);
   if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
-
-  const res = await axios.get(`${DOMAIN}${pathWithQuery}`, {
-    headers: {
-      Authorization: buildAuthHeader(account, 'GET', pathWithQuery),
-      'Content-Type': 'application/json',
-    },
-    timeout: 10000,
-  });
-
-  assertPartnersSuccess(res.data, label);
-  return res.data;
+  try {
+    const res = await axios.get(`${DOMAIN}${pathWithQuery}`, { headers:{ Authorization:buildAuthHeader(account,'GET',pathWithQuery), 'Content-Type':'application/json' }, timeout:10000 });
+    assertPartnersSuccess(accountId, res.data, label, res.status);
+    return res.data;
+  } catch (err) {
+    if (err.isCoupangRateLimit) throw err;
+    const status = err.response?.status;
+    const data = err.response?.data;
+    if (isRateLimitPayload(data, status)) {
+      const msg = `${label} 실패: rCode=${data?.rCode ?? status} ${data?.rMessage || data?.message || err.message}`.trim();
+      const until = setCooldown(accountId, msg, parseRetryTime(msg));
+      throw makeRateLimitError(msg, until);
+    }
+    throw err;
+  }
 }
 
 async function searchProducts(accountId, keyword, limit = 10) {
   const account = getAccount(accountId);
   if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
-
   const cleanKeyword = String(keyword || '').trim();
   if (!cleanKeyword) throw new Error('쿠팡 상품 검색어가 비어 있습니다');
-
-  // 쿠팡파트너스 상품검색 API의 limit 최대값은 10이다.
   const safeLimit = Math.max(1, Math.min(10, Number(limit) || 10));
-  const params = new URLSearchParams({
-    keyword: cleanKeyword,
-    limit: String(safeLimit),
-    srpLinkOnly: 'false',
-  });
-  if (account.coupang_sub_id) params.set('subId', account.coupang_sub_id);
-
-  const path = `${PARTNERS_BASE}/products/search`;
-  const pathWithQuery = `${path}?${params.toString()}`;
-  const data = await signedGet(accountId, pathWithQuery, '쿠팡 상품검색');
-
-  const list = Array.isArray(data?.data?.productData) ? data.data.productData : [];
-  if (!list.length) {
-    console.log(`[Coupang][SEARCH] 결과 0개 keyword="${cleanKeyword}" rCode=${data?.rCode ?? '-'} message="${data?.rMessage || ''}"`);
+  const normalizedKey = cleanKeyword.toLowerCase().replace(/\s+/g,' ').trim();
+  const cacheKey = `search:${normalizedKey}:${safeLimit}`;
+  const cached = cacheGet(accountId, cacheKey);
+  if (cached) {
+    console.log(`[Coupang][CACHE HIT] account=${accountId} keyword="${cleanKeyword}" items=${cached.length}`);
+    return cached;
   }
-  return list.map(mapProduct);
+  assertNotCoolingDown(accountId);
+  const params = new URLSearchParams({ keyword:cleanKeyword, limit:String(safeLimit), srpLinkOnly:'false' });
+  if (account.coupang_sub_id) params.set('subId', account.coupang_sub_id);
+  const path = `${PARTNERS_BASE}/products/search`;
+  const data = await signedGet(accountId, `${path}?${params.toString()}`, '쿠팡 상품검색');
+  const list = Array.isArray(data?.data?.productData) ? data.data.productData.map(mapProduct) : [];
+  cacheSet(accountId, cacheKey, list, list.length ? SEARCH_CACHE_MS : EMPTY_CACHE_MS);
+  if (!list.length) console.log(`[Coupang][SEARCH] 결과 0개 keyword="${cleanKeyword}" rCode=${data?.rCode ?? '-'} message="${data?.rMessage || ''}"`);
+  return list;
 }
 
 async function createDeeplink(accountId, urls) {
+  assertNotCoolingDown(accountId);
   const account = getAccount(accountId);
   if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
-
   const path = `${PARTNERS_BASE}/deeplink`;
-  const body = {
-    coupangUrls: Array.isArray(urls) ? urls : [urls],
-    ...(account.coupang_sub_id ? { subId: account.coupang_sub_id } : {}),
-  };
-
-  const res = await axios.post(`${DOMAIN}${path}`, body, {
-    headers: {
-      Authorization: buildAuthHeader(account, 'POST', path),
-      'Content-Type': 'application/json',
-    },
-    timeout: 10000,
-  });
-
-  assertPartnersSuccess(res.data, '쿠팡 딥링크');
-  return (res.data?.data || []).map((d) => ({
-    originalUrl: d.originalUrl,
-    shortenUrl: d.shortenUrl,
-    landingUrl: d.landingUrl,
-  }));
+  const body = { coupangUrls:Array.isArray(urls)?urls:[urls], ...(account.coupang_sub_id?{subId:account.coupang_sub_id}:{}) };
+  try {
+    const res = await axios.post(`${DOMAIN}${path}`, body, { headers:{ Authorization:buildAuthHeader(account,'POST',path), 'Content-Type':'application/json' }, timeout:10000 });
+    assertPartnersSuccess(accountId, res.data, '쿠팡 딥링크', res.status);
+    return (res.data?.data || []).map(d=>({originalUrl:d.originalUrl,shortenUrl:d.shortenUrl,landingUrl:d.landingUrl}));
+  } catch (err) {
+    if (err.isCoupangRateLimit) throw err;
+    const data=err.response?.data,status=err.response?.status;
+    if (isRateLimitPayload(data,status)) { const msg=`쿠팡 딥링크 실패: ${data?.rMessage||data?.message||err.message}`; const until=setCooldown(accountId,msg,parseRetryTime(msg)); throw makeRateLimitError(msg,until); }
+    throw err;
+  }
 }
 
 async function getGoldboxProducts(accountId, limit = 20) {
-  const account = getAccount(accountId);
-  if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
-
-  // 골드박스 API는 별도 limit 파라미터 없이 호출하는 것이 문서 기준이다.
-  const params = new URLSearchParams();
-  if (account.coupang_sub_id) params.set('subId', account.coupang_sub_id);
-
-  const path = `${PARTNERS_BASE}/products/goldbox`;
-  const query = params.toString();
-  const pathWithQuery = query ? `${path}?${query}` : path;
-  const data = await signedGet(accountId, pathWithQuery, '쿠팡 골드박스');
-  const list = Array.isArray(data?.data) ? data.data : [];
-
-  if (!list.length) {
-    console.log(`[Coupang][GOLDBOX] 결과 0개 account=${accountId} rCode=${data?.rCode ?? '-'} message="${data?.rMessage || ''}"`);
-  }
-
-  return list.slice(0, Math.max(1, Number(limit) || 20)).map((p) => ({
-    ...mapProduct(p),
-    discountRate: p.discountRate || null,
-  }));
+  const cacheKey='goldbox';
+  const cached=cacheGet(accountId,cacheKey); if(cached){console.log(`[Coupang][CACHE HIT] account=${accountId} goldbox items=${cached.length}`);return cached.slice(0,limit)}
+  assertNotCoolingDown(accountId);
+  const account=getAccount(accountId); if(!account)throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
+  const params=new URLSearchParams(); if(account.coupang_sub_id)params.set('subId',account.coupang_sub_id);
+  const path=`${PARTNERS_BASE}/products/goldbox`; const q=params.toString(); const data=await signedGet(accountId,q?`${path}?${q}`:path,'쿠팡 골드박스');
+  const list=Array.isArray(data?.data)?data.data.map(p=>({...mapProduct(p),discountRate:p.discountRate||null})):[];
+  cacheSet(accountId,cacheKey,list,list.length?SEARCH_CACHE_MS:EMPTY_CACHE_MS); return list.slice(0,Math.max(1,Number(limit)||20));
 }
 
-const BEST_CATEGORY_IDS = {
-  '여성패션': 1001,
-  '남성패션': 1002,
-  '뷰티': 1010,
-  '출산/유아동': 1011,
-  '식품': 1012,
-  '주방용품': 1013,
-  '생활용품': 1014,
-  '홈인테리어': 1015,
-  '가전디지털': 1016,
-  '스포츠/레저': 1017,
-  '자동차용품': 1018,
-  '헬스/건강식품': 1024,
-  '반려동물용품': 1029,
-};
-
-async function getBestCategoryProducts(accountId, categoryId, limit = 20) {
-  const account = getAccount(accountId);
-  if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
-
-  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
-  const params = new URLSearchParams({ limit: String(safeLimit) });
-  if (account.coupang_sub_id) params.set('subId', account.coupang_sub_id);
-
-  const path = `${PARTNERS_BASE}/products/bestcategories/${categoryId}`;
-  const pathWithQuery = `${path}?${params.toString()}`;
-  const data = await signedGet(accountId, pathWithQuery, '쿠팡 베스트카테고리');
-  const list = Array.isArray(data?.data) ? data.data : [];
-
-  if (!list.length) {
-    console.log(`[Coupang][BEST] 결과 0개 account=${accountId} category=${categoryId} rCode=${data?.rCode ?? '-'} message="${data?.rMessage || ''}"`);
-  }
-
-  return list.map(mapProduct);
+const BEST_CATEGORY_IDS={ '여성패션':1001,'남성패션':1002,'뷰티':1010,'출산/유아동':1011,'식품':1012,'주방용품':1013,'생활용품':1014,'홈인테리어':1015,'가전디지털':1016,'스포츠/레저':1017,'자동차용품':1018,'헬스/건강식품':1024,'반려동물용품':1029 };
+async function getBestCategoryProducts(accountId,categoryId,limit=20){
+  const safeLimit=Math.max(1,Math.min(100,Number(limit)||20)); const cacheKey=`best:${categoryId}:${safeLimit}`; const cached=cacheGet(accountId,cacheKey); if(cached){console.log(`[Coupang][CACHE HIT] account=${accountId} best=${categoryId} items=${cached.length}`);return cached}
+  assertNotCoolingDown(accountId); const account=getAccount(accountId); if(!account)throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
+  const params=new URLSearchParams({limit:String(safeLimit)}); if(account.coupang_sub_id)params.set('subId',account.coupang_sub_id);
+  const path=`${PARTNERS_BASE}/products/bestcategories/${categoryId}`; const data=await signedGet(accountId,`${path}?${params.toString()}`,'쿠팡 베스트카테고리');
+  const list=Array.isArray(data?.data)?data.data.map(mapProduct):[]; cacheSet(accountId,cacheKey,list,list.length?SEARCH_CACHE_MS:EMPTY_CACHE_MS); return list;
 }
 
-module.exports = {
-  searchProducts,
-  createDeeplink,
-  getBestCategoryProducts,
-  getGoldboxProducts,
-  BEST_CATEGORY_IDS,
-};
+function isRateLimitError(err){return !!(err?.isCoupangRateLimit||err?.code==='COUPANG_RATE_LIMIT')}
+function getApiCooldown(accountId){return getCooldown(accountId)}
+
+module.exports={ searchProducts,createDeeplink,getBestCategoryProducts,getGoldboxProducts,BEST_CATEGORY_IDS,isRateLimitError,getApiCooldown };
