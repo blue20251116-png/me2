@@ -1,144 +1,32 @@
 const path = require('path');
 const fs = require('fs');
-
 const expressPath = require.resolve('express');
 const realExpress = require('express');
 let appInstance = null;
 function wrappedExpress(...args) { appInstance = realExpress(...args); return appInstance; }
-Object.assign(wrappedExpress, realExpress);
-require.cache[expressPath].exports = wrappedExpress;
+Object.assign(wrappedExpress, realExpress); require.cache[expressPath].exports = wrappedExpress;
 require('./server');
 if (!appInstance) throw new Error('Express app 초기화에 실패했습니다.');
-
 const { db, getAccount, listAccounts, logUsage } = require('./db');
 const videoEditor = require('./videoEditor');
 const threadsMediaImporter = require('./threadsMediaImporter');
 const { generateFromThreadsMaterial } = require('./threadsMaterialWriter');
-const { listBenchmarkAccounts, addBenchmarkAccount, deleteBenchmarkAccount, markUsedPost, collectBenchmarkMaterials } = require('./benchmarkAccounts');
+const { listBenchmarkAccounts, addBenchmarkAccount, addBenchmarkAccountsBulk, deleteBenchmarkAccount, markUsedPost, collectBenchmarkMaterials } = require('./benchmarkAccounts');
 try { db.exec(`ALTER TABLE posts ADD COLUMN recipe_comment_text TEXT`); } catch {}
-
 const uploadsDir = path.join(__dirname, 'uploads');
-const videoEditLocks = new Set();
-const threadsImportLocks = new Set();
-const threadsSearchLocks = new Set();
-
-function requireOwnedAccount(req, res, next) {
-  const accountId = Number(req.query.accountId || req.body?.accountId || req.params?.accountId);
-  if (!accountId) return res.status(400).json({ error: 'accountId가 필요합니다' });
-  const account = getAccount(accountId);
-  if (!account) return res.status(404).json({ error: '존재하지 않는 계정입니다' });
-  if (!req.currentUser || account.user_id !== req.currentUser.id) return res.status(403).json({ error: '본인 소유의 계정만 이용할 수 있습니다' });
-  req.account = account;
-  next();
-}
-function publicBaseUrl(req, account) {
-  if (account?.threads_redirect_uri) { try { const u = new URL(account.threads_redirect_uri); return `${u.protocol}//${u.host}`; } catch {} }
-  return `${req.protocol}://${req.get('host')}`;
-}
-function ownVideoPath(accountId, filename) { return path.join(uploadsDir, 'videos', String(accountId), path.basename(String(filename || ''))); }
-
-appInstance.get('/api/threads/accounts', (req, res) => {
-  if (!req.currentUser) return res.status(401).json({ error: '로그인이 필요합니다' });
-  res.json({ accounts: listAccounts(req.currentUser.id) });
-});
-
-// 관리자: 벤치마킹 Threads 아이디만 추가/삭제한다.
-appInstance.get('/api/admin/benchmark-accounts', (req, res) => {
-  if (req.currentUser?.role !== 'admin') return res.status(403).json({ error: '관리자만 이용할 수 있습니다.' });
-  res.json({ accounts: listBenchmarkAccounts() });
-});
-appInstance.post('/api/admin/benchmark-accounts', (req, res) => {
-  if (req.currentUser?.role !== 'admin') return res.status(403).json({ error: '관리자만 이용할 수 있습니다.' });
-  try { res.json({ success: true, account: addBenchmarkAccount(req.body?.username) }); }
-  catch(err){ res.status(400).json({ error: err.message }); }
-});
-appInstance.delete('/api/admin/benchmark-accounts/:id', (req, res) => {
-  if (req.currentUser?.role !== 'admin') return res.status(403).json({ error: '관리자만 이용할 수 있습니다.' });
-  deleteBenchmarkAccount(req.params.id); res.json({ success: true });
-});
-
-// 사용자: 키워드 검색 대신 관리자가 등록한 계정들의 최근 공개 게시물을 수집한다.
-appInstance.get('/api/threads/material-search', requireOwnedAccount, async (req, res) => {
-  if (threadsSearchLocks.has(req.account.id)) return res.status(429).json({ error: '이미 Threads 소재를 찾는 중입니다. 잠시 후 다시 시도해주세요.' });
-  threadsSearchLocks.add(req.account.id);
-  try {
-    const items = await collectBenchmarkMaterials({ limit: Number(req.query.limit) || 12 });
-    res.json({ success: true, source: 'benchmark_accounts', items });
-  } catch (err) {
-    console.error(`[Threads benchmark search] account #${req.account.id}:`, err.message);
-    res.status(422).json({ error: err.message || '벤치마킹 계정에서 소재를 찾지 못했습니다.' });
-  } finally { threadsSearchLocks.delete(req.account.id); }
-});
-
-appInstance.post('/api/threads/material-write', requireOwnedAccount, async (req, res) => {
-  const keyword = String(req.body?.keyword || '').trim();
-  const sourceText = String(req.body?.sourceText || '').trim();
-  const mode = req.body?.mode === 'recipe' ? 'recipe' : 'product';
-  if (!keyword && !sourceText) return res.status(400).json({ error: '소재 내용이 필요합니다.' });
-  try {
-    const generated = await generateFromThreadsMaterial(req.account.id, { keyword, sourceText, mode });
-    if (req.currentUser?.id) logUsage(req.currentUser.id, 'text');
-    res.json({ success: true, mode, ...generated });
-  } catch (err) {
-    console.error(`[Threads material write] account #${req.account.id}:`, err.message);
-    res.status(422).json({ error: err.response?.data?.error?.message || err.message });
-  }
-});
-
-appInstance.post('/api/threads/material-post', requireOwnedAccount, (req, res) => {
-  const text = String(req.body?.text || '').trim();
-  const scheduledAt = String(req.body?.scheduled_at || '').trim();
-  const recipeCommentText = String(req.body?.recipe_comment_text || '').trim();
-  if (!text || !scheduledAt) return res.status(400).json({ error: '본문과 발행 예정 시각은 필수입니다.' });
-  const link = String(req.body?.link || '').trim() || null;
-  const imageUrl = String(req.body?.image_url || '').trim() || null;
-  const extraImageUrl = req.body?.video_url ? null : (String(req.body?.extra_image_url || '').trim() || null);
-  const videoUrl = String(req.body?.video_url || '').trim() || null;
-  const autoCommentEnabled = req.body?.auto_comment_enabled === false ? 0 : 1;
-  const commentStatus = (link || recipeCommentText) && autoCommentEnabled ? 'pending' : 'none';
-  const info = db.prepare(`INSERT INTO posts (account_id, text, link, image_url, extra_image_url, video_url, scheduled_at, auto_comment_enabled, comment_status, recipe_comment_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(req.account.id, text, link, imageUrl, extraImageUrl, videoUrl, scheduledAt, autoCommentEnabled, commentStatus, recipeCommentText || null);
-  res.json({ success: true, id: info.lastInsertRowid });
-});
-
-appInstance.post('/api/threads/import', requireOwnedAccount, async (req, res) => {
-  const url = String(req.body?.url || '').trim();
-  if (!url) return res.status(400).json({ error: 'Threads 게시물 URL을 입력해주세요.' });
-  if (threadsImportLocks.has(req.account.id)) return res.status(429).json({ error: '이미 Threads 영상을 가져오는 중입니다. 완료 후 다시 시도해주세요.' });
-  threadsImportLocks.add(req.account.id);
-  try {
-    const outputDir = path.join(uploadsDir, 'videos', String(req.account.id));
-    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-    const result = await threadsMediaImporter.importThreadsVideo({ url, outputDir });
-    markUsedPost(url);
-    const base = publicBaseUrl(req, req.account);
-    const publicUrl = `${base}/uploads/videos/${req.account.id}/${encodeURIComponent(result.filename)}`;
-    res.json({ success: true, filename: result.filename, url: publicUrl, mediaType: 'video', size: result.size, sourceUrl: result.sourceUrl, poster: result.poster || null, title: result.title || '' });
-  } catch (err) {
-    console.error(`[Threads import] account #${req.account.id}:`, err.message);
-    res.status(422).json({ error: err.message || 'Threads 영상을 가져오지 못했습니다.' });
-  } finally { threadsImportLocks.delete(req.account.id); }
-});
-
-appInstance.post('/api/video/edit', requireOwnedAccount, async (req, res) => {
-  const filename = path.basename(String(req.body?.filename || ''));
-  if (!filename) return res.status(400).json({ error: '편집할 영상 filename이 필요합니다.' });
-  const inputPath = ownVideoPath(req.account.id, filename);
-  if (!fs.existsSync(inputPath)) return res.status(404).json({ error: '편집할 영상 파일을 찾을 수 없습니다.' });
-  if (videoEditLocks.has(req.account.id)) return res.status(429).json({ error: '이미 영상 편집 중입니다. 완료 후 다시 시도해주세요.' });
-  videoEditLocks.add(req.account.id);
-  try {
-    const outputDir = path.join(uploadsDir, 'videos', String(req.account.id));
-    const result = await videoEditor.editVideo({ inputPath, outputDir, start: req.body?.start, end: req.body?.end, mute: req.body?.mute !== false });
-    const base = publicBaseUrl(req, req.account);
-    const publicUrl = `${base}/uploads/videos/${req.account.id}/${encodeURIComponent(result.filename)}`;
-    res.json({ success: true, filename: result.filename, url: publicUrl, mediaType: 'video', size: result.size, sourceDuration: result.sourceDuration, start: result.start, end: result.end, duration: result.duration, muted: result.muted });
-  } catch (err) {
-    console.error(`[Video edit] account #${req.account.id}:`, err.message);
-    res.status(422).json({ error: err.message || '영상 편집에 실패했습니다.' });
-  } finally { videoEditLocks.delete(req.account.id); }
-});
-
-console.log('[Threads material] 관리자 벤치마킹 계정 기반 소재 수집 활성화');
-console.log('[Threads material] 중복 사용 URL 제외 활성화');
-console.log('[Threads import] 공개 Threads 영상 가져오기 API 활성화');
-console.log('[Video edit] 영상 음소거/앞뒤 컷 API 활성화');
+const videoEditLocks=new Set(), threadsImportLocks=new Set(), threadsSearchLocks=new Set();
+function requireOwnedAccount(req,res,next){const accountId=Number(req.query.accountId||req.body?.accountId||req.params?.accountId);if(!accountId)return res.status(400).json({error:'accountId가 필요합니다'});const account=getAccount(accountId);if(!account)return res.status(404).json({error:'존재하지 않는 계정입니다'});if(!req.currentUser||account.user_id!==req.currentUser.id)return res.status(403).json({error:'본인 소유의 계정만 이용할 수 있습니다'});req.account=account;next();}
+function requireAdmin(req,res,next){if(req.currentUser?.role!=='admin')return res.status(403).json({error:'관리자만 이용할 수 있습니다.'});next();}
+function publicBaseUrl(req,account){if(account?.threads_redirect_uri){try{const u=new URL(account.threads_redirect_uri);return `${u.protocol}//${u.host}`;}catch{}}return `${req.protocol}://${req.get('host')}`;}
+function ownVideoPath(accountId,filename){return path.join(uploadsDir,'videos',String(accountId),path.basename(String(filename||'')));}
+appInstance.get('/api/threads/accounts',(req,res)=>{if(!req.currentUser)return res.status(401).json({error:'로그인이 필요합니다'});res.json({accounts:listAccounts(req.currentUser.id)});});
+appInstance.get('/api/admin/benchmark-accounts',requireAdmin,(req,res)=>res.json({accounts:listBenchmarkAccounts()}));
+appInstance.post('/api/admin/benchmark-accounts',requireAdmin,(req,res)=>{try{res.json({success:true,account:addBenchmarkAccount(req.body?.username)});}catch(err){res.status(400).json({error:err.message});}});
+appInstance.post('/api/admin/benchmark-accounts/bulk',requireAdmin,(req,res)=>{try{const result=addBenchmarkAccountsBulk(req.body?.usernames||req.body?.text||'');res.json({success:true,...result});}catch(err){res.status(400).json({error:err.message});}});
+appInstance.delete('/api/admin/benchmark-accounts/:id',requireAdmin,(req,res)=>{deleteBenchmarkAccount(req.params.id);res.json({success:true});});
+appInstance.get('/api/threads/material-search',requireOwnedAccount,async(req,res)=>{if(threadsSearchLocks.has(req.account.id))return res.status(429).json({error:'이미 Threads 소재를 찾는 중입니다. 잠시 후 다시 시도해주세요.'});threadsSearchLocks.add(req.account.id);try{const items=await collectBenchmarkMaterials({limit:Number(req.query.limit)||12});res.json({success:true,source:'benchmark_accounts',items});}catch(err){console.error(`[Threads benchmark search] account #${req.account.id}:`,err.message);res.status(422).json({error:err.message||'벤치마킹 계정에서 소재를 찾지 못했습니다.'});}finally{threadsSearchLocks.delete(req.account.id);}});
+appInstance.post('/api/threads/material-write',requireOwnedAccount,async(req,res)=>{const keyword=String(req.body?.keyword||'').trim(),sourceText=String(req.body?.sourceText||'').trim(),mode=req.body?.mode==='recipe'?'recipe':'product';if(!keyword&&!sourceText)return res.status(400).json({error:'소재 내용이 필요합니다.'});try{const generated=await generateFromThreadsMaterial(req.account.id,{keyword,sourceText,mode});if(req.currentUser?.id)logUsage(req.currentUser.id,'text');res.json({success:true,mode,...generated});}catch(err){res.status(422).json({error:err.response?.data?.error?.message||err.message});}});
+appInstance.post('/api/threads/material-post',requireOwnedAccount,(req,res)=>{const text=String(req.body?.text||'').trim(),scheduledAt=String(req.body?.scheduled_at||'').trim(),recipeCommentText=String(req.body?.recipe_comment_text||'').trim();if(!text||!scheduledAt)return res.status(400).json({error:'본문과 발행 예정 시각은 필수입니다.'});const link=String(req.body?.link||'').trim()||null,imageUrl=String(req.body?.image_url||'').trim()||null,extraImageUrl=req.body?.video_url?null:(String(req.body?.extra_image_url||'').trim()||null),videoUrl=String(req.body?.video_url||'').trim()||null,autoCommentEnabled=req.body?.auto_comment_enabled===false?0:1,commentStatus=(link||recipeCommentText)&&autoCommentEnabled?'pending':'none';const info=db.prepare(`INSERT INTO posts (account_id,text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,recipe_comment_text) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(req.account.id,text,link,imageUrl,extraImageUrl,videoUrl,scheduledAt,autoCommentEnabled,commentStatus,recipeCommentText||null);res.json({success:true,id:info.lastInsertRowid});});
+appInstance.post('/api/threads/import',requireOwnedAccount,async(req,res)=>{const url=String(req.body?.url||'').trim();if(!url)return res.status(400).json({error:'Threads 게시물 URL을 입력해주세요.'});if(threadsImportLocks.has(req.account.id))return res.status(429).json({error:'이미 Threads 영상을 가져오는 중입니다.'});threadsImportLocks.add(req.account.id);try{const outputDir=path.join(uploadsDir,'videos',String(req.account.id));if(!fs.existsSync(outputDir))fs.mkdirSync(outputDir,{recursive:true});const result=await threadsMediaImporter.importThreadsVideo({url,outputDir});markUsedPost(url);const base=publicBaseUrl(req,req.account),publicUrl=`${base}/uploads/videos/${req.account.id}/${encodeURIComponent(result.filename)}`;res.json({success:true,filename:result.filename,url:publicUrl,mediaType:'video',size:result.size,sourceUrl:result.sourceUrl,poster:result.poster||null,title:result.title||''});}catch(err){res.status(422).json({error:err.message||'Threads 영상을 가져오지 못했습니다.'});}finally{threadsImportLocks.delete(req.account.id);}});
+appInstance.post('/api/video/edit',requireOwnedAccount,async(req,res)=>{const filename=path.basename(String(req.body?.filename||''));if(!filename)return res.status(400).json({error:'편집할 영상 filename이 필요합니다.'});const inputPath=ownVideoPath(req.account.id,filename);if(!fs.existsSync(inputPath))return res.status(404).json({error:'편집할 영상 파일을 찾을 수 없습니다.'});if(videoEditLocks.has(req.account.id))return res.status(429).json({error:'이미 영상 편집 중입니다.'});videoEditLocks.add(req.account.id);try{const outputDir=path.join(uploadsDir,'videos',String(req.account.id));const result=await videoEditor.editVideo({inputPath,outputDir,start:req.body?.start,end:req.body?.end,mute:req.body?.mute!==false});const base=publicBaseUrl(req,req.account),publicUrl=`${base}/uploads/videos/${req.account.id}/${encodeURIComponent(result.filename)}`;res.json({success:true,filename:result.filename,url:publicUrl,mediaType:'video',size:result.size,sourceDuration:result.sourceDuration,start:result.start,end:result.end,duration:result.duration,muted:result.muted});}catch(err){res.status(422).json({error:err.message||'영상 편집에 실패했습니다.'});}finally{videoEditLocks.delete(req.account.id);}});
+console.log('[Threads material] 벤치마킹 계정 기반 수집 + 대량등록 활성화');
