@@ -452,7 +452,7 @@ function makeSystemPrompt() {
 // ----------------------------------------------------
 // 캡션 생성
 // ----------------------------------------------------
-async function generateCaption(accountId, { productName, price }) {
+async function generateCaption(accountId, { productName, price, youtubeSource }) {
   const account = getAccount(accountId);
 
   const priceText = price
@@ -461,12 +461,29 @@ async function generateCaption(accountId, { productName, price }) {
 
   const { currentDate, currentSeason } = getKoreaContext();
 
+  // youtubeSource가 있을 때만 참고 소재로 프롬프트에 추가한다 — 없으면 기존 프롬프트와 100% 동일하게 동작.
+  // 영상 제목/설명은 "아이디어 참고자료"로만 쓰고, 그대로 베끼거나 없는 사실을 지어내지 않도록
+  // 명확히 제한한다.
+  const youtubeContext = youtubeSource && youtubeSource.title
+    ? `
+
+참고용 콘텐츠 소재 (YouTube 영상 — 아이디어 참고용일 뿐, 절대 그대로 베끼지 말 것):
+영상 제목: ${youtubeSource.title}
+${youtubeSource.description ? `영상 설명: ${String(youtubeSource.description).slice(0, 300)}` : ''}
+
+이 소재를 사용할 때 반드시 지킬 것:
+- 이 영상을 만든 사람이나 사용자가 실제로 이 제품을 사용했다고 단정하지 않는다
+- 사용자 본인이 이 제품을 직접 사용해봤다고 단정하지 않는다
+- 영상 제목/설명에 없는 사실을 지어내지 않는다
+- 영상 속 문장을 그대로 복사하지 않고, 영상에서 보이는 주제나 상황만 참고해서 새로운 글을 쓴다`
+    : '';
+
   const userMessage = `
 현재 날짜: ${currentDate}
 현재 계절: ${currentSeason}
 
 상품명: ${productName}
-${priceText ? `가격: ${priceText}` : ''}
+${priceText ? `가격: ${priceText}` : ''}${youtubeContext}
 
 이 상품을 소재로
 위 시스템 규칙에 맞는 Threads 글 5개를 작성해줘.
@@ -713,9 +730,87 @@ async function suggestKeywordCandidates(accountId, target) {
   return parseKeywordList(text);
 }
 
+// ----------------------------------------------------
+// 완전자동화(오토파일럿)의 YouTube 콘텐츠 소싱에서 사용 —
+// 쿠팡 상품명에서 브랜드/모델/규격을 걷어낸 짧은 YouTube 검색어 1~3개를 제안
+// ----------------------------------------------------
+function makeYoutubeKeywordSystemPrompt() {
+  return `너는 쇼핑 콘텐츠 제작을 위해 YouTube에서 검색할 핵심 키워드를 뽑는 사람이다.
+
+주어진 쿠팡 상품명에서 브랜드명, 모델명, 규격(숫자/W/mm 등), 판매 문구를 제거하고
+사람들이 실제로 YouTube에서 검색할 법한 짧은 키워드 1~3개를 제안해라.
+
+조건:
+- 브랜드명/제품 고유명은 제외
+- 영어 표현을 하나 정도 섞어도 좋음 (해외 콘텐츠도 걸리도록)
+- 키워드는 2~4단어 이내로 짧게
+
+출력 형식: 키워드만 한 줄에 하나씩, 최대 3줄. 번호나 설명, 따옴표 붙이지 말 것.`;
+}
+
+async function suggestYoutubeSearchKeywords(accountId, productName) {
+  const account = getAccount(accountId);
+  const { anthropicKey, openaiKey } = resolveModelKeys(account);
+  const userMessage = `쿠팡 상품명: ${productName}\n\n위 규칙에 맞는 YouTube 검색 키워드를 만들어줘.`;
+
+  let text;
+  if (anthropicKey) {
+    const res = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-sonnet-4-6',
+        max_tokens: 150,
+        temperature: 0.7,
+        system: makeYoutubeKeywordSystemPrompt(),
+        messages: [{ role: 'user', content: userMessage }],
+      },
+      {
+        headers: {
+          'x-api-key': anthropicKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        timeout: 15000,
+      }
+    );
+    text = res.data?.content?.find((b) => b.type === 'text')?.text;
+  } else if (openaiKey) {
+    const res = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o-mini',
+        max_tokens: 150,
+        temperature: 0.7,
+        messages: [
+          { role: 'system', content: makeYoutubeKeywordSystemPrompt() },
+          { role: 'user', content: userMessage },
+        ],
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${openaiKey}`,
+          'content-type': 'application/json',
+        },
+        timeout: 15000,
+      }
+    );
+    text = res.data?.choices?.[0]?.message?.content;
+  } else {
+    throw new Error('이 계정에 Anthropic 또는 OpenAI API 키가 설정되지 않았습니다');
+  }
+
+  if (!text) throw new Error('키워드 후보를 받지 못했습니다');
+  return text
+    .split('\n')
+    .map((line) => line.replace(/^[\d\.\-\*\s]+/, '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
 module.exports = {
   generateCaption,
   suggestKeywordCandidates,
+  suggestYoutubeSearchKeywords,
   // server.js가 import는 하지만 실제로 호출하는 곳은 없는 죽은 import — 에러 방지용으로만 별칭 export
   suggestKeyword: suggestKeywordCandidates,
 };

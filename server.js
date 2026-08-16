@@ -40,6 +40,7 @@ const { generateCaption, suggestKeyword, suggestKeywordCandidates } = require('.
 const { generateScene, generateLifestyleImage } = require('./aiImage');
 const { rankKeywordsByTrend } = require('./naverTrends');
 const { startPublishJob, startInsightsJob, startAutopilotJob } = require('./scheduler');
+const youtubeApi = require('./youtubeApi');
 
 bootstrapAdmin();
 
@@ -203,6 +204,7 @@ app.get('/api/admin/system-api-settings', requireAdmin, (req, res) => {
     has_threads_app_secret: !!s.threads_app_secret,
     has_openai_api_key: !!s.openai_api_key,
     has_naver_client_secret: !!s.naver_client_secret,
+    has_youtube_api_key: !!s.youtube_api_key,
   });
 });
 
@@ -215,6 +217,7 @@ app.post('/api/admin/system-api-settings', requireAdmin, (req, res) => {
     openai_api_key: body.openai_api_key,
     naver_client_id: body.naver_client_id,
     naver_client_secret: body.naver_client_secret,
+    youtube_api_key: body.youtube_api_key,
   });
   res.json({ ok: true });
 });
@@ -302,7 +305,24 @@ app.get('/api/accounts/:accountId/autopilot', requireAccount, (req, res) => {
     nextAt: a.autopilot_next_at || null,
     lastKeyword: a.autopilot_last_keyword || null,
     lastTarget: a.autopilot_last_target || null,
+    // 관련 쇼츠 콘텐츠 참고 옵션 — 컬럼이 없던 예전 계정(마이그레이션 전)은 기본 ON으로 취급
+    youtubeSourceEnabled:
+      a.autopilot_youtube_source_enabled === null || a.autopilot_youtube_source_enabled === undefined
+        ? true
+        : !!a.autopilot_youtube_source_enabled,
+    youtubeOrder: a.autopilot_youtube_order || 'relevance',
   });
+});
+
+// 완전자동화의 "관련 쇼츠 콘텐츠 참고" ON/OFF + 탐색 방식 저장 (시작/중지와 별개로 언제든 변경 가능)
+app.post('/api/accounts/:accountId/autopilot/youtube-settings', requireAccount, (req, res) => {
+  const { enabled, order } = req.body || {};
+  const allowedOrders = ['relevance', 'viewCount', 'date'];
+  updateAccount(req.account.id, {
+    autopilot_youtube_source_enabled: enabled ? 1 : 0,
+    autopilot_youtube_order: allowedOrders.includes(order) ? order : 'relevance',
+  });
+  res.json({ ok: true });
 });
 
 app.post('/api/accounts/:accountId/autopilot/start', requireAccount, (req, res) => {
@@ -381,10 +401,10 @@ app.delete('/api/upload-media/:filename', (req, res) => {
 
 // ---------- AI로 스레드 본문 자동 생성 ----------
 app.post('/api/generate-caption', requireAccount, async (req, res) => {
-  const { productName, price, target } = req.body;
+  const { productName, price, target, youtubeSource } = req.body;
   if (!productName) return res.status(400).json({ error: 'productName이 필요합니다' });
   try {
-    const texts = await generateCaption(req.account.id, { productName, price, target });
+    const texts = await generateCaption(req.account.id, { productName, price, target, youtubeSource });
     logUsage(req.currentUser.id, 'text');
     res.json({ texts });
   } catch (err) {
@@ -440,6 +460,45 @@ app.post('/api/coupang/deeplink', requireAccount, async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(422).json({ error: err.response?.data?.message || err.message });
+  }
+});
+
+// ---------- YouTube 관련 짧은 영상 검색 (콘텐츠 소재 탐색용 — 다운로드 기능 아님) ----------
+// YouTube Data API Key는 회원 개별 입력이 아니라 관리자 공용 설정(system_api_settings)에서만 가져온다.
+// 일반 회원 응답에는 Key를 절대 포함하지 않는다.
+app.get('/api/youtube/search', requireAccount, async (req, res) => {
+  const { keyword, order, limit } = req.query;
+  if (!keyword || !String(keyword).trim()) {
+    return res.status(400).json({ error: 'keyword가 필요합니다' });
+  }
+
+  const shared = getSystemApiSettings();
+  const apiKey = shared.youtube_api_key || process.env.YOUTUBE_API_KEY;
+  if (!apiKey) {
+    return res.status(422).json({ error: '관리자가 YouTube Data API Key를 아직 설정하지 않았습니다.' });
+  }
+
+  try {
+    const videos = await youtubeApi.searchVideos({
+      apiKey,
+      keyword,
+      order: order || 'relevance',
+      maxResults: Number(limit) || 10,
+    });
+    if (!videos.length) {
+      return res.json({ videos: [], message: '관련 영상을 찾지 못했습니다. 검색어를 조금 다르게 입력해보세요.' });
+    }
+    res.json({ videos });
+  } catch (err) {
+    const reason = err.response?.data?.error?.errors?.[0]?.reason || '';
+    if (err.response?.status === 403 && /quota/i.test(reason)) {
+      return res.status(429).json({ error: 'YouTube API 사용량 한도에 도달했습니다. 잠시 후 다시 시도해주세요.' });
+    }
+    if (err.response) {
+      return res.status(422).json({ error: err.response?.data?.error?.message || err.message });
+    }
+    console.error('[YouTube 검색 오류]', err.message);
+    res.status(500).json({ error: 'YouTube 검색 중 오류가 발생했습니다.' });
   }
 });
 

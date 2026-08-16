@@ -26,6 +26,7 @@ const {
 } = require('./aiSocial');
 
 const { rankKeywordsByTrend } = require('./naverTrends');
+const { findAutopilotYoutubeSource } = require('./youtubeSourcing');
 
 
 // ====================================================
@@ -803,6 +804,30 @@ async function runAutopilotOnce(
 
   } else {
 
+    // ================================================
+    // 완전자동화 옵션 "관련 쇼츠 콘텐츠 참고"가 켜져 있으면(기본 ON) 상품과 관련된
+    // YouTube 콘텐츠를 찾아 글 소재로 참고한다. 이 단계는 절대 예외를 던지지 않으며
+    // (findAutopilotYoutubeSource 내부에서 전부 캐치), 실패하면 youtubeSource가 null이 되어
+    // 그냥 기존 상품 기반 글 생성으로 계속 진행된다 — 자동화 전체가 멈추지 않는다.
+    // ================================================
+
+    let youtubeSource =
+      null;
+
+    if (
+      account.autopilot_youtube_source_enabled === undefined ||
+      account.autopilot_youtube_source_enabled === null ||
+      account.autopilot_youtube_source_enabled
+    ) {
+
+      youtubeSource =
+        await findAutopilotYoutubeSource({
+          accountId: account.id,
+          productName: picked.name,
+          order: account.autopilot_youtube_order || 'relevance',
+        });
+    }
+
     const texts =
       await generateCaption(
         account.id,
@@ -814,6 +839,8 @@ async function runAutopilotOnce(
             picked.price,
 
           target,
+
+          youtubeSource,
         }
       );
 

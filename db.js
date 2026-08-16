@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   autopilot_next_at TEXT,
   autopilot_last_keyword TEXT,
   autopilot_last_target TEXT,
+  autopilot_youtube_source_enabled INTEGER DEFAULT 1,
+  autopilot_youtube_order TEXT DEFAULT 'relevance',
 
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -172,6 +174,7 @@ const SYSTEM_API_SETTING_KEYS = [
   'openai_api_key',
   'naver_client_id',
   'naver_client_secret',
+  'youtube_api_key',
 ];
 
 function getSystemApiSettings() {
@@ -189,7 +192,7 @@ function updateSystemApiSettings(fields) {
     if (!(key in fields)) continue;
     const value = fields[key];
     // secret 입력란은 빈 값으로 보내면 기존 값을 유지한다.
-    if (['threads_app_secret', 'openai_api_key', 'naver_client_secret'].includes(key) && !value) continue;
+    if (['threads_app_secret', 'openai_api_key', 'naver_client_secret', 'youtube_api_key'].includes(key) && !value) continue;
     db.prepare(
       `INSERT INTO system_api_settings (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
@@ -260,6 +263,9 @@ const migrations = [
   `ALTER TABLE accounts ADD COLUMN user_id INTEGER`,
   // 캐러셀(2장) 발행 지원: 라이프스타일 이미지(image_url) + 상세페이지 사진(extra_image_url)
   `ALTER TABLE posts ADD COLUMN extra_image_url TEXT`,
+  // 완전자동화(오토파일럿)가 관련 YouTube 콘텐츠를 소재로 참고할지 여부 — 기본 ON
+  `ALTER TABLE accounts ADD COLUMN autopilot_youtube_source_enabled INTEGER DEFAULT 1`,
+  `ALTER TABLE accounts ADD COLUMN autopilot_youtube_order TEXT DEFAULT 'relevance'`,
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (e) { /* 컬럼이 이미 있으면 무시 */ }
@@ -366,6 +372,8 @@ const ACCOUNT_UPDATABLE_FIELDS = [
   'autopilot_next_at',
   'autopilot_last_keyword',
   'autopilot_last_target',
+  'autopilot_youtube_source_enabled',
+  'autopilot_youtube_order',
   'naver_client_id',
   'naver_client_secret',
 ];
