@@ -49,8 +49,6 @@ function addBenchmarkAccountsBulk(value) {
   let added = 0;
   let skipped = 0;
 
-  // Node 내장 SQLite(DatabaseSync)는 better-sqlite3의 db.transaction() API가 없다.
-  // 현재 규모에서는 순차 INSERT가 충분하고, UNIQUE + INSERT OR IGNORE로 중복은 안전하게 건너뛴다.
   for (const username of usernames) {
     const info = insert.run(username);
     if (Number(info?.changes || 0) > 0) added++;
@@ -87,6 +85,7 @@ async function collectProfilePostsWithContext(context, username, {limit=2}={}) {
     return await page.evaluate(({username,limit}) => {
       const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
       const canonical=href=>{try{const u=new URL(href,location.origin);return`${u.origin}${u.pathname}`;}catch{return String(href||'').split(/[?#]/)[0];}};
+      const rectOverlap=(a,b)=>{const x=Math.max(0,Math.min(a.right,b.right)-Math.max(a.left,b.left));const y=Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top));const inter=x*y;if(!inter)return 0;return inter/Math.max(1,Math.min(a.width*a.height,b.width*b.height));};
       const findRoot=(a,target)=>{
         let node=a.closest('article,[role="article"]')||a.parentElement,best=null;
         for(let i=0;i<10&&node;i++,node=node.parentElement){
@@ -99,14 +98,17 @@ async function collectProfilePostsWithContext(context, username, {limit=2}={}) {
       };
       const mediaFromRoot=root=>{
         if(!root)return{images:[],hasVideo:false,videoCount:0};
+        const videos=[...root.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>=180&&r.height>=180;});
+        const videoRects=videos.map(v=>v.getBoundingClientRect());
         const images=[];
         for(const img of root.querySelectorAll('img')){
           const r=img.getBoundingClientRect(),src=img.currentSrc||img.src||'',alt=(img.alt||'').toLowerCase();
           if(!src||r.width<180||r.height<180)continue;
           if(/profile|프로필|avatar|사용자/.test(alt))continue;
+          if(videoRects.some(vr=>rectOverlap(r,vr)>=0.55))continue;
+          if(img.closest('video')||img.parentElement?.querySelector?.('video'))continue;
           if(!images.includes(src))images.push(src);
         }
-        const videos=[...root.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>=180&&r.height>=180;});
         return{images:images.slice(0,10),hasVideo:videos.length>0,videoCount:videos.length};
       };
       const out=[],seen=new Set();
@@ -146,6 +148,7 @@ async function collectPostDetails(url, username) {
     const data=await page.evaluate(({username,sourceUrl})=>{
       const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
       const canonical=href=>{try{const u=new URL(href,location.origin);return`${u.origin}${u.pathname}`;}catch{return String(href||'').split(/[?#]/)[0];}};
+      const rectOverlap=(a,b)=>{const x=Math.max(0,Math.min(a.right,b.right)-Math.max(a.left,b.left));const y=Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top));const inter=x*y;if(!inter)return 0;return inter/Math.max(1,Math.min(a.width*a.height,b.width*b.height));};
       const targetUrl=canonical(sourceUrl),targetUser=String(username||'').toLowerCase();
 
       function postRootFromLink(a, expectedUrl='') {
@@ -175,20 +178,25 @@ async function collectPostDetails(url, username) {
       const main=mainCandidates.sort((a,b)=>clean(b.innerText).length-clean(a.innerText).length)[0]||null;
       const sourceText=clean(main?.innerText||'').slice(0,5000);
 
+      const videos=[];
+      const videoRects=[];
+      if(main){
+        for(const v of main.querySelectorAll('video')){
+          const r=v.getBoundingClientRect(); if(r.width<180||r.height<180)continue;
+          videoRects.push(r);
+          const src=v.currentSrc||v.src||''; if(src&&!videos.includes(src))videos.push(src);
+        }
+      }
+
       const images=[];
       if(main){
         for(const img of main.querySelectorAll('img')){
           const r=img.getBoundingClientRect(),src=img.currentSrc||img.src||'',alt=(img.alt||'').toLowerCase();
           if(!src||r.width<180||r.height<180)continue;
           if(/profile|프로필|avatar|사용자/.test(alt))continue;
+          if(videoRects.some(vr=>rectOverlap(r,vr)>=0.55))continue;
+          if(img.closest('video')||img.parentElement?.querySelector?.('video'))continue;
           if(!images.includes(src))images.push(src);
-        }
-      }
-      const videos=[];
-      if(main){
-        for(const v of main.querySelectorAll('video')){
-          const r=v.getBoundingClientRect(); if(r.width<180||r.height<180)continue;
-          const src=v.currentSrc||v.src||''; if(src&&!videos.includes(src))videos.push(src);
         }
       }
 
@@ -223,7 +231,7 @@ async function collectPostDetails(url, username) {
         authorReplies:authorReplies.slice(0,10),
         images:images.slice(0,10),
         videos:videos.slice(0,5),
-        hasVideo:videos.length>0,
+        hasVideo:videoRects.length>0,
         exactUrl:canonical(location.href)===targetUrl,
         metaDescription
       };
