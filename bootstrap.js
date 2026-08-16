@@ -20,16 +20,12 @@ require('./server');
 if (!appInstance) throw new Error('Express app 초기화에 실패했습니다.');
 
 const { getAccount } = require('./db');
-const xhsDownloader = require('./xhsDownloader');
 const videoEditor = require('./videoEditor');
 
 const uploadsDir = path.join(__dirname, 'uploads');
-const xhsLocks = new Set();
 const videoEditLocks = new Set();
 
 function requireOwnedAccount(req, res, next) {
-  // server.js의 app.use(requireAuth)가 이 라우트보다 먼저 등록되어 있으므로
-  // 여기 도달할 때 req.currentUser는 로그인/승인된 사용자다.
   const accountId = Number(req.query.accountId || req.body?.accountId || req.params?.accountId);
   if (!accountId) return res.status(400).json({ error: 'accountId가 필요합니다' });
   const account = getAccount(accountId);
@@ -56,50 +52,7 @@ function ownVideoPath(accountId, filename) {
   return path.join(uploadsDir, 'videos', String(accountId), safeFilename);
 }
 
-appInstance.get('/api/xhs/status', requireOwnedAccount, async (req, res) => {
-  const available = await xhsDownloader.checkAvailable();
-  res.json({ available });
-});
-
-appInstance.post('/api/xhs/import', requireOwnedAccount, async (req, res) => {
-  const url = String(req.body?.url || '').trim();
-  if (!url) return res.status(400).json({ error: '샤오홍슈 URL을 입력해주세요.' });
-
-  if (xhsLocks.has(req.account.id)) {
-    return res.status(429).json({ error: '이미 영상을 가져오는 중입니다. 완료 후 다시 시도해주세요.' });
-  }
-
-  const available = await xhsDownloader.checkAvailable();
-  if (!available) {
-    return res.status(503).json({ error: '현재 서버에 샤오홍슈 영상 가져오기 도구(yt-dlp)가 설치되지 않았습니다.' });
-  }
-
-  xhsLocks.add(req.account.id);
-  try {
-    const outputDir = path.join(uploadsDir, 'videos', String(req.account.id));
-    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-
-    const result = await xhsDownloader.downloadVideo({ url, outputDir });
-    const base = publicBaseUrl(req, req.account);
-    const publicUrl = `${base}/uploads/videos/${req.account.id}/${encodeURIComponent(result.filename)}`;
-
-    res.json({
-      success: true,
-      filename: result.filename,
-      url: publicUrl,
-      mediaType: 'video',
-      size: result.size,
-      sourceUrl: result.sourceUrl,
-    });
-  } catch (err) {
-    console.error(`[XHS import] account #${req.account.id}:`, err.message);
-    res.status(422).json({ error: err.message || '샤오홍슈 영상을 가져오지 못했습니다.' });
-  } finally {
-    xhsLocks.delete(req.account.id);
-  }
-});
-
-// 직접 업로드했거나 XHS에서 이 계정 폴더로 가져온 영상만 편집 가능.
+// 직접 업로드한 계정 소유 영상만 편집 가능.
 // 입력 filename은 basename만 사용하고 실제 경로는 계정별 폴더에서 서버가 직접 조립한다.
 appInstance.post('/api/video/edit', requireOwnedAccount, async (req, res) => {
   const filename = path.basename(String(req.body?.filename || ''));
@@ -147,5 +100,4 @@ appInstance.post('/api/video/edit', requireOwnedAccount, async (req, res) => {
   }
 });
 
-console.log('[XHS] 샤오홍슈/RedNote 영상 가져오기 API 활성화');
 console.log('[Video edit] 영상 음소거/앞뒤 컷 API 활성화');
