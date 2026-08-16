@@ -5,11 +5,11 @@ const { db, listAllAccountsForSystem, getAccount, canPublish, findMediaSourceFor
 const { publishPost, publishCarouselPost, publishReply, getMediaInsights } = require('./threadsApi');
 const coupangApi = require('./coupangApi');
 const { generateCaption, suggestKeywordCandidates } = require('./aiCaption');
-const { generateStoryCaption, generateAffiliateLead } = require('./aiSocial');
+const { generateAffiliateLead } = require('./aiSocial');
 const { rankKeywordsByTrend } = require('./naverTrends');
 const { findAutopilotYoutubeSource } = require('./youtubeSourcing');
 const { buildRecipeAutopilot } = require('./recipeAutomation');
-const { generateRecipe: generateContentOnlyRecipe, generateDailyStory } = require('./contentOnlyAutomation');
+const { generateRecipe: generateContentOnlyRecipe } = require('./contentOnlyAutomation');
 
 try { db.exec(`ALTER TABLE posts ADD COLUMN recipe_comment_text TEXT`); } catch {}
 
@@ -147,8 +147,8 @@ function startInsightsJob() {
 
 function randomIntervalMinutes() { return 60 + Math.random() * 15; }
 const AUTOPILOT_TARGETS = ['전체', '20대 여자', '20대 남자', '30대 여자', '30대 남자', '40대 이상'];
-function chooseContentMode() { const r = Math.random(); if (r < 0.70) return 'recipe'; if (r < 0.90) return 'story'; return 'product'; }
-function chooseContentOnlyMode() { return Math.random() < 0.65 ? 'recipe' : 'story'; }
+// 자동화는 레시피 또는 상품형만 사용한다. 일상/잡담형은 생성하지 않는다.
+function chooseContentMode() { return Math.random() < 0.70 ? 'recipe' : 'product'; }
 function saveAutopilotPost({ accountId, text, link, imageUrl, extraImageUrl, recipeCommentText = null }) {
   db.prepare(`INSERT INTO posts (text,link,image_url,extra_image_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text) VALUES (?,?,?,?,?,1,'pending',?,?)`).run(text, link || null, imageUrl || null, extraImageUrl || null, new Date().toISOString(), accountId, recipeCommentText);
 }
@@ -156,22 +156,11 @@ function recordAutopilotLast(accountId, keyword, target) { db.prepare(`UPDATE ac
 function throwIfCoupangRateLimited(err) { if (coupangApi.isRateLimitError?.(err)) throw err; }
 
 async function runContentOnlyAutopilot(account, target) {
-  const mode = chooseContentOnlyMode();
-  if (mode === 'recipe') {
-    try {
-      const r = await generateContentOnlyRecipe(account.id, target);
-      saveAutopilotPost({ accountId: account.id, text: r.text, link: null, imageUrl: r.imageUrl, extraImageUrl: r.extraImageUrl, recipeCommentText: r.recipeCommentText });
-      recordAutopilotLast(account.id, r.keyword, target);
-      console.log(`[자동발행 예약] account #${account.id} mode="recipe-no-commerce" target="${target}" keyword="${r.keyword}" (${r.trendNote}) image="${r.imageSourceLabel}"`);
-      return;
-    } catch (err) {
-      console.log(`[ContentOnly] 레시피 생성 실패 → 일상글로 폴백: ${err.message}`);
-    }
-  }
-  const s = await generateDailyStory(account.id, target);
-  saveAutopilotPost({ accountId: account.id, text: s.text, link: null, imageUrl: null, extraImageUrl: null });
-  recordAutopilotLast(account.id, '일상', target);
-  console.log(`[자동발행 예약] account #${account.id} mode="story-no-commerce" target="${target}" (쿠팡 API 없이 순수 일상글)`);
+  // 쿠팡 API 키가 없어도 일상글로 빠지지 않고 레시피만 만든다.
+  const r = await generateContentOnlyRecipe(account.id, target);
+  saveAutopilotPost({ accountId: account.id, text: r.text, link: null, imageUrl: r.imageUrl, extraImageUrl: r.extraImageUrl, recipeCommentText: r.recipeCommentText });
+  recordAutopilotLast(account.id, r.keyword, target);
+  console.log(`[자동발행 예약] account #${account.id} mode="recipe-no-commerce" target="${target}" keyword="${r.keyword}" (${r.trendNote}) image="${r.imageSourceLabel}"`);
 }
 
 async function pickRegularProduct(account, target) {
@@ -218,9 +207,9 @@ async function pickRegularProduct(account, target) {
 async function runAutopilotOnce(account) {
   const target = AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
 
-  // 쿠팡 API 키가 없는 계정은 상품 API를 단 한 번도 호출하지 않고 레시피/일상글만 올린다.
+  // 쿠팡 API 키가 없는 계정은 상품 API를 호출하지 않고 레시피 자동화만 실행한다.
   if (!hasCoupangKeys(account)) {
-    console.log(`[Autopilot][CONTENT ONLY] account=${account.id} 쿠팡 API 키 없음 → 레시피/일상글 모드`);
+    console.log(`[Autopilot][RECIPE ONLY] account=${account.id} 쿠팡 API 키 없음 → 레시피 모드`);
     await runContentOnlyAutopilot(account, target);
     return;
   }
@@ -247,30 +236,25 @@ async function runAutopilotOnce(account) {
   }
 
   const { picked, keyword, trendNote } = await pickRegularProduct(account, target);
-  let text, imageUrl = null, extraImageUrl = null, imageSourceLabel = '없음';
-  if (contentMode === 'story') {
-    text = await generateStoryCaption(account.id, { productName: picked.name, trendKeyword: keyword, target, trendNote });
-  } else {
-    let youtubeSource = null;
-    if (account.autopilot_youtube_source_enabled) youtubeSource = await findAutopilotYoutubeSource({ accountId: account.id, productName: picked.name, order: account.autopilot_youtube_order || 'relevance' });
-    const variants = await generateCaption(account.id, { productName: picked.name, price: picked.price, youtubeSource });
-    text = Array.isArray(variants) ? variants[Math.floor(Math.random() * variants.length)] : String(variants || '');
-    imageUrl = picked.image || null;
-    extraImageUrl = null;
-    imageSourceLabel = picked.image ? '원본 상품컷 1장' : '없음';
-    if (account.autopilot_frame_media_enabled) {
-      try {
-        const media = findMediaSourceForProduct(account.id, picked.name);
-        if (media && mediaSourceFilesExist(media)) {
-          imageUrl = media.image_url; extraImageUrl = media.extra_image_url || null; markMediaSourceUsed(media.id);
-          imageSourceLabel = extraImageUrl ? '저장 프레임 2장' : '저장 프레임 1장';
-        }
-      } catch (err) { console.log(`[Media] 저장 프레임 조회 실패 — 상품 이미지 유지: ${err.message}`); }
-    }
+  let youtubeSource = null;
+  if (account.autopilot_youtube_source_enabled) youtubeSource = await findAutopilotYoutubeSource({ accountId: account.id, productName: picked.name, order: account.autopilot_youtube_order || 'relevance' });
+  const variants = await generateCaption(account.id, { productName: picked.name, price: picked.price, youtubeSource });
+  const text = Array.isArray(variants) ? variants[Math.floor(Math.random() * variants.length)] : String(variants || '');
+  let imageUrl = picked.image || null;
+  let extraImageUrl = null;
+  let imageSourceLabel = picked.image ? '원본 상품컷 1장' : '없음';
+  if (account.autopilot_frame_media_enabled) {
+    try {
+      const media = findMediaSourceForProduct(account.id, picked.name);
+      if (media && mediaSourceFilesExist(media)) {
+        imageUrl = media.image_url; extraImageUrl = media.extra_image_url || null; markMediaSourceUsed(media.id);
+        imageSourceLabel = extraImageUrl ? '저장 프레임 2장' : '저장 프레임 1장';
+      }
+    } catch (err) { console.log(`[Media] 저장 프레임 조회 실패 — 상품 이미지 유지: ${err.message}`); }
   }
   saveAutopilotPost({ accountId: account.id, text, link: picked.url, imageUrl, extraImageUrl });
   recordAutopilotLast(account.id, keyword, target);
-  console.log(`[자동발행 예약] account #${account.id} mode="${contentMode}" target="${target}" keyword="${keyword}" (${trendNote}) product="${picked.name}" image="${imageSourceLabel}"`);
+  console.log(`[자동발행 예약] account #${account.id} mode="product" target="${target}" keyword="${keyword}" (${trendNote}) product="${picked.name}" image="${imageSourceLabel}"`);
 }
 
 function startAutopilotJob() {
@@ -281,7 +265,7 @@ function startAutopilotJob() {
       const account = getAccount(summary.id);
       if (!account.autopilot_enabled) { nextRunAt.delete(account.id); continue; }
 
-      // 쿠팡 키가 없는 계정은 쿠팡 cooldown과 무관하게 콘텐츠 전용 자동화를 계속 실행한다.
+      // 쿠팡 키가 없는 계정은 쿠팡 cooldown과 무관하게 레시피 자동화를 계속 실행한다.
       if (hasCoupangKeys(account)) {
         const cooldown = coupangApi.getApiCooldown?.(account.id);
         if (cooldown) { console.log(`[Coupang][AUTOPILOT SKIP] account=${account.id} cooldown_until=${cooldown.cooldown_until}`); continue; }
