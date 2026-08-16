@@ -7,10 +7,18 @@ function getOpenAIKey(accountId) {
   return shared.openai_api_key || process.env.OPENAI_API_KEY || account?.openai_api_key || null;
 }
 
+function detectRecipe(sourceText, authorReplies, requestedMode) {
+  if (requestedMode === 'recipe') return true;
+  const t = `${String(sourceText || '')}\n${String(authorReplies || '')}`.toLowerCase();
+  const food = /(레시피|재료|양념|소스|계란|두부|고기|삼겹|닭|버섯|밥|면|파스타|샌드위치|아보카도|채소|야채|국|찌개|볶음|구이|간식|요리)/.test(t);
+  const action = /(만드는\s*법|만드는방법|볶|굽|끓|튀기|찜|삶|썰|섞|버무|에어프라이어|전자레인지|중약불|약불|강불|분\s*정도|큰술|작은술|\d+\s*(?:t|ml|g|개|스푼|큰술|작은술))/i.test(t);
+  return food && action;
+}
+
 async function generateFromThreadsMaterial(accountId, { keyword, sourceText, authorReplies = '', mode = 'product' }) {
   const apiKey = getOpenAIKey(accountId);
   if (!apiKey) throw new Error('관리자 OpenAI API 키가 설정되어 있지 않습니다.');
-  const isRecipe = mode === 'recipe';
+  const isRecipe = detectRecipe(sourceText, authorReplies, mode);
 
   const styleRules = `
 한국 Threads에서 실제 사람이 바로 쓴 것처럼 작성한다.
@@ -52,75 +60,42 @@ async function generateFromThreadsMaterial(accountId, { keyword, sourceText, aut
 [본문 작성]
 - 원글의 말투, 호흡, 후킹 강도를 참고해 짧은 Threads 글로 재작성한다.
 - 레시피 전체를 본문에 설명하지 않는다.
-- 블로그 후기 같은 '부드럽고 고급스럽다/건강 간식/반칙 아닌가/사르르 녹는다' 식의 AI 문구를 넣지 않는다.
+- 블로그 후기 같은 AI 문구를 넣지 않는다.
 - 실제 사람이 친구에게 말하듯 짧고 날것으로 쓴다.
 - 1~2문장마다 빈 줄을 넣어서 읽기 편하게 만든다.
 
 [댓글 작성 - 최우선 규칙]
 댓글은 본문에 대한 감상이나 후기처럼 작성하지 않는다.
-댓글 자체가 독자가 저장해서 바로 따라 할 수 있는 '완성형 레시피'가 되어야 한다.
+댓글 자체가 독자가 저장해서 바로 따라 할 수 있는 완성형 레시피가 되어야 한다.
 본문 내용을 다른 말로 반복하는 댓글은 금지한다.
-
-1. 원본 콘텐츠에서 실제 재료, 양념, 소스, 계량, 조리법을 최대한 추출한다.
-2. 없는 내용을 임의로 보충하거나 효능·체중 변화·결과를 만들어내지 않는다.
-3. 재료명과 계량은 원문에 있는 범위에서 최대한 구체적으로 적는다.
-4. 조리 과정은 실제 따라 할 수 있도록 순서대로 작성한다.
-5. 원글에서 특정 재료/소스가 핵심으로 강조되어 있으면 레시피 안에 자연스럽게 포함한다.
-6. 마지막에는 그 핵심 재료/소스가 왜 중요한지 '💡 진짜 포인트' 형태로 1~2문장 강조한다.
-7. 문장을 한 덩어리로 붙이지 않는다. 제목/재료/소스/조리/포인트 사이에 빈 줄을 넣는다.
-8. 과도한 광고 문구, AI 같은 감탄사 반복, 의미 없는 후기 문장은 쓰지 않는다.
-9. 원문이 캐주얼하면 ㅋㅋ, 이모지를 소량 사용해 자연스럽게 맞춘다.
-10. 광고 고지문과 제휴 링크 자체는 comment에 생성하지 않는다. 링크는 별도 시스템이 붙인다.
-11. 음식에 맞는 이모지를 사용한다. 모든 레시피를 같은 이모지로 고정하지 않는다.
-12. 원문 정보가 부족하면 존재하지 않는 섹션을 억지로 채우지 않는다.
-13. '재료는 따로 없음', '그냥 먹으면 됨', '효과 짱임', '최애 반찬' 같은 근거 없는 문장은 금지한다.
-14. '~를 사용했음', '~임', '~됨' 같은 음슴체는 금지한다.
+- 원본 콘텐츠와 작성자 추가 댓글에서 실제 재료, 양념, 소스, 계량, 조리법을 최대한 추출한다.
+- 없는 내용을 임의로 보충하지 않는다.
+- 재료명과 계량은 원문에 있는 범위에서 최대한 구체적으로 적는다.
+- 조리 과정은 실제 따라 할 수 있도록 순서대로 작성한다.
+- 특정 재료/소스가 핵심으로 강조되어 있으면 마지막 '💡 진짜 포인트'에서 자연스럽게 강조한다.
+- 광고 고지문과 제휴 링크 자체는 comment에 생성하지 않는다. 링크는 별도 시스템이 붙인다.
+- 원문 정보가 부족하면 존재하지 않는 섹션을 억지로 채우지 않는다.
+- '재료는 따로 없음', '그냥 먹으면 됨', '효과 짱임' 같은 근거 없는 문장은 금지한다.
+- 음슴체는 금지한다.
 
 [댓글 기본 출력 구조]
-아래 구조를 기본으로 하되, 원문에 해당 정보가 없으면 그 항목은 생략한다.
+원문에 해당 정보가 있는 항목만 사용한다.
 
 🥑 준비재료
-✔ 재료 1 + 정확한 양
-✔ 재료 2 + 정확한 양
-✔ 재료 3 + 정확한 양
+✔ 재료 + 실제 양
 
 ✨ 소스
-✔ 핵심 소스 + 정확한 양
-✔ 추가 양념 + 정확한 양
+✔ 소스/양념 + 실제 양
 
 👩🏻‍🍳 만드는 방법
 1️⃣ 실제 조리 단계
 2️⃣ 실제 조리 단계
 3️⃣ 실제 조리 단계
-4️⃣ 실제 조리 단계
-5️⃣ 실제 조리 단계
 
 💡 진짜 포인트
-핵심 재료/소스를 언제, 어떻게 넣어야 좋은지 사람이 직접 알려주는 팁처럼 1~2문장으로 쓴다.
+원문에 실제 나온 핵심 팁을 1~2문장으로 쓴다.
 
-짧고 자연스러운 마무리 한 줄은 원문 분위기에 맞을 때만 추가한다.
-
-[원하는 댓글 결 예시 1]
-🥑 준비재료
-✔ 아보카도 1개
-✔ 연두부 또는 순두부 1팩
-✔ 김가루 넉넉히
-
-✨ 소스
-✔ 만능간장 1큰술
-✔ 참기름 1작은술
-
-👩🏻‍🍳 만드는 방법
-1️⃣ 두부는 물기를 빼고 먹기 좋게 썰어준다.
-2️⃣ 아보카도는 얇게 썰어 두부 사이사이에 끼워준다.
-3️⃣ 김가루를 넉넉하게 뿌려준다.
-4️⃣ 만능간장, 참기름 섞어 소스를 만든다.
-5️⃣ 위에 듬뿍 뿌려주면 완성✨
-
-💡 진짜 포인트
-소스에 핵심 재료를 살짝 넣어주면 맛의 포인트가 살아나는 식으로, 원문에 실제 나온 정보만 자연스럽게 강조한다.
-
-[원하는 댓글 결 예시 2]
+[댓글 예시 - 형식만 참고]
 🥚 푸딩 계란찜 레시피
 
 ✔ 계란 4개
@@ -142,8 +117,7 @@ async function generateFromThreadsMaterial(accountId, { keyword, sourceText, aut
 여기서 중요한 게 들기름임.
 다 찐 다음 마지막에 넣어야 고소한 맛이 확 살아남.
 
-위 예시는 '문체와 구조'만 참고한다. 실제 재료/양/시간/핵심 포인트는 반드시 현재 원문 자료에 있는 값만 사용한다.
-
+위 예시는 문체와 구조만 참고하고 실제 정보는 현재 원문 자료에 있는 값만 사용한다.
 반드시 JSON만 출력한다. 형식은 {"items":[{"text":"본문","comment":"레시피 댓글"}, ...]} 이고 정확히 5개를 만든다.`
     : `${styleRules}
 생활/제품 소재다.
@@ -151,7 +125,19 @@ async function generateFromThreadsMaterial(accountId, { keyword, sourceText, aut
 원글에서 보이는 핵심 장면이나 불편, 반응을 앞에 두고 제품이나 방법은 뒤에서 자연스럽게 드러낸다.
 본문은 4~8개의 짧은 줄을 권장한다.
 1~2문장마다 빈 줄을 넣어 문단을 나눈다.
-반드시 JSON만 출력한다. 형식은 {"items":[{"text":"본문","comment":""}, ...]} 이고 정확히 5개를 만든다.`;
+
+[댓글 작성 - 반드시 작성]
+- comment를 빈 문자열로 두지 않는다.
+- 같은 작성자가 원 게시물 아래에 남긴 추가 설명/댓글이 있으면 그 정보를 최우선으로 참고한다.
+- 본문을 반복하는 감상 댓글이 아니라, 독자에게 도움이 되는 추가 정보/사용법/핵심 포인트를 2~6줄로 쓴다.
+- 작성자 추가 댓글에 구체적인 사용법, 구성, 방법, 주의점이 있으면 빠뜨리지 않는다.
+- 원문과 작성자 댓글에 없는 정보는 만들지 않는다.
+- 링크와 광고 고지문은 comment에 넣지 않는다. 제휴 링크/고지문은 별도 시스템이 붙인다.
+- 추가 정보가 거의 없더라도 원문에서 확인되는 핵심 포인트를 짧게 정리해서 comment를 반드시 만든다.
+- '재료 · 만드는 법 · 추가 설명이 여기에 들어갑니다' 같은 placeholder 문구는 절대 출력하지 않는다.
+- 음슴체는 사용하지 않는다.
+
+반드시 JSON만 출력한다. 형식은 {"items":[{"text":"본문","comment":"추가 설명 댓글"}, ...]} 이고 정확히 5개를 만든다.`;
 
   const user = `키워드: ${String(keyword || '').trim()}
 
@@ -162,17 +148,16 @@ ${String(sourceText || '').trim().slice(0, 5000)}
 ${String(authorReplies || '').trim().slice(0, 5000) || '(추가 설명 없음)'}
 
 A와 B에 실제로 존재하는 정보만 사실로 사용할 것.
-특히 레시피라면 A와 B 전체를 읽고 재료, 계량, 소스, 조리 순서, 핵심 포인트를 comment에 최대한 빠짐없이 반영할 것.
-comment는 감상문이 아니라 저장해서 바로 따라 할 수 있는 완성형 레시피로 작성할 것.
-원문에서 특정 재료를 맛의 핵심/포인트로 강조했다면 comment 마지막의 '💡 진짜 포인트'에서 그 재료를 자연스럽게 한 번 더 강조할 것.
+레시피로 판단되면 A와 B 전체를 읽고 재료, 계량, 소스, 조리 순서, 핵심 포인트를 comment에 최대한 빠짐없이 반영할 것.
+일반 상품/생활 소재여도 comment를 비우지 말고 B의 추가 설명을 우선 반영해 유용한 후속 댓글을 작성할 것.
 원문에 없는 재료, 계량, 효능, 체중 변화, 경험은 절대 추가하지 말 것.
 본문은 원글의 말투 결/문장 길이/템포를 참고해서 Threads스럽게 새로 쓰되 1~2문장마다 빈 줄을 넣어 읽기 좋게 만들 것.
-comment도 제목/재료/소스/조리/진짜 포인트 사이에 빈 줄을 넣어서 한 덩어리로 붙여 쓰지 말 것.`;
+comment도 한 덩어리로 붙이지 말고 읽기 쉽게 줄을 나눌 것.`;
 
   const res = await axios.post('https://api.openai.com/v1/chat/completions', {
     model: 'gpt-4o-mini',
-    temperature: isRecipe ? 0.22 : 0.88,
-    max_tokens: isRecipe ? 4800 : 2600,
+    temperature: isRecipe ? 0.22 : 0.78,
+    max_tokens: isRecipe ? 4800 : 3200,
     response_format: { type: 'json_object' },
     messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
   }, { headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, timeout: 45000 });
@@ -184,7 +169,19 @@ comment도 제목/재료/소스/조리/진짜 포인트 사이에 빈 줄을 넣
     ? parsed.items.map(x => ({ text: String(x?.text || '').trim(), comment: String(x?.comment || '').trim() })).filter(x => x.text).slice(0, 5)
     : [];
   if (!items.length) throw new Error('AI 글 생성 결과를 읽지 못했습니다.');
-  return { items, texts: items.map(x => x.text), comments: items.map(x => x.comment || '') };
+
+  // 모든 소재는 후속 댓글을 가져야 한다. 모델이 비운 경우에는 원문/작성자 댓글의
+  // 확인 가능한 내용만 사용해 짧은 fallback 댓글을 만든다.
+  const fallbackSource = String(authorReplies || sourceText || '').replace(/\s+/g, ' ').trim();
+  for (const item of items) {
+    if (!item.comment) {
+      item.comment = fallbackSource
+        ? fallbackSource.slice(0, 420)
+        : '원문에서 확인되는 추가 정보가 없어 본문 내용만 참고해주세요.';
+    }
+  }
+
+  return { mode: isRecipe ? 'recipe' : 'product', items, texts: items.map(x => x.text), comments: items.map(x => x.comment) };
 }
 
 module.exports = { generateFromThreadsMaterial };
