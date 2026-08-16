@@ -4,45 +4,45 @@ const axios = require('axios');
 // 레시피 자동화에서 쓰는 메뉴는 검색용 영문명 + 검증 토큰을 명시적으로 관리한다.
 // 정확한 사진을 못 찾으면 다른 'Korean food' 사진으로 대체하지 않고 빈 배열을 반환한다.
 const FOOD_QUERY_MAP = {
-  '비빔국수': { search: 'bibim guksu Korean spicy noodles', tokens: ['bibim', 'guksu', 'spicy noodles'] },
-  '김치찌개': { search: 'kimchi jjigae Korean kimchi stew', tokens: ['kimchi', 'jjigae', 'stew'] },
-  '된장찌개': { search: 'doenjang jjigae Korean soybean paste stew', tokens: ['doenjang', 'soybean', 'stew'] },
-  '제육볶음': { search: 'jeyuk bokkeum Korean spicy pork', tokens: ['jeyuk', 'spicy pork', 'pork'] },
-  '닭볶음탕': { search: 'dakbokkeumtang Korean spicy braised chicken', tokens: ['dakbokkeumtang', 'braised chicken', 'chicken'] },
-  '떡볶이': { search: 'tteokbokki Korean spicy rice cakes', tokens: ['tteokbokki', 'rice cake'] },
-  '계란볶음밥': { search: 'egg fried rice', tokens: ['egg', 'fried rice'] },
-  '김치볶음밥': { search: 'kimchi fried rice', tokens: ['kimchi', 'fried rice'] },
-  '오징어볶음': { search: 'ojingeo bokkeum Korean spicy squid', tokens: ['squid', 'ojingeo'] },
-  '두부조림': { search: 'dubu jorim Korean braised tofu', tokens: ['tofu', 'dubu'] },
-  '감자조림': { search: 'Korean braised potatoes gamja jorim', tokens: ['potato', 'gamja'] },
-  '어묵볶음': { search: 'Korean stir fried fish cake eomuk', tokens: ['fish cake', 'eomuk'] },
-  '진미채볶음': { search: 'Korean spicy dried squid strips', tokens: ['dried squid', 'squid'] },
-  '멸치볶음': { search: 'Korean stir fried anchovies myeolchi bokkeum', tokens: ['anchov', 'myeolchi'] },
-  '양념계란': { search: 'Korean marinated eggs', tokens: ['egg', 'marinated'] },
-  '계란장': { search: 'Korean soy marinated eggs mayak eggs', tokens: ['egg', 'marinated'] },
-  '콩나물국': { search: 'Korean bean sprout soup kongnamul guk', tokens: ['bean sprout', 'soup'] },
-  '순두부찌개': { search: 'sundubu jjigae Korean soft tofu stew', tokens: ['sundubu', 'tofu', 'stew'] },
-  '냉면': { search: 'naengmyeon Korean cold noodles', tokens: ['naengmyeon', 'cold noodle'] },
-  '비빔면': { search: 'Korean spicy mixed noodles bibim myeon', tokens: ['spicy noodle', 'mixed noodle', 'bibim'] },
-  '파스타': { search: 'pasta dish', tokens: ['pasta', 'spaghetti', 'noodle'] },
-  '짜파게티 응용 레시피': { search: 'jjapagetti black bean noodles', tokens: ['black bean noodle', 'jjapagetti', 'jajang'] },
-  '라면 맛있게 끓이는 법': { search: 'Korean ramyeon ramen noodles', tokens: ['ramen', 'ramyeon', 'noodle'] },
-  '간장계란밥': { search: 'Korean egg rice soy sauce', tokens: ['egg', 'rice'] },
-  '닭갈비': { search: 'dakgalbi Korean spicy chicken', tokens: ['dakgalbi', 'spicy chicken', 'chicken'] },
-  '고추장찌개': { search: 'Korean gochujang stew', tokens: ['gochujang', 'stew'] },
-  '부대찌개': { search: 'budae jjigae Korean army stew', tokens: ['budae', 'army stew'] },
-  '골뱅이무침': { search: 'golbaengi muchim Korean spicy whelk salad', tokens: ['golbaengi', 'whelk', 'sea snail'] },
-  '메밀국수': { search: 'Korean buckwheat noodles memil guksu', tokens: ['buckwheat', 'noodle', 'memil'] },
-  '잔치국수': { search: 'janchi guksu Korean noodle soup', tokens: ['janchi', 'noodle soup', 'noodle'] },
+  '비빔국수': { search: 'bibim guksu Korean spicy noodles', tokens: ['bibim guksu', 'spicy noodles'] },
+  '김치찌개': { search: 'kimchi jjigae Korean kimchi stew', tokens: ['kimchi jjigae', 'kimchi stew'] },
+  '된장찌개': { search: 'doenjang jjigae Korean soybean paste stew', tokens: ['doenjang jjigae', 'soybean paste stew'] },
+  '제육볶음': { search: 'jeyuk bokkeum Korean spicy pork', tokens: ['jeyuk bokkeum', 'spicy pork'] },
+  '닭볶음탕': { search: 'dakbokkeumtang Korean spicy braised chicken', tokens: ['dakbokkeumtang', 'braised chicken'] },
+  '떡볶이': { search: 'tteokbokki Korean spicy rice cakes', tokens: ['tteokbokki', 'spicy rice cakes'] },
+  '계란볶음밥': { search: 'egg fried rice', tokens: ['egg fried rice'] },
+  '김치볶음밥': { search: 'kimchi fried rice', tokens: ['kimchi fried rice'] },
+  '오징어볶음': { search: 'ojingeo bokkeum Korean spicy squid', tokens: ['ojingeo bokkeum', 'spicy squid'] },
+  '두부조림': { search: 'dubu jorim Korean braised tofu', tokens: ['dubu jorim', 'braised tofu'] },
+  '감자조림': { search: 'Korean braised potatoes gamja jorim', tokens: ['braised potatoes', 'gamja jorim'] },
+  '어묵볶음': { search: 'Korean stir fried fish cake eomuk', tokens: ['stir fried fish cake', 'eomuk'] },
+  '진미채볶음': { search: 'Korean spicy dried squid strips', tokens: ['dried squid strips', 'spicy dried squid'] },
+  '멸치볶음': { search: 'Korean stir fried anchovies myeolchi bokkeum', tokens: ['stir fried anchovies', 'myeolchi bokkeum'] },
+  '양념계란': { search: 'Korean marinated eggs', tokens: ['marinated eggs'] },
+  '계란장': { search: 'Korean soy marinated eggs mayak eggs', tokens: ['soy marinated eggs', 'mayak eggs'] },
+  '콩나물국': { search: 'Korean bean sprout soup kongnamul guk', tokens: ['bean sprout soup', 'kongnamul guk'] },
+  '순두부찌개': { search: 'sundubu jjigae Korean soft tofu stew', tokens: ['sundubu jjigae', 'soft tofu stew'] },
+  '냉면': { search: 'naengmyeon Korean cold noodles', tokens: ['naengmyeon', 'cold noodles'] },
+  '비빔면': { search: 'Korean spicy mixed noodles bibim myeon', tokens: ['spicy mixed noodles', 'bibim myeon'] },
+  '파스타': { search: 'pasta dish', tokens: ['pasta', 'spaghetti'] },
+  '짜파게티 응용 레시피': { search: 'jjapagetti black bean noodles', tokens: ['black bean noodles', 'jjapagetti'] },
+  '라면 맛있게 끓이는 법': { search: 'Korean ramyeon ramen noodles', tokens: ['ramyeon', 'ramen noodles'] },
+  '간장계란밥': { search: 'Korean egg rice soy sauce', tokens: ['egg rice', 'soy sauce rice'] },
+  '닭갈비': { search: 'dakgalbi Korean spicy chicken', tokens: ['dakgalbi', 'spicy chicken'] },
+  '고추장찌개': { search: 'Korean gochujang stew', tokens: ['gochujang stew'] },
+  '부대찌개': { search: 'budae jjigae Korean army stew', tokens: ['budae jjigae', 'army stew'] },
+  '골뱅이무침': { search: 'golbaengi muchim Korean spicy whelk salad', tokens: ['golbaengi muchim', 'whelk salad'] },
+  '메밀국수': { search: 'Korean buckwheat noodles memil guksu', tokens: ['buckwheat noodles', 'memil guksu'] },
+  '잔치국수': { search: 'janchi guksu Korean noodle soup', tokens: ['janchi guksu', 'noodle soup'] },
   '비빔밥': { search: 'bibimbap Korean mixed rice', tokens: ['bibimbap', 'mixed rice'] },
-  '카레': { search: 'Korean curry rice', tokens: ['curry', 'rice'] },
-  '마파두부': { search: 'mapo tofu', tokens: ['mapo', 'tofu'] },
-  '무생채': { search: 'Korean spicy radish salad musaengchae', tokens: ['radish', 'musaengchae'] },
-  '오이무침': { search: 'Korean spicy cucumber salad oi muchim', tokens: ['cucumber', 'oi muchim'] },
-  '깻잎무침': { search: 'Korean perilla leaf side dish', tokens: ['perilla', 'leaf'] },
-  '두부강정': { search: 'Korean crispy glazed tofu', tokens: ['tofu'] },
-  '감자채볶음': { search: 'Korean stir fried shredded potato', tokens: ['potato'] },
-  '콩나물무침': { search: 'Korean seasoned bean sprouts', tokens: ['bean sprout'] },
+  '카레': { search: 'Korean curry rice', tokens: ['curry rice'] },
+  '마파두부': { search: 'mapo tofu', tokens: ['mapo tofu'] },
+  '무생채': { search: 'Korean spicy radish salad musaengchae', tokens: ['spicy radish salad', 'musaengchae'] },
+  '오이무침': { search: 'Korean spicy cucumber salad oi muchim', tokens: ['spicy cucumber salad', 'oi muchim'] },
+  '깻잎무침': { search: 'Korean perilla leaf side dish', tokens: ['perilla leaf'] },
+  '두부강정': { search: 'crispy fried tofu glazed tofu', tokens: ['crispy tofu', 'fried tofu', 'glazed tofu'] },
+  '감자채볶음': { search: 'Korean stir fried shredded potato', tokens: ['stir fried potato', 'shredded potato'] },
+  '콩나물무침': { search: 'Korean seasoned bean sprouts', tokens: ['seasoned bean sprouts'] },
 };
 
 function normalizeDishQuery(query) {
@@ -88,7 +88,6 @@ function textMatchesDish(photo, resolved) {
 }
 
 function visualSignature(photo) {
-  // 같은 촬영 세트/거의 같은 사진이 연속으로 들어가는 것을 조금 줄이기 위한 단순 서명.
   const alt = String(photo?.alt || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const photographer = String(photo?.photographer || '').toLowerCase().trim();
   return `${photographer}|${alt}`;
@@ -125,6 +124,8 @@ async function searchFoodPhotos({ apiKey, query, count = 3 }) {
     seenIds.add(photo.id);
 
     // 검색 결과라고 무조건 쓰지 않고, Pexels alt/URL에도 메뉴 특징이 확인되는 사진만 통과.
+    // 특히 tofu/pork/chicken처럼 너무 넓은 단어 하나만으로는 통과하지 않도록
+    // FOOD_QUERY_MAP의 검증 토큰을 구체적인 2단어 이상 표현 위주로 유지한다.
     if (!textMatchesDish(photo, resolved)) continue;
 
     const signature = visualSignature(photo);
