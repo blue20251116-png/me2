@@ -14,8 +14,22 @@ const RECIPE_TOPICS = [
   '무생채', '오이무침', '깻잎무침', '두부강정', '감자채볶음', '콩나물무침',
 ];
 
-const POST_STYLES = ['secret', 'family', 'viral', 'restaurant', 'simple'];
-const SECRET_LABELS = ['비밀 소스', '핵심 재료', '맛 잡아주는 재료', '이것 하나', '포인트 재료'];
+const POST_STYLES = ['problem', 'difference', 'simple', 'ratio', 'ingredient', 'leftover'];
+const SECRET_LABELS = [
+  '여기서 포인트',
+  '마지막에 넣은 재료',
+  '맛 잡을 때 넣은 건',
+  '양념에서 중요한 건',
+  '국물 맛 잡는 재료',
+  '한 끗 차이 나는 재료',
+];
+const LINK_LEADS = [
+  '찾기 쉽게 아래에 링크 붙여둘게👇',
+  '내가 고른 재료는 아래에 붙여둘게👇',
+  '같은 재료 찾는 사람 있을까 봐 아래에 남겨둘게👇',
+  '재료 이름 헷갈릴 수 있어서 링크도 같이 둘게👇',
+  '이 재료 찾기 귀찮으면 아래 링크 보면 돼👇',
+];
 
 function getOpenAIKey(accountId) {
   const account = getAccount(accountId);
@@ -101,9 +115,7 @@ async function findRecipePhotos(recipe, topic) {
     try {
       const photos = await searchFoodPhotos({ apiKey, query, count: 2 });
       if (photos.length) {
-        console.log(
-          `[Recipe] Pexels 요리사진 ${photos.length}장 선택 — query="${query}"`
-        );
+        console.log(`[Recipe] Pexels 요리사진 ${photos.length}장 선택 — query="${query}"`);
         return photos.slice(0, 2);
       }
     } catch (err) {
@@ -169,15 +181,17 @@ async function generateRecipe(accountId, topic, video) {
 목표:
 - 본문은 3~6줄 정도의 짧은 생활형 후킹으로 만든다.
 - 첫 댓글에는 실제로 따라 할 수 있을 정도로 자세한 계량과 순서를 제공한다.
-- 레시피 안에서 쿠팡 검색에 자연스럽게 연결할 수 있는 비밀 소스/핵심 재료 하나를 정한다.
+- 레시피 안에서 쿠팡 검색에 자연스럽게 연결할 수 있는 핵심 재료 하나를 정한다.
 - 핵심 재료는 단순히 흔한 기본 재료보다, 실제로 따로 사두면 요리가 편해지는 상품을 우선한다.
 
 문체:
 - 사람이 직접 올린 것처럼 짧고 자연스러운 반말.
-- 지나치게 매끈한 광고문구 금지.
-- "강추", "필수템", "구매하세요", "인생템" 금지.
 - 음슴체 금지.
 - ㅋㅋ는 필요할 때 0~1회.
+- 광고 카피처럼 시작하지 않는다.
+- "이제 집에서", "간편하게 만들어보자", "요즘 이런 조합이 자주 보여서", "맛집 부럽지 않은", "강추", "필수템", "구매하세요", "인생템" 같은 표현 금지.
+- 실제 경험처럼 보이기 위해 가족, 지인, 식당 사장, 전문가에게 들었다는 설정을 지어내지 않는다.
+- 직접 먹어봤다/해봤다는 사실도 입력 근거가 없으면 지어내지 않는다.
 
 정확성:
 - 영상 제목/설명에 실제 재료나 계량이 있으면 우선 참고한다.
@@ -201,7 +215,7 @@ JSON 형식:
 {
   "dishName":"요리명",
   "servings":"1인분",
-  "hook":"본문에서 사용할 짧은 핵심 문장",
+  "hook":"짧고 자연스러운 한 문장",
   "tastePoint":"맛 포인트",
   "ingredients":[{"name":"고추장","amount":"2스푼"}],
   "optional":["오이","계란"],
@@ -220,7 +234,8 @@ ${video?.title || '없음'}
 ${video?.description || '없음'}
 
 위 정보를 참고해 실제 따라 하기 좋은 레시피 JSON을 만들어줘.
-레시피의 자연스러움을 해치지 않는 범위에서, 핵심 재료는 쿠팡에서 따로 검색해서 살 이유가 있는 재료를 우선해.`;
+본문용 hook은 광고 문장보다 사람들이 실제로 Threads에 적을 법한 짧은 문장으로 써줘.
+핵심 재료는 레시피를 해치지 않는 범위에서 쿠팡에서 따로 검색해서 살 이유가 있는 재료를 우선해.`;
 
   const data = await callOpenAI(accountId, system, user, 1600);
   return sanitizeRecipeJson(data, topic);
@@ -228,14 +243,15 @@ ${video?.description || '없음'}
 
 function buildRecipePostText(recipe) {
   const style = pickOne(POST_STYLES);
-  const hook = recipe.hook || `${recipe.dishName} 이 조합 생각보다 괜찮더라`;
+  const hook = recipe.hook || `${recipe.dishName}은 양념 비율 하나만 달라도 맛이 꽤 달라지더라`;
 
   const variants = {
-    secret: `${hook}\n\n${recipe.dishName} 별거 안 들어가는데\n마지막 재료 하나에서 맛 방향이 꽤 갈리더라.\n\n정확한 계량이랑 포인트 재료는 댓글에 적어둘게.`,
-    family: `${recipe.dishName} 레시피 찾아보다가\n이 비율이 제일 따라 하기 쉽더라.\n\n재료 몇 개만 맞추면 생각보다 간단해.\n${recipe.servings} 기준은 댓글에 적어둘게.`,
-    viral: `${hook}\n\n요즘 이런 조합이 자주 보여서 레시피만 깔끔하게 정리해봤어.\n핵심은 양념 비율이랑 마지막 재료 하나더라.\n\n정확한 계량은 댓글에 적어둘게.`,
-    restaurant: `${recipe.dishName} 집에서 만들 때\n양념 비율만 맞춰도 맛이 꽤 달라지는데\n마지막 한 가지가 포인트더라.\n\n${recipe.servings} 레시피 댓글에 남겨둘게.`,
-    simple: `${hook}\n\n복잡한 레시피 말고\n딱 따라 하기 쉽게 계량만 다시 정리했어.\n포인트 재료까지 댓글에 같이 적어둘게.`,
+    problem: `${recipe.dishName} 만들 때\n똑같이 재료 넣는데도 맛이 매번 조금씩 다르잖아.\n\n양념 비율이랑 마지막 재료 하나만 정리해두면 훨씬 편해.\n${recipe.servings} 기준은 댓글에 적어둘게.`,
+    difference: `${hook}\n\n재료를 많이 넣는 것보다\n양념 비율이랑 마지막 한 가지에서 맛 차이가 꽤 나더라.\n\n정확한 계량은 댓글에 적어둘게.`,
+    simple: `${recipe.dishName} 복잡하게 할 필요 없더라.\n\n재료 몇 개랑 양념 비율만 맞추면 되고\n마지막에 넣는 재료 하나가 포인트야.\n\n${recipe.servings} 레시피는 댓글에 적어둘게.`,
+    ratio: `${recipe.dishName}은 진짜 양념 비율이 중요하더라.\n\n대충 넣으면 매번 맛이 달라져서\n이번엔 ${recipe.servings} 기준으로 딱 정리해봤어.\n\n계량이랑 포인트 재료는 댓글에 적어둘게.`,
+    ingredient: `${recipe.dishName} 만들 때\n재료보다 마지막에 뭘 넣느냐가 은근 중요하더라.\n\n많이 넣을 필요도 없고\n맛 방향만 잡아주는 정도면 돼.\n\n정확한 양은 댓글에 적어둘게.`,
+    leftover: `${recipe.dishName} 해먹고 싶을 때\n재료 이것저것 많이 살 필요는 없더라.\n\n있는 재료에 양념 비율만 맞추고\n포인트 하나만 추가하면 돼.\n\n레시피는 댓글에 적어둘게.`,
   };
 
   return variants[style];
@@ -243,14 +259,14 @@ function buildRecipePostText(recipe) {
 
 function buildRecipeCommentText(recipe) {
   const label = pickOne(SECRET_LABELS);
+  const linkLead = pickOne(LINK_LEADS);
   const main = recipe.ingredients.map((x) => `${x.name} ${x.amount}`).join(', ');
   const optional = recipe.optional.length
-    ? `\n\n✔ 있으면 좋은 재료\n${recipe.optional.join(', ')}`
+    ? `\n\n있으면 좋은 재료: ${recipe.optional.join(', ')}`
     : '';
   const steps = recipe.steps.map((x, i) => `${i + 1}. ${x}`).join('\n');
-  const reason = recipe.secretReason ? `\n${recipe.secretReason}` : '';
 
-  let text = `✅ ${recipe.dishName} (${recipe.servings})\n\n🛒 재료\n${main}${optional}\n\n♦ ${label}\n${recipe.secretIngredient}${reason}\n\n🥢 만드는 법\n${steps}\n\n${label} 찾기 쉽게 아래에 링크 붙여둘게👇`;
+  let text = `✅ ${recipe.dishName} (${recipe.servings})\n재료: ${main}${optional}\n\n♦ ${label}: ${recipe.secretIngredient}\n${steps}\n\n${linkLead}`;
 
   if (text.length > 240) {
     const compactIngredients = recipe.ingredients
@@ -262,11 +278,11 @@ function buildRecipeCommentText(recipe) {
       .map((x, i) => `${i + 1}. ${x}`)
       .join('\n');
 
-    text = `✅ ${recipe.dishName} (${recipe.servings})\n재료: ${compactIngredients}\n♦ ${label}: ${recipe.secretIngredient}\n${compactSteps}\n${label} 링크는 아래에👇`;
+    text = `✅ ${recipe.dishName} (${recipe.servings})\n재료: ${compactIngredients}\n♦ ${label}: ${recipe.secretIngredient}\n${compactSteps}\n${linkLead}`;
   }
 
   if (text.length > 240) {
-    text = `${text.slice(0, 232).trimEnd()}…\n링크는 아래에👇`;
+    text = `${text.slice(0, 224).trimEnd()}…\n${linkLead}`;
   }
 
   return text;
