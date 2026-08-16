@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>영상 음소거 · 컷 편집</title>
+<link rel="stylesheet" href="style.css" />
+<style>
+  body{background:#f6f7f9}.editor-wrap{max-width:720px;margin:0 auto;padding:18px}.editor-card{background:#fff;border:1px solid #e8e8e8;border-radius:16px;padding:18px;margin-bottom:14px}.editor-card h1{font-size:20px;margin:0 0 8px}.editor-card h2{font-size:16px;margin:0 0 10px}.editor-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.editor-card input[type="text"],.editor-card input[type="number"]{width:100%;box-sizing:border-box;padding:11px;border:1px solid #ddd;border-radius:10px}.editor-card button{width:100%;padding:12px;border:0;border-radius:10px;font-weight:700;cursor:pointer}.primary{background:#111;color:#fff}.secondary{background:#eee;color:#222}.editor-video{width:100%;max-height:520px;background:#000;border-radius:12px;margin-top:12px}.status{font-size:13px;margin-top:9px;white-space:pre-wrap}.ok{color:#14804a}.err{color:#d33}.muterow{display:flex;gap:8px;align-items:center;margin:12px 0}.hint{font-size:12px;color:#777;line-height:1.5}.back{display:inline-block;margin-bottom:12px;color:#555;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="editor-wrap">
+<a class="back" href="/">← 대시보드로</a>
+<div class="editor-card">
+  <h1>🎬 영상 음소거 · 컷 편집</h1>
+  <p class="hint">직접 업로드했거나 샤오홍슈에서 가져온 영상의 파일명을 기준으로 편집합니다. 시작/끝 시간을 초 단위로 지정하고 소리를 제거할 수 있습니다.</p>
+</div>
+<div class="editor-card">
+  <h2>편집할 영상</h2>
+  <input id="filename" type="text" placeholder="예: xhs-123456.mp4 또는 업로드된 영상 파일명" />
+  <div class="editor-row" style="margin-top:10px">
+    <label>시작(초)<input id="start" type="number" min="0" step="0.1" value="0" /></label>
+    <label>끝(초)<input id="end" type="number" min="0" step="0.1" placeholder="비우면 영상 끝까지" /></label>
+  </div>
+  <label class="muterow"><input id="mute" type="checkbox" checked /> 원본 소리 제거</label>
+  <button id="run" class="primary">편집본 만들기</button>
+  <p id="status" class="status"></p>
+</div>
+<div id="resultCard" class="editor-card" style="display:none">
+  <h2>편집 결과</h2>
+  <video id="preview" class="editor-video" controls></video>
+  <p id="resultInfo" class="hint"></p>
+  <button id="useBtn" class="secondary">이 영상 URL 복사</button>
+</div>
+</div>
+<script>
+let activeAccountId = Number(localStorage.getItem('activeAccountId')) || null;
+let resultUrl='';
+function apiFetch(url,options={}){const sep=url.includes('?')?'&':'?';return fetch(activeAccountId?`${url}${sep}accountId=${activeAccountId}`:url,options)}
+document.getElementById('run').addEventListener('click',async()=>{
+  const btn=document.getElementById('run');const status=document.getElementById('status');
+  const filename=document.getElementById('filename').value.trim();
+  if(!activeAccountId){status.textContent='대시보드에서 계정을 먼저 선택해주세요.';status.className='status err';return}
+  if(!filename){status.textContent='영상 파일명을 입력해주세요.';status.className='status err';return}
+  btn.disabled=true;status.textContent='편집 중…';status.className='status';
+  try{
+    const end=document.getElementById('end').value;
+    const res=await apiFetch('/api/video/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename,start:Number(document.getElementById('start').value||0),end:end===''?null:Number(end),mute:document.getElementById('mute').checked})});
+    const data=await res.json();if(!res.ok)throw new Error(data.error||'편집 실패');
+    resultUrl=data.url;document.getElementById('preview').src=data.url;document.getElementById('resultInfo').textContent=`${data.start.toFixed(1)}초 ~ ${data.end.toFixed(1)}초 · ${data.duration.toFixed(1)}초 · ${data.muted?'음소거':'원본 소리 유지'} · 파일명: ${data.filename}`;document.getElementById('resultCard').style.display='block';status.textContent='편집 완료';status.className='status ok';
+  }catch(e){status.textContent='실패: '+e.message;status.className='status err'}finally{btn.disabled=false}
+});
+document.getElementById('useBtn').addEventListener('click',async()=>{if(!resultUrl)return;await navigator.clipboard.writeText(resultUrl);document.getElementById('useBtn').textContent='복사 완료';setTimeout(()=>document.getElementById('useBtn').textContent='이 영상 URL 복사',1200)});
+</script>
+</body>
+</html>
