@@ -1,4 +1,29 @@
 (() => {
+  // 글 예약 화면은 '소재 찾기 → 본문/댓글 확인 → 예약' 흐름만 남긴다.
+  // 기존 기능 코드는 다른 스크립트가 참조할 수 있으므로 DOM을 삭제하지 않고 화면에서만 숨긴다.
+  function hideComposeClutter() {
+    const hide = el => { if (el) el.style.display = 'none'; };
+
+    // 독립 카드: AI 자동완성 / 관련 쇼츠 찾기
+    document.querySelectorAll('#tab-compose .panel').forEach(card => {
+      const title = String(card.querySelector('h2')?.textContent || '').trim();
+      if (title === 'AI 자동완성' || title.includes('관련 쇼츠 찾기')) hide(card);
+    });
+
+    // 완전 자동발행 카드 안의 소스/영상 옵션은 숨기고 시작/상태만 유지
+    hide(document.getElementById('autopilotYoutubeToggle')?.closest('label'));
+    hide(document.getElementById('autopilotYoutubeOrderSelect')?.closest('label'));
+    hide(document.getElementById('autopilotFrameMediaToggle')?.closest('label'));
+
+    // 새 글 예약 하단의 AI 상황/라이프스타일 이미지 생성 UI 제거
+    hide(document.getElementById('lifestylePanel'));
+  }
+
+  hideComposeClutter();
+  // 다른 스크립트가 초기 렌더 과정에서 다시 표시해도 최종적으로 숨김 상태를 보장한다.
+  requestAnimationFrame(hideComposeClutter);
+  setTimeout(hideComposeClutter, 250);
+
   const form = document.getElementById('composeForm');
   if (!form) return;
   const panel = document.getElementById('threadsMaterialPanel');
