@@ -1,6 +1,7 @@
-const { getSystemApiSettings } = require('./db');
+const { getSystemApiSettings, getAccount } = require('./db');
 const youtubeApi = require('./youtubeApi');
 const { suggestYoutubeSearchKeywords } = require('./aiCaption');
+const { cropYoutubeThumbnail } = require('./youtubeThumbnailCrop');
 
 // 완전자동화가 상품과 관련된 YouTube 콘텐츠를 찾아 AI 글 생성 소재 1개를 고른다.
 // 어떤 오류가 발생해도 자동화 전체를 막지 않고 null로 폴백한다.
@@ -88,11 +89,37 @@ async function findAutopilotYoutubeSource({ accountId, productName, order = 'rel
 
     console.log(`${logPrefix} 콘텐츠 선택: ${best.title} (score=${bestScore.toFixed(1)})`);
 
+    let thumbnail = best.thumbnail || '';
+
+    // YouTube의 기본 16:9 썸네일은 Shorts 원본 좌우에 어두운 확장 영역이 들어가는 경우가 많다.
+    // 자동발행에서는 중앙의 세로 쇼츠 영역만 9:16으로 잘라 첫 이미지로 사용한다.
+    // 크롭 실패(FFmpeg 없음/네트워크 오류/로컬 파일 오류)는 절대 자동발행을 막지 않고
+    // 기존 YouTube 원본 썸네일을 그대로 사용한다.
+    if (thumbnail) {
+      try {
+        const account = getAccount(accountId);
+        if (account) {
+          const croppedThumbnail = await cropYoutubeThumbnail({
+            account,
+            thumbnailUrl: thumbnail,
+            videoId: best.id,
+          });
+          if (croppedThumbnail) {
+            thumbnail = croppedThumbnail;
+            console.log(`${logPrefix} 썸네일 중앙 세로 크롭 완료`);
+          }
+        }
+      } catch (err) {
+        console.log(`${logPrefix} 썸네일 크롭 실패 — 원본 썸네일 사용: ${err.message}`);
+      }
+    }
+
     return {
       id: best.id,
       title: best.title,
       description: best.description,
-      thumbnail: best.thumbnail || '',
+      thumbnail,
+      originalThumbnail: best.thumbnail || '',
       channelTitle: best.channelTitle,
       url: best.url,
       views: best.views,
