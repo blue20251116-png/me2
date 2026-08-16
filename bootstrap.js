@@ -22,8 +22,10 @@ function publicBaseUrl(req,account){if(account?.threads_redirect_uri){try{const 
 function ownVideoPath(accountId,filename){return path.join(uploadsDir,'videos',String(accountId),path.basename(String(filename||'')));}
 function normalizeMediaItems(items){if(!Array.isArray(items))return[];const out=[];for(const item of items){const type=String(item?.type||'').toUpperCase();const url=String(item?.url||'').trim();if(!url||!['IMAGE','VIDEO'].includes(type))continue;if(!out.some(x=>x.type===type&&x.url===url))out.push({type,url});if(out.length>=10)break;}return out;}
 function mediaBundleSentinel(items){return `__THREADS_MEDIA_BUNDLE__${encodeURIComponent(JSON.stringify(items))}`;}
-// 텍스트 링크 판별은 '실제 링크 형태'만 본다.
-// 예전의 일반 도메인 정규식은 Threads 아이디/문장 속 점(.)까지 링크로 오판할 수 있었다.
+// 검색 목록 단계에서만 텍스트 링크를 보조 판별한다.
+// 실제 DOM의 외부 a[href] 필터는 benchmarkAccounts.js가 담당한다.
+// 상세 스크래핑 결과에는 Threads UI 내부 텍스트가 섞일 수 있으므로
+// material-write 단계에서 텍스트만 보고 다시 링크 판정을 하지 않는다.
 function containsExternalLink(text){
   const t=String(text||'');
   return /(?:https?:\/\/|www\.)\S+/i.test(t)
@@ -66,7 +68,8 @@ appInstance.post('/api/threads/material-write',requireOwnedAccount,async(req,res
 
     if(!detailedText&&keyword)detailedText=keyword;
     if(!detailedText)return res.status(422).json({error:'소재 본문을 확인하지 못했습니다. 다른 소재를 선택해주세요.'});
-    if(containsExternalLink(detailedText))return res.status(422).json({error:'링크가 포함된 게시물은 소재로 사용할 수 없습니다. 다른 소재를 선택해주세요.'});
+    // 링크 유무는 이미 material-search에서 DOM 기준으로 검증 완료한다.
+    // 상세 텍스트에는 Threads UI 내부 문자열/작성자명이 섞여 오탐이 생길 수 있어 재검사하지 않는다.
     if(!sourceMedia.hasVideo&&!sourceMedia.images.length&&!sourceMedia.videos.length)return res.status(422).json({error:'사진 또는 영상이 없는 게시물은 소재로 사용할 수 없습니다.'});
 
     const generated=await withTimeout(generateFromThreadsMaterial(req.account.id,{keyword,sourceText:detailedText,authorReplies,mode}),22000,'AI 글 작성');
