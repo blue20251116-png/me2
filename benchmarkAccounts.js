@@ -84,20 +84,42 @@ async function collectProfilePostsWithContext(context, username, { limit = 2 } =
     await page.mouse.wheel(0, 850);
     await page.waitForTimeout(350);
     const raw = await page.evaluate(({ username, limit }) => {
+      const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
+      const canonical = href => {
+        try { const u = new URL(href, location.origin); return `${u.origin}${u.pathname}`; }
+        catch { return String(href || '').split(/[?#]/)[0]; }
+      };
+      const pickRoot = a => {
+        const target = canonical(a.href || '');
+        const article = a.closest('article,[role="article"]');
+        if (article) {
+          const links = [...article.querySelectorAll('a[href*="/post/"]')].map(x => canonical(x.href));
+          if (links.length && links.every(x => x === target)) return article;
+        }
+        let node = a.parentElement;
+        let best = node;
+        for (let i = 0; i < 8 && node; i++, node = node.parentElement) {
+          const links = [...node.querySelectorAll('a[href*="/post/"]')].map(x => canonical(x.href));
+          const uniq = [...new Set(links)];
+          if (uniq.length === 1 && uniq[0] === target && clean(node.innerText).length >= 8) best = node;
+          if (uniq.length > 1) break;
+        }
+        return best || a.parentElement;
+      };
       const out = [], seen = new Set();
       for (const a of document.querySelectorAll('a[href*="/post/"]')) {
-        const href = a.href || '';
+        const href = canonical(a.href || '');
         if (!href || seen.has(href)) continue;
+        const path = (() => { try { return new URL(href).pathname; } catch { return ''; } })();
+        if (!/\/post\//i.test(path)) continue;
         seen.add(href);
-        let root = a;
-        for (let i = 0; i < 7 && root?.parentElement; i++) {
-          root = root.parentElement;
-          if ((root.innerText || '').trim().length >= 20) break;
-        }
+        const root = pickRoot(a);
         const images = [...(root?.querySelectorAll?.('img') || [])].map(x => x.src).filter(Boolean);
+        const text = clean(root?.innerText || '').slice(0, 1200);
+        if (!text) continue;
         out.push({
           url: href,
-          text: String(root?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
+          text,
           thumbnail: images[0] || '',
           imageCount: images.length,
           hasVideo: !!root?.querySelector?.('video'),
@@ -131,32 +153,67 @@ async function collectPostDetails(url, username) {
     const page = await context.newPage();
     page.setDefaultTimeout(12000);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 12000 });
-    await page.waitForTimeout(1800);
-    await page.mouse.wheel(0, 750);
+    await page.waitForTimeout(1900);
+    await page.mouse.wheel(0, 650);
     await page.waitForTimeout(450);
-    const data = await page.evaluate(({ username }) => {
+    const data = await page.evaluate(({ username, sourceUrl }) => {
       const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
-      const target = String(username || '').toLowerCase();
+      const canonical = href => {
+        try { const u = new URL(href, location.origin); return `${u.origin}${u.pathname}`; }
+        catch { return String(href || '').split(/[?#]/)[0]; }
+      };
+      const targetUrl = canonical(sourceUrl);
+      const targetUser = String(username || '').toLowerCase();
       const blocks = [...document.querySelectorAll('article,[role="article"]')];
-      if (!blocks.length) {
-        for (const a of document.querySelectorAll('a[href*="/post/"]')) {
-          let r = a;
-          for (let i = 0; i < 7 && r?.parentElement; i++) r = r.parentElement;
-          if (r && !blocks.includes(r)) blocks.push(r);
+      const fallbackBlocks = [];
+      for (const a of document.querySelectorAll('a[href*="/post/"]')) {
+        const href = canonical(a.href || '');
+        let node = a.closest('article,[role="article"]') || a.parentElement;
+        if (!node) continue;
+        if (!fallbackBlocks.includes(node)) fallbackBlocks.push(node);
+        if (href === targetUrl && !blocks.includes(node)) blocks.unshift(node);
+      }
+      const allBlocks = blocks.length ? blocks : fallbackBlocks;
+      let mainText = '';
+      const authorReplies = [];
+      for (const b of allBlocks) {
+        const text = clean(b.innerText);
+        if (!text || text.length < 2) continue;
+        const postLinks = [...b.querySelectorAll('a[href*="/post/"]')].map(a => canonical(a.href || ''));
+        const profileLinks = [...b.querySelectorAll('a[href]')].map(a => String(a.getAttribute('href') || '').toLowerCase());
+        const isAuthor = profileLinks.some(h => h.includes('/@' + targetUser)) || text.toLowerCase().startsWith(targetUser) || text.toLowerCase().includes('@' + targetUser);
+        const isMain = postLinks.includes(targetUrl);
+        if (isMain && !mainText) {
+          mainText = text.slice(0, 2200);
+          continue;
         }
+        if (isAuthor && !authorReplies.includes(text)) authorReplies.push(text.slice(0, 1800));
       }
-      const texts = [];
-      for (const b of blocks) {
-        const t = clean(b.innerText);
-        if (!t || t.length < 2) continue;
-        const links = [...b.querySelectorAll('a[href]')].map(a => a.getAttribute('href') || '');
-        const own = links.some(h => h.toLowerCase().includes('/@' + target)) || t.toLowerCase().startsWith(target) || t.toLowerCase().includes('@' + target);
-        if (own && !texts.includes(t)) texts.push(t.slice(0, 1800));
-      }
-      return { authorTexts: texts.slice(0, 8), pageText: clean(document.body?.innerText || '').slice(0, 5000) };
-    }, { username });
-    const authorTexts = (data.authorTexts || []).filter(Boolean);
-    return { sourceText: authorTexts[0] || '', authorReplies: authorTexts.slice(1), fallbackText: data.pageText || '' };
+      const metaDescription = clean(
+        document.querySelector('meta[property="og:description"]')?.content ||
+        document.querySelector('meta[name="description"]')?.content || ''
+      );
+      const metaTitle = clean(document.querySelector('meta[property="og:title"]')?.content || '');
+      return {
+        mainText,
+        authorReplies: authorReplies.slice(0, 8),
+        metaDescription,
+        metaTitle,
+        exactUrl: canonical(location.href) === targetUrl
+      };
+    }, { username, sourceUrl: url });
+
+    let sourceText = String(data.mainText || '').trim();
+    if (!sourceText) {
+      const meta = String(data.metaDescription || '').trim();
+      if (meta && meta.length >= 10) sourceText = meta;
+    }
+    return {
+      sourceText,
+      authorReplies: (data.authorReplies || []).filter(Boolean),
+      metaTitle: data.metaTitle || '',
+      exactUrl: !!data.exactUrl
+    };
   } finally {
     if (context) try { await context.close(); } catch {}
     if (browser) try { await browser.close(); } catch {}
