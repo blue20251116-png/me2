@@ -1,8 +1,6 @@
 const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 
-// SaaS 전환: 새 고객이 계정을 연결할 때마다 Meta App ID/Secret을 직접 입력하지 않아도 되게,
-// 운영자가 등록한 서버 환경변수를 기본값으로 쓰고, 계정별로 따로 입력한 값이 있으면 그걸 우선한다.
 function resolveThreadsAppCreds(account) {
   const shared = getSystemApiSettings();
   return {
@@ -13,169 +11,75 @@ function resolveThreadsAppCreds(account) {
 }
 
 const GRAPH_BASE = 'https://graph.threads.net/v1.0';
-
-const sleep = (ms) =>
-  new Promise((resolve) => setTimeout(resolve, ms));
-
-
-// ============================================================
-// 에러 로그 헬퍼
-// ============================================================
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function logThreadsError(stage, err, extra = {}) {
   const apiErr = err.response?.data?.error || {};
   const status = err.response?.status || '-';
-
   console.error(
-    `[Threads][${stage}][ERROR] ` +
-    `status=${status} ` +
-    `type=${apiErr.type || '-'} ` +
-    `code=${apiErr.code || '-'} ` +
-    `subcode=${apiErr.error_subcode || '-'} ` +
-    `message=${apiErr.message || err.message || '-'} ` +
-    Object.entries(extra)
-      .map(([k, v]) => `${k}=${v}`)
-      .join(' ')
+    `[Threads][${stage}][ERROR] status=${status} type=${apiErr.type || '-'} code=${apiErr.code || '-'} ` +
+    `subcode=${apiErr.error_subcode || '-'} message=${apiErr.message || err.message || '-'} ` +
+    Object.entries(extra).map(([k, v]) => `${k}=${v}`).join(' ')
   );
-
-  console.error(
-    `[Threads][${stage}][RAW]`,
-    JSON.stringify(err.response?.data || {})
-  );
+  console.error(`[Threads][${stage}][RAW]`, JSON.stringify(err.response?.data || {}));
 }
 
-
-// ============================================================
-// OAuth
-// ============================================================
-
-// Threads 로그인 URL 생성
-// state에 accountId를 넣어서
-// 로그인 완료 후 어느 계정인지 다시 구분
 function getAuthUrl(accountId) {
   const account = getAccount(accountId);
-
-  if (!account) {
-    throw new Error('존재하지 않는 계정입니다');
-  }
-
+  if (!account) throw new Error('존재하지 않는 계정입니다');
   const { appId, redirectUri } = resolveThreadsAppCreds(account);
-
-  if (!appId) {
-    throw new Error('Threads App ID가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
-  }
-
-  if (!redirectUri) {
-    throw new Error('Threads Redirect URI가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
-  }
-
+  if (!appId) throw new Error('Threads App ID가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
+  if (!redirectUri) throw new Error('Threads Redirect URI가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
   const scopes = [
-  'threads_basic',
-  'threads_content_publish',
-  'threads_manage_insights',
-  'threads_manage_replies',
-  'threads_read_replies',
-].join(',');
-  
-  return (
-    `https://threads.net/oauth/authorize` +
-    `?client_id=${encodeURIComponent(appId)}` +
+    'threads_basic',
+    'threads_content_publish',
+    'threads_manage_insights',
+    'threads_manage_replies',
+    'threads_read_replies',
+  ].join(',');
+  return `https://threads.net/oauth/authorize?client_id=${encodeURIComponent(appId)}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&scope=${encodeURIComponent(scopes)}` +
-    `&response_type=code` +
-    `&state=${encodeURIComponent(accountId)}`
-  );
+    `&scope=${encodeURIComponent(scopes)}&response_type=code&state=${encodeURIComponent(accountId)}`;
 }
 
-
-// OAuth code → 단기 Access Token
 async function exchangeCodeForToken(accountId, code) {
   const account = getAccount(accountId);
-
-  if (!account) {
-    throw new Error('존재하지 않는 계정입니다');
-  }
-
+  if (!account) throw new Error('존재하지 않는 계정입니다');
   const { appId, appSecret, redirectUri } = resolveThreadsAppCreds(account);
-
   try {
-    const res = await axios.post(
-      'https://graph.threads.net/oauth/access_token',
-      null,
-      {
-        params: {
-          client_id: appId,
-          client_secret: appSecret,
-          grant_type: 'authorization_code',
-          redirect_uri: redirectUri,
-          code,
-        },
-        timeout: 20000,
-      }
-    );
-
+    const res = await axios.post('https://graph.threads.net/oauth/access_token', null, {
+      params: { client_id: appId, client_secret: appSecret, grant_type: 'authorization_code', redirect_uri: redirectUri, code },
+      timeout: 20000,
+    });
     return res.data;
   } catch (err) {
-    logThreadsError('OAUTH_SHORT_TOKEN', err, {
-      accountId,
-    });
-
+    logThreadsError('OAUTH_SHORT_TOKEN', err, { accountId });
     throw err;
   }
 }
 
-
-// 단기 Access Token → 장기 Access Token
-async function exchangeForLongLivedToken(
-  accountId,
-  shortLivedToken
-) {
+async function exchangeForLongLivedToken(accountId, shortLivedToken) {
   const account = getAccount(accountId);
-
-  if (!account) {
-    throw new Error('존재하지 않는 계정입니다');
-  }
-
+  if (!account) throw new Error('존재하지 않는 계정입니다');
   const { appSecret } = resolveThreadsAppCreds(account);
-
   try {
-    const res = await axios.get(
-      `${GRAPH_BASE}/access_token`,
-      {
-        params: {
-          grant_type: 'th_exchange_token',
-          client_secret: appSecret,
-          access_token: shortLivedToken,
-        },
-        timeout: 20000,
-      }
-    );
-
+    const res = await axios.get(`${GRAPH_BASE}/access_token`, {
+      params: { grant_type: 'th_exchange_token', client_secret: appSecret, access_token: shortLivedToken },
+      timeout: 20000,
+    });
     return res.data;
   } catch (err) {
-    logThreadsError('OAUTH_LONG_TOKEN', err, {
-      accountId,
-    });
-
+    logThreadsError('OAUTH_LONG_TOKEN', err, { accountId });
     throw err;
   }
 }
 
-
-// 장기 Token 갱신
 async function refreshLongLivedToken(currentToken) {
   try {
-    const res = await axios.get(
-      `${GRAPH_BASE}/refresh_access_token`,
-      {
-        params: {
-          grant_type: 'th_refresh_token',
-          access_token: currentToken,
-        },
-        timeout: 20000,
-      }
-    );
-
+    const res = await axios.get(`${GRAPH_BASE}/refresh_access_token`, {
+      params: { grant_type: 'th_refresh_token', access_token: currentToken },
+      timeout: 20000,
+    });
     return res.data;
   } catch (err) {
     logThreadsError('TOKEN_REFRESH', err);
@@ -183,350 +87,104 @@ async function refreshLongLivedToken(currentToken) {
   }
 }
 
-
-// 연결 직후 Threads 사용자명 가져오기
-// 참고: 예전엔 GET /{userId}로 직접 조회했는데, 유저 액세스 토큰으로는 이 방식이
-// "Unsupported get request" (code=100 subcode=33) 오류를 낸다 — 게시/댓글은 같은 토큰으로
-// 정상 동작하는 걸 보면 토큰 자체는 문제가 없고, 액세스 토큰 소유자 본인을 가리키는 GET /me가
-// 맞는 방식이다 (userId는 이제 URL에 안 쓰이지만 로그 상관관계 확인용으로 남겨둔다).
 async function fetchProfile(accessToken, userId) {
   try {
-    const res = await axios.get(
-      `${GRAPH_BASE}/me`,
-      {
-        params: {
-          fields: 'username',
-          access_token: accessToken,
-        },
-        timeout: 15000,
-      }
-    );
-
+    const res = await axios.get(`${GRAPH_BASE}/me`, {
+      params: { fields: 'username', access_token: accessToken },
+      timeout: 15000,
+    });
     return res.data.username;
   } catch (err) {
-    logThreadsError('PROFILE', err, {
-      userId,
-    });
-
+    logThreadsError('PROFILE', err, { userId });
     throw err;
   }
 }
 
-
-// ============================================================
-// 미디어 처리
-// ============================================================
-
-// VIDEO는 Meta 서버에서 인코딩 시간이 필요함
-async function waitForContainerReady(
-  creationId,
-  accessToken,
-  maxTries = 30
-) {
-  for (let i = 0; i < maxTries; i++) {
-    try {
-      const res = await axios.get(
-        `${GRAPH_BASE}/${creationId}`,
-        {
-          params: {
-            fields: 'status_code',
-            access_token: accessToken,
-          },
-          timeout: 15000,
-        }
-      );
-
-      const status = res.data?.status_code;
-
-      console.log(
-        `[Threads][MEDIA_STATUS] creationId=${creationId} ` +
-        `try=${i + 1}/${maxTries} status=${status}`
-      );
-
-      if (status === 'FINISHED') {
-        return;
-      }
-
-      if (status === 'ERROR') {
-        throw new Error(
-          'Threads 서버에서 영상 처리에 실패했습니다'
-        );
-      }
-
-      await sleep(3000);
-    } catch (err) {
-      logThreadsError('MEDIA_STATUS', err, {
-        creationId,
-        try: `${i + 1}/${maxTries}`,
-      });
-
-      throw err;
-    }
-  }
-
-  throw new Error(
-    'Threads 영상 처리 시간이 너무 오래 걸립니다'
-  );
-}
-
-
-// ============================================================
-// Publish 재시도
-// ============================================================
-
 function isRetryablePublishError(err) {
-  const apiErr = err.response?.data?.error;
-  const message = String(
-    apiErr?.message || err.message || ''
-  ).toLowerCase();
-
+  const apiErr = err.response?.data?.error || {};
+  const message = String(apiErr.message || err.message || '').toLowerCase();
   return (
     err.response?.status === 404 ||
-    apiErr?.code === 24 ||
+    apiErr.code === 24 ||
     message.includes('requested resource does not exist') ||
     message.includes('media not found') ||
-    message.includes('not ready')
+    message.includes('not ready') ||
+    message.includes('still processing') ||
+    message.includes('processing') ||
+    message.includes('please wait') ||
+    message.includes('try again')
   );
 }
 
-
-async function publishContainer(
-  creationId,
-  accessToken,
-  maxTries = 5
-) {
+async function publishContainer(creationId, accessToken, maxTries = 5, baseWaitMs = 2000) {
   let lastError;
-
   for (let i = 0; i < maxTries; i++) {
     try {
-      console.log(
-        `[Threads][PUBLISH] 시작 ` +
-        `creationId=${creationId} ` +
-        `try=${i + 1}/${maxTries}`
-      );
-
-      const res = await axios.post(
-        `${GRAPH_BASE}/me/threads_publish`,
-        null,
-        {
-          params: {
-            creation_id: creationId,
-            access_token: accessToken,
-          },
-          timeout: 20000,
-        }
-      );
-
+      console.log(`[Threads][PUBLISH] 시작 creationId=${creationId} try=${i + 1}/${maxTries}`);
+      const res = await axios.post(`${GRAPH_BASE}/me/threads_publish`, null, {
+        params: { creation_id: creationId, access_token: accessToken },
+        timeout: 20000,
+      });
       const mediaId = res.data?.id;
-
-      if (!mediaId) {
-        throw new Error(
-          'Threads 발행 응답에 media id가 없습니다'
-        );
-      }
-
-      console.log(
-        `[Threads][PUBLISH] 성공 ` +
-        `creationId=${creationId} ` +
-        `mediaId=${mediaId}`
-      );
-
+      if (!mediaId) throw new Error('Threads 발행 응답에 media id가 없습니다');
+      console.log(`[Threads][PUBLISH] 성공 creationId=${creationId} mediaId=${mediaId}`);
       return mediaId;
-
     } catch (err) {
       lastError = err;
-
-      logThreadsError(
-        'PUBLISH',
-        err,
-        {
-          creationId,
-          try: `${i + 1}/${maxTries}`,
-        }
-      );
-
-      if (
-        !isRetryablePublishError(err) ||
-        i === maxTries - 1
-      ) {
-        throw err;
-      }
-
-      // Threads 내부에서 컨테이너가
-      // 아직 publish 노드에 전파되지 않았을 경우 대비
-      const waitMs = 2000 + i * 2000;
-
-      console.log(
-        `[Threads][PUBLISH] ${waitMs}ms 후 재시도`
-      );
-
+      logThreadsError('PUBLISH', err, { creationId, try: `${i + 1}/${maxTries}` });
+      if (!isRetryablePublishError(err) || i === maxTries - 1) throw err;
+      const waitMs = Math.min(baseWaitMs + i * 2000, 12000);
+      console.log(`[Threads][PUBLISH] 아직 처리 중으로 판단 · ${waitMs}ms 후 재시도`);
       await sleep(waitMs);
     }
   }
-
   throw lastError;
 }
 
-
-// ============================================================
-// 본문 발행
-// ============================================================
-
-async function publishPost(
-  accountId,
-  {
-    text,
-    imageUrl,
-    videoUrl,
-  }
-) {
+async function publishPost(accountId, { text, imageUrl, videoUrl }) {
   const account = getAccount(accountId);
+  if (!account) throw new Error('존재하지 않는 계정입니다');
+  if (!account.threads_access_token) throw new Error('스레드 Access Token이 없습니다. 계정을 다시 연결해주세요.');
+  if (!account.threads_user_id) throw new Error('Threads User ID가 없습니다. 계정을 다시 연결해주세요.');
 
-  if (!account) {
-    throw new Error('존재하지 않는 계정입니다');
-  }
+  const accessToken = account.threads_access_token;
+  const mediaType = videoUrl ? 'VIDEO' : imageUrl ? 'IMAGE' : 'TEXT';
+  console.log(`[Threads][CREATE] 시작 account=${accountId} userId=${account.threads_user_id} type=${mediaType}`);
 
-  if (!account.threads_access_token) {
-    throw new Error(
-      '스레드 Access Token이 없습니다. 계정을 다시 연결해주세요.'
-    );
-  }
-
-  if (!account.threads_user_id) {
-    throw new Error(
-      'Threads User ID가 없습니다. 계정을 다시 연결해주세요.'
-    );
-  }
-
-  const accessToken =
-    account.threads_access_token;
-
-  const mediaType = videoUrl
-    ? 'VIDEO'
-    : imageUrl
-      ? 'IMAGE'
-      : 'TEXT';
-
-
-  console.log(
-    `[Threads][CREATE] 시작 ` +
-    `account=${accountId} ` +
-    `userId=${account.threads_user_id} ` +
-    `type=${mediaType}`
-  );
-
-
-  const params = {
-    media_type: mediaType,
-    text,
-    access_token: accessToken,
-  };
-
-
-  if (imageUrl) {
-    params.image_url = imageUrl;
-  }
-
-
-  if (videoUrl) {
-    params.video_url = videoUrl;
-  }
-
+  const params = { media_type: mediaType, text, access_token: accessToken };
+  if (imageUrl) params.image_url = imageUrl;
+  if (videoUrl) params.video_url = videoUrl;
 
   let creationId;
-
-
   try {
-    // Meta 공식 예제 방식
-    // POST /me/threads
-    const createRes = await axios.post(
-      `${GRAPH_BASE}/me/threads`,
-      null,
-      {
-        params,
-        timeout: 30000,
-      }
-    );
-
-
-    creationId =
-      createRes.data?.id;
-
-
-    if (!creationId) {
-      throw new Error(
-        'Threads 컨테이너 생성 응답에 id가 없습니다'
-      );
-    }
-
-
-    console.log(
-      `[Threads][CREATE] 성공 ` +
-      `account=${accountId} ` +
-      `creationId=${creationId}`
-    );
-
+    const createRes = await axios.post(`${GRAPH_BASE}/me/threads`, null, { params, timeout: 30000 });
+    creationId = createRes.data?.id;
+    if (!creationId) throw new Error('Threads 컨테이너 생성 응답에 id가 없습니다');
+    console.log(`[Threads][CREATE] 성공 account=${accountId} creationId=${creationId}`);
   } catch (err) {
-
-    logThreadsError(
-      'CREATE',
-      err,
-      {
-        accountId,
-        userId:
-          account.threads_user_id,
-        mediaType,
-      }
-    );
-
+    logThreadsError('CREATE', err, { accountId, userId: account.threads_user_id, mediaType });
     throw err;
   }
 
-
-  // VIDEO만 인코딩 완료 확인
+  // Threads API의 현재 컨테이너 객체에는 status_code 필드가 없을 수 있다.
+  // 따라서 VIDEO에서 GET /{creationId}?fields=status_code 를 호출하지 않는다.
+  // 대신 영상은 인코딩 시간을 확보한 뒤 publish를 시도하고, 아직 처리 중인 오류만 재시도한다.
   if (mediaType === 'VIDEO') {
-
-    await waitForContainerReady(
-      creationId,
-      accessToken
-    );
-
+    console.log(`[Threads][VIDEO_WAIT] creationId=${creationId} · 인코딩 대기 8초`);
+    await sleep(8000);
+    return publishContainer(creationId, accessToken, 10, 3000);
   }
 
-
-  // 컨테이너 생성 직후
-  // Threads 내부 반영 시간 약간 확보
   await sleep(1500);
-
-
-  return publishContainer(
-    creationId,
-    accessToken
-  );
+  return publishContainer(creationId, accessToken, 5, 2000);
 }
 
-
-// ============================================================
-// 캐러셀(2장 이상) 발행 — 라이프스타일 이미지 + 상세페이지 사진
-// ============================================================
-
-// 캐러셀은 자식 이미지 컨테이너들을 먼저 각각 만든 뒤(is_carousel_item=true, 텍스트 없음),
-// 그 id들을 모아 media_type=CAROUSEL인 부모 컨테이너를 만들고 그걸 publish한다.
 async function createCarouselChildContainer(accountId, imageUrl, accessToken) {
   try {
-    const res = await axios.post(
-      `${GRAPH_BASE}/me/threads`,
-      null,
-      {
-        params: {
-          media_type: 'IMAGE',
-          image_url: imageUrl,
-          is_carousel_item: true,
-          access_token: accessToken,
-        },
-        timeout: 30000,
-      }
-    );
+    const res = await axios.post(`${GRAPH_BASE}/me/threads`, null, {
+      params: { media_type: 'IMAGE', image_url: imageUrl, is_carousel_item: true, access_token: accessToken },
+      timeout: 30000,
+    });
     const id = res.data?.id;
     if (!id) throw new Error('캐러셀 자식 컨테이너 응답에 id가 없습니다');
     return id;
@@ -539,44 +197,25 @@ async function createCarouselChildContainer(accountId, imageUrl, accessToken) {
 async function publishCarouselPost(accountId, { text, imageUrls }) {
   const account = getAccount(accountId);
   if (!account) throw new Error('존재하지 않는 계정입니다');
-  if (!account.threads_access_token) {
-    throw new Error('스레드 Access Token이 없습니다. 계정을 다시 연결해주세요.');
-  }
-  if (!account.threads_user_id) {
-    throw new Error('Threads User ID가 없습니다. 계정을 다시 연결해주세요.');
-  }
+  if (!account.threads_access_token) throw new Error('스레드 Access Token이 없습니다. 계정을 다시 연결해주세요.');
+  if (!account.threads_user_id) throw new Error('Threads User ID가 없습니다. 계정을 다시 연결해주세요.');
   const urls = (imageUrls || []).filter(Boolean);
-  if (urls.length < 2) {
-    // 이미지가 1장뿐이면 캐러셀을 만들 이유가 없으니 일반 발행으로 처리
-    return publishPost(accountId, { text, imageUrl: urls[0] });
-  }
+  if (urls.length < 2) return publishPost(accountId, { text, imageUrl: urls[0] });
 
   const accessToken = account.threads_access_token;
-
   console.log(`[Threads][CAROUSEL_CREATE] 시작 account=${accountId} images=${urls.length}`);
-
   const childIds = [];
   for (const url of urls) {
     childIds.push(await createCarouselChildContainer(accountId, url, accessToken));
-    // 연속 생성 시 레이트리밋/전파 지연 완화
     await sleep(1000);
   }
 
   let creationId;
   try {
-    const createRes = await axios.post(
-      `${GRAPH_BASE}/me/threads`,
-      null,
-      {
-        params: {
-          media_type: 'CAROUSEL',
-          children: childIds.join(','),
-          text,
-          access_token: accessToken,
-        },
-        timeout: 30000,
-      }
-    );
+    const createRes = await axios.post(`${GRAPH_BASE}/me/threads`, null, {
+      params: { media_type: 'CAROUSEL', children: childIds.join(','), text, access_token: accessToken },
+      timeout: 30000,
+    });
     creationId = createRes.data?.id;
     if (!creationId) throw new Error('캐러셀 부모 컨테이너 응답에 id가 없습니다');
     console.log(`[Threads][CAROUSEL_CREATE] 성공 account=${accountId} creationId=${creationId}`);
@@ -586,192 +225,52 @@ async function publishCarouselPost(accountId, { text, imageUrls }) {
   }
 
   await sleep(1500);
-  return publishContainer(creationId, accessToken);
+  return publishContainer(creationId, accessToken, 5, 2000);
 }
 
-// ============================================================
-// 댓글 / 답글 발행
-// ============================================================
-
-async function publishReply(
-  accountId,
-  parentMediaId,
-  text
-) {
-
-  const account =
-    getAccount(accountId);
-
-
-  if (!account) {
-    throw new Error(
-      '존재하지 않는 계정입니다'
-    );
-  }
-
-
-  if (!account.threads_access_token) {
-    throw new Error(
-      '스레드 Access Token이 없습니다'
-    );
-  }
-
-
-  const accessToken =
-    account.threads_access_token;
-
-
-  console.log(
-    `[Threads][REPLY_CREATE] 시작 ` +
-    `account=${accountId} ` +
-    `parent=${parentMediaId}`
-  );
-
+async function publishReply(accountId, parentMediaId, text) {
+  const account = getAccount(accountId);
+  if (!account) throw new Error('존재하지 않는 계정입니다');
+  if (!account.threads_access_token) throw new Error('스레드 Access Token이 없습니다');
+  const accessToken = account.threads_access_token;
+  console.log(`[Threads][REPLY_CREATE] 시작 account=${accountId} parent=${parentMediaId}`);
 
   let creationId;
-
-
   try {
-
-    const createRes =
-      await axios.post(
-        `${GRAPH_BASE}/me/threads`,
-        null,
-        {
-          params: {
-            media_type: 'TEXT',
-            text,
-            reply_to_id:
-              parentMediaId,
-            access_token:
-              accessToken,
-          },
-
-          timeout: 20000,
-        }
-      );
-
-
-    creationId =
-      createRes.data?.id;
-
-
-    if (!creationId) {
-      throw new Error(
-        'Threads 댓글 컨테이너 생성 응답에 id가 없습니다'
-      );
-    }
-
-
-    console.log(
-      `[Threads][REPLY_CREATE] 성공 ` +
-      `creationId=${creationId}`
-    );
-
+    const createRes = await axios.post(`${GRAPH_BASE}/me/threads`, null, {
+      params: { media_type: 'TEXT', text, reply_to_id: parentMediaId, access_token: accessToken },
+      timeout: 20000,
+    });
+    creationId = createRes.data?.id;
+    if (!creationId) throw new Error('Threads 댓글 컨테이너 생성 응답에 id가 없습니다');
+    console.log(`[Threads][REPLY_CREATE] 성공 creationId=${creationId}`);
   } catch (err) {
-
-    logThreadsError(
-      'REPLY_CREATE',
-      err,
-      {
-        accountId,
-        parentMediaId,
-      }
-    );
-
+    logThreadsError('REPLY_CREATE', err, { accountId, parentMediaId });
     throw err;
   }
-
 
   await sleep(1500);
-
-
-  return publishContainer(
-    creationId,
-    accessToken
-  );
+  return publishContainer(creationId, accessToken, 5, 2000);
 }
 
-
-// ============================================================
-// 인사이트
-// ============================================================
-
-async function getMediaInsights(
-  accountId,
-  mediaId
-) {
-
-  const account =
-    getAccount(accountId);
-
-
-  if (
-    !account ||
-    !account.threads_access_token
-  ) {
-    throw new Error(
-      '스레드 Access Token이 없습니다'
-    );
-  }
-
-
+async function getMediaInsights(accountId, mediaId) {
+  const account = getAccount(accountId);
+  if (!account || !account.threads_access_token) throw new Error('스레드 Access Token이 없습니다');
   try {
-
-    const res =
-      await axios.get(
-        `${GRAPH_BASE}/${mediaId}/insights`,
-        {
-          params: {
-            metric:
-              'views,likes,replies,reposts,quotes',
-
-            access_token:
-              account.threads_access_token,
-          },
-
-          timeout: 20000,
-        }
-      );
-
-
+    const res = await axios.get(`${GRAPH_BASE}/${mediaId}/insights`, {
+      params: { metric: 'views,likes,replies,reposts,quotes', access_token: account.threads_access_token },
+      timeout: 20000,
+    });
     const data = {};
-
-
-    for (
-      const item of
-      res.data?.data || []
-    ) {
-
-      data[item.name] =
-        item.values?.[0]?.value ??
-        item.total_value?.value ??
-        0;
-
+    for (const item of res.data?.data || []) {
+      data[item.name] = item.values?.[0]?.value ?? item.total_value?.value ?? 0;
     }
-
-
     return data;
-
   } catch (err) {
-
-    logThreadsError(
-      'INSIGHTS',
-      err,
-      {
-        accountId,
-        mediaId,
-      }
-    );
-
+    logThreadsError('INSIGHTS', err, { accountId, mediaId });
     throw err;
   }
 }
-
-
-// ============================================================
-// Export
-// ============================================================
 
 module.exports = {
   getAuthUrl,
