@@ -166,6 +166,7 @@ async function generateRecipe(accountId, topic, video) {
 - 본문은 3~6줄 정도의 짧은 생활형 후킹으로 만든다.
 - 첫 댓글에는 실제로 따라 할 수 있을 정도로 자세한 계량과 순서를 제공한다.
 - 레시피 안에서 쿠팡 검색에 자연스럽게 연결할 수 있는 비밀 소스/핵심 재료 하나를 정한다.
+- 핵심 재료는 단순히 흔한 기본 재료보다, 실제로 따로 사두면 요리가 편해지는 상품을 우선한다.
 
 문체:
 - 사람이 직접 올린 것처럼 짧고 자연스러운 반말.
@@ -180,15 +181,20 @@ async function generateRecipe(accountId, topic, video) {
 - 영상에 없는 내용을 영상 제작자가 말했다고 주장하지 않는다.
 - 특정 영상 제작자/유명인이 쿠팡 상품을 사용했다고 지어내지 않는다.
 - "맘카페에서 난리", "식당에서 1000개 팔았다", "이모가 알려줬다" 같은 출처/판매량/가족 경험은 실제 근거가 없으면 쓰지 않는다.
-- 대신 "요즘 자꾸 보이길래", "레시피 찾아보다가", "이 조합 괜찮아 보여서"처럼 사실을 지어내지 않는 표현을 쓴다.
+- 직접 먹어봤다, 직접 써봤다, 가족이 알려줬다 같은 경험도 근거 없이 만들지 않는다.
+- 대신 "레시피 찾아보다가", "이 조합은 따라 하기 쉽다", "이 재료가 들어가면 맛 방향이 달라진다"처럼 검증 가능한 표현을 쓴다.
 - 건강효과/치료효과를 주장하지 않는다.
 
 레시피 규칙:
 - 계량은 1스푼, 1/2스푼, 100ml, 1팩처럼 한국식으로 명확히 쓴다.
 - 핵심 재료 최대 12개.
 - 조리순서 최대 5단계.
-- secretIngredient는 소스, 양념, 육수, 장류, 오일, 향신료처럼 쿠팡에서 검색하기 좋은 재료를 우선한다.
-- coupangSearchKeyword는 브랜드명을 억지로 만들지 말고 일반 상품 키워드로 쓴다.
+- secretIngredient는 소스, 양념, 육수, 장류, 오일, 향신료, 손질식품처럼 쿠팡에서 검색하기 좋고 반복 구매 가능성이 있는 재료를 우선한다.
+- 특히 레시피에 자연스럽다면 냉면육수, 쯔유, 참치액, 굴소스, 멸치육수팩, 액젓, 고추기름, 다진마늘, 파스타소스, 카레가루, 육수코인 같은 "사두면 편한 재료"를 우선 검토한다.
+- 소금, 설탕, 물, 후추처럼 거의 모든 집에 있는 초저관여 기본재료는 secretIngredient로 가급적 선택하지 않는다.
+- 대파, 양파, 계란처럼 신선 기본재료도 레시피의 진짜 핵심이 아니라면 secretIngredient로 선택하지 않는다.
+- coupangSearchKeyword는 브랜드명을 억지로 만들지 말고, 실제 사용자가 쿠팡에서 검색할 법한 1~3단어 상품 키워드로 쓴다.
+- 상품을 팔기 위해 레시피를 왜곡하지 않는다. 맛에 자연스럽게 기여하는 재료만 고른다.
 
 JSON 형식:
 {
@@ -212,7 +218,8 @@ ${video?.title || '없음'}
 참고 YouTube 영상 설명:
 ${video?.description || '없음'}
 
-위 정보를 참고해 실제 따라 하기 좋은 레시피 JSON을 만들어줘.`;
+위 정보를 참고해 실제 따라 하기 좋은 레시피 JSON을 만들어줘.
+레시피의 자연스러움을 해치지 않는 범위에서, 핵심 재료는 쿠팡에서 따로 검색해서 살 이유가 있는 재료를 우선해.`;
 
   const data = await callOpenAI(accountId, system, user, 1600);
   return sanitizeRecipeJson(data, topic);
@@ -223,15 +230,15 @@ function buildRecipePostText(recipe) {
   const hook = recipe.hook || `${recipe.dishName} 이 조합 생각보다 괜찮더라`;
 
   const variants = {
-    secret: `${hook}\n\n${recipe.dishName} 별거 안 들어가는데\n마지막에 이것 하나 넣으니까 맛이 확 달라짐ㅋㅋ\n\n레시피랑 내가 넣은 비밀 재료는 댓글에 적어둘게.`,
+    secret: `${hook}\n\n${recipe.dishName} 별거 안 들어가는데\n마지막 재료 하나에서 맛 방향이 꽤 갈리더라.\n\n정확한 계량이랑 포인트 재료는 댓글에 적어둘게.`,
 
     family: `${recipe.dishName} 레시피 찾아보다가\n이 비율이 제일 따라 하기 쉽더라.\n\n재료 몇 개만 맞추면 생각보다 간단함.\n${recipe.servings} 기준은 댓글에 적어둘게.`,
 
-    viral: `${hook}\n\n요즘 이런 레시피 자꾸 보여서 나도 정리해봄.\n핵심은 양념 비율이랑 마지막 재료 하나더라.\n\n정확한 계량은 댓글에 적어둘게.`,
+    viral: `${hook}\n\n요즘 이런 조합이 자주 보여서 레시피만 깔끔하게 정리해봄.\n핵심은 양념 비율이랑 마지막 재료 하나더라.\n\n정확한 계량은 댓글에 적어둘게.`,
 
-    restaurant: `${recipe.dishName} 집에서 만들 때\n왜 밖에서 먹는 맛이 안 나나 했는데\n양념보다 마지막 한 가지가 포인트였음.\n\n${recipe.servings} 레시피 댓글에 남겨둘게.`,
+    restaurant: `${recipe.dishName} 집에서 만들 때\n양념 비율만 맞춰도 맛이 꽤 달라지는데\n마지막 한 가지가 포인트더라.\n\n${recipe.servings} 레시피 댓글에 남겨둘게.`,
 
-    simple: `${hook}\n\n복잡한 레시피 싫어서\n딱 따라 하기 쉽게 계량 다시 정리했어.\n비밀 재료까지 댓글에 같이 적어둘게.`,
+    simple: `${hook}\n\n복잡한 레시피 말고\n딱 따라 하기 쉽게 계량만 다시 정리했어.\n포인트 재료까지 댓글에 같이 적어둘게.`,
   };
 
   return variants[style];
@@ -255,7 +262,7 @@ function buildRecipeCommentText(recipe) {
     ? `\n${recipe.secretReason}`
     : '';
 
-  let text = `✅ ${recipe.dishName} (${recipe.servings})\n\n🛒 재료\n${main}${optional}\n\n♦ ${label}\n${recipe.secretIngredient}${reason}\n\n🥢 만드는 법\n${steps}\n\n${label}은 아래 링크에서 확인하면 돼👇`;
+  let text = `✅ ${recipe.dishName} (${recipe.servings})\n\n🛒 재료\n${main}${optional}\n\n♦ ${label}\n${recipe.secretIngredient}${reason}\n\n🥢 만드는 법\n${steps}\n\n${label} 찾기 쉽게 아래에 링크 붙여둘게👇`;
 
   // 고지문+URL이 뒤에 붙을 여유를 남긴다.
   if (text.length > 390) {
@@ -264,14 +271,32 @@ function buildRecipeCommentText(recipe) {
       .map((x, i) => `${i + 1}. ${x}`)
       .join('\n');
 
-    text = `✅ ${recipe.dishName} (${recipe.servings})\n\n🛒 재료\n${main}\n\n♦ ${label}\n${recipe.secretIngredient}${reason}\n\n🥢 레시피\n${compactSteps}\n\n${label}은 아래 링크👇`;
+    text = `✅ ${recipe.dishName} (${recipe.servings})\n\n🛒 재료\n${main}\n\n♦ ${label}\n${recipe.secretIngredient}${reason}\n\n🥢 레시피\n${compactSteps}\n\n${label} 찾기 쉽게 아래에 링크 붙여둘게👇`;
   }
 
   if (text.length > 430) {
-    text = `${text.slice(0, 420).trimEnd()}…\n\n${label}: ${recipe.secretIngredient}👇`;
+    text = `${text.slice(0, 410).trimEnd()}…\n\n${label}: ${recipe.secretIngredient}\n아래 링크에서 바로 확인 가능👇`;
   }
 
   return text;
+}
+
+function scoreCoupangProduct(product, searchKeyword) {
+  const name = String(product?.name || '').toLowerCase();
+  const terms = String(searchKeyword || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const matched = terms.filter((term) => name.includes(term)).length;
+  let score = matched * 20;
+
+  if (terms.length && matched === terms.length) score += 20;
+  if (product?.isRocket) score += 10;
+  if (product?.image) score += 3;
+  if (product?.url) score += 2;
+
+  return score;
 }
 
 async function chooseCoupangProduct(accountId, searchKeyword) {
@@ -280,8 +305,15 @@ async function chooseCoupangProduct(accountId, searchKeyword) {
     throw new Error(`쿠팡에서 "${searchKeyword}" 관련 상품을 찾지 못했습니다`);
   }
 
-  // 지나치게 랜덤하지 않게 로켓 상품 우선, 없으면 첫 결과.
-  return products.find((p) => p.isRocket) || products[0];
+  // 단순 첫 결과 대신 검색어 직접 일치도를 최우선으로 보고,
+  // 동점에 가까울 때 로켓/이미지 보유 상품에 소폭 가점한다.
+  return products
+    .map((product, index) => ({
+      product,
+      index,
+      score: scoreCoupangProduct(product, searchKeyword),
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)[0].product;
 }
 
 async function buildRecipeAutopilot({ account, target }) {
@@ -327,6 +359,10 @@ async function buildRecipeAutopilot({ account, target }) {
       ? '레시피 썸네일 + 비밀소스 상품컷'
       : '레시피 썸네일 1장';
   }
+
+  console.log(
+    `[Recipe] 핵심 재료="${recipe.secretIngredient}" 쿠팡검색="${recipe.coupangSearchKeyword}" 선택상품="${product.name}"`
+  );
 
   return {
     text: buildRecipePostText(recipe),
