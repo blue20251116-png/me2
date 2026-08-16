@@ -52,7 +52,7 @@ function runFfmpeg(args) {
       clearTimeout(timer);
       if (timedOut) return reject(new Error('YouTube 썸네일 크롭 시간 초과'));
       if (code !== 0) {
-        return reject(new Error(`ffmpeg 썸네일 크롭 실패 (code ${code}): ${stderr.slice(0, 300)}`));
+        return reject(new Error(`ffmpeg 썸네일 크롭 실패 (code ${code}): ${stderr.slice(0, 500)}`));
       }
       resolve();
     });
@@ -109,11 +109,12 @@ async function downloadThumbnail(url, destination) {
 }
 
 /**
- * YouTube의 가로 썸네일에서 중앙 세로 쇼츠 영역만 자동 크롭한다.
- * crop 식: 입력 높이를 그대로 쓰고, 너비를 9:16 비율로 중앙에서 잘라낸다.
- * 예: 1280x720 -> 약 405x720 중앙 영역.
+ * Shorts 썸네일은 YouTube가 16:9 가로 캔버스 안에 세로 영상을 중앙 배치하고
+ * 좌우에 흐린/어두운 확장 영역을 넣는 경우가 많다.
+ * 사용자 예시 기준 중앙 약 44%만 남기면 좌우 복제 영역이 대부분 제거된다.
  *
- * 실패 시 예외를 던진다. 호출하는 scheduler는 반드시 원본 thumbnail로 fallback해야 한다.
+ * 기존 min()/쉼표 기반 표현은 일부 FFmpeg 빌드에서 필터 파싱이 불안정할 수 있어
+ * 단순 비율식으로 교체했다. shell:false라 사용자 입력이 FFmpeg 인자로 들어가지 않는다.
  */
 async function cropYoutubeThumbnail({ account, thumbnailUrl, videoId }) {
   if (!account?.id || !thumbnailUrl) throw new Error('썸네일 크롭 정보가 부족합니다');
@@ -126,19 +127,20 @@ async function cropYoutubeThumbnail({ account, thumbnailUrl, videoId }) {
   const accountDir = path.join(outputRoot, String(account.id));
   fs.mkdirSync(accountDir, { recursive: true });
 
-  const stablePart = String(videoId || crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'thumb';
+  const stablePart = String(videoId || crypto.randomUUID())
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 80) || 'thumb';
   const nonce = crypto.randomBytes(4).toString('hex');
   const inputPath = path.join(accountDir, `${stablePart}-${nonce}-source.jpg`);
-  const outputName = `${stablePart}-${nonce}-portrait.jpg`;
+  const outputName = `${stablePart}-${nonce}-center.jpg`;
   const outputPath = path.join(accountDir, outputName);
 
   try {
     await downloadThumbnail(thumbnailUrl, inputPath);
 
-    // 중앙 9:16 크롭. 원본 자체가 세로이거나 9:16보다 좁은 경우에는
-    // crop 너비가 원본보다 커지지 않도록 min(iw, ih*9/16)을 사용한다.
-    // crop 높이는 해당 너비로 만들 수 있는 최대 16:9 세로 높이와 원본 높이 중 작은 값.
-    const filter = "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':'(iw-ow)/2':'(ih-oh)/2',scale='min(1080,iw)':-2";
+    // 가운데 44%만 사용: 좌우 각각 28% 제거.
+    // 높이는 그대로 유지하고, 결과 너비만 SNS에 충분한 720px 수준으로 확대/축소한다.
+    const filter = 'crop=iw*0.44:ih:iw*0.28:0,scale=720:-2';
 
     await runFfmpeg([
       '-y',
@@ -155,6 +157,7 @@ async function cropYoutubeThumbnail({ account, thumbnailUrl, videoId }) {
       throw new Error('크롭된 썸네일 파일 생성 실패');
     }
 
+    console.log(`[ThumbnailCrop] 중앙 44% 크롭 성공 video=${stablePart}`);
     return `${baseUrl}/uploads/youtube-thumbnails/${account.id}/${outputName}`;
   } finally {
     try {
