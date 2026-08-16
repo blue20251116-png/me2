@@ -701,6 +701,49 @@ input:focus, select:focus, textarea:focus {
   .youtube-card img { width: 100%; height: 160px; }
 }
 
+.frame-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+.frame-thumb {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid var(--border);
+  cursor: pointer;
+  background: var(--surface-2);
+}
+.frame-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.frame-thumb.selected { border-color: var(--green); }
+.frame-thumb .frame-time {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: #fff;
+  background: rgba(0,0,0,0.55);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.frame-thumb .frame-check {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid rgba(255,255,255,0.7);
+}
+.frame-thumb.selected .frame-check {
+  background: var(--green);
+  border-color: var(--green);
+}
+
 #detailImagesGallery {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

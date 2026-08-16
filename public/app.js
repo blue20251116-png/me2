@@ -631,6 +631,8 @@ function applyPickedProduct(p) {
   resetLifestyleUI();
 
   document.getElementById('videoPreviewBox').classList.add('hidden');
+  document.getElementById('videoUsageRow').classList.add('hidden');
+  resetVideoFrameUI();
   document.getElementById('imagePreviewImg').src = p.image;
   document.getElementById('imagePreviewBox').classList.remove('hidden');
   document.getElementById('imageToolsRow').classList.remove('hidden');
@@ -652,6 +654,7 @@ document.getElementById('productSearchInput').addEventListener('keydown', (e) =>
 
 // ---- 내 사진/영상 직접 업로드 ----
 let uploadedFilename = null; // 삭제 API 호출용
+let uploadedVideoUrl = ''; // "영상 그대로 게시" 모드로 되돌아갈 때 복원할 원본 영상 URL
 
 document.getElementById('mediaUploadInput').addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -675,15 +678,24 @@ document.getElementById('mediaUploadInput').addEventListener('change', async (e)
     if (data.mediaType === 'video') {
       form.video_url.value = data.url;
       form.image_url.value = '';
+      uploadedVideoUrl = data.url;
       document.getElementById('imagePreviewBox').classList.add('hidden');
       document.getElementById('videoPreviewEl').src = data.url;
       document.getElementById('videoPreviewBox').classList.remove('hidden');
+      // 새 영상을 올리면 이전 영상의 프레임 추출 상태는 전부 초기화
+      resetVideoFrameUI();
+      document.getElementById('videoUsageRow').classList.remove('hidden');
+      document.getElementById('videoUsageAsIs').checked = true;
+      document.getElementById('extractFramesBtn').classList.add('hidden');
     } else {
       form.image_url.value = data.url;
       form.video_url.value = '';
+      uploadedVideoUrl = '';
       document.getElementById('videoPreviewBox').classList.add('hidden');
       document.getElementById('imagePreviewImg').src = data.url;
       document.getElementById('imagePreviewBox').classList.remove('hidden');
+      document.getElementById('videoUsageRow').classList.add('hidden');
+      resetVideoFrameUI();
     }
 
     status.textContent = '업로드 완료';
@@ -713,10 +725,182 @@ async function removeUploadedMedia() {
   document.getElementById('imagePreviewImg').src = '';
   document.getElementById('videoPreviewEl').src = '';
   document.getElementById('uploadStatus').className = 'scrape-status hidden';
+  document.getElementById('videoUsageRow').classList.add('hidden');
+  await resetVideoFrameUI();
 }
 
 document.getElementById('removeMediaBtn').addEventListener('click', removeUploadedMedia);
 document.getElementById('removeVideoBtn').addEventListener('click', removeUploadedMedia);
+
+// ---- 영상에서 사진 추출 (선택적 기능 — 안 써도 기존 "영상 그대로 게시"는 그대로 동작) ----
+let currentFrameJobId = null;
+let currentFrames = []; // [{id, time, url}]
+let selectedFrameUrls = []; // 최대 2장 (기존 Threads 게시 로직이 image_url+extra_image_url 2장까지만 지원)
+const MAX_SELECTED_FRAMES = 2;
+
+// 아직 게시물에 쓰이지 않은(선택 확정 전) 추출 작업 폴더를 정리. 이미 예약글로 제출된 프레임은
+// 여기서 지우지 않는다 — 이 함수는 영상 교체/삭제 시점에만 호출된다.
+async function resetVideoFrameUI() {
+  if (currentFrameJobId) {
+    try {
+      await apiFetch(`/api/video/frames/${currentFrameJobId}`, { method: 'DELETE' });
+    } catch {
+      /* 정리 실패해도 새 영상 작업을 막을 이유는 없음 */
+    }
+  }
+  currentFrameJobId = null;
+  currentFrames = [];
+  selectedFrameUrls = [];
+  document.getElementById('frameCandidatesBox').classList.add('hidden');
+  document.getElementById('frameCandidatesGrid').innerHTML = '';
+  document.getElementById('imageCompositionRow').classList.add('hidden');
+  document.getElementById('extractFramesStatus').textContent = '';
+  document.getElementById('compositionFramesOnly').checked = true;
+  applyImageComposition();
+}
+
+document.querySelectorAll('input[name="videoUsageMode"]').forEach((radio) => {
+  radio.addEventListener('change', () => {
+    const btn = document.getElementById('extractFramesBtn');
+    const form = document.getElementById('composeForm');
+    if (document.getElementById('videoUsageExtract').checked) {
+      btn.classList.remove('hidden');
+      // 이미지(추출 프레임)로 게시할 것이므로 영상 URL은 비운다 — 발행 로직이 videoUrl을
+      // 우선하므로, 비워두지 않으면 프레임을 골라도 영상으로 그대로 게시돼버린다.
+      form.video_url.value = '';
+      applyImageComposition();
+    } else {
+      btn.classList.add('hidden');
+      // "영상 그대로 게시"로 되돌리면 지금까지 고른 프레임/상품 이미지는 게시에 쓰이지 않으므로 비운다
+      form.video_url.value = uploadedVideoUrl;
+      form.image_url.value = '';
+      form.extra_image_url.value = '';
+      document.getElementById('imagePreviewBox').classList.add('hidden');
+    }
+  });
+});
+
+document.getElementById('extractFramesBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('extractFramesBtn');
+  const status = document.getElementById('extractFramesStatus');
+  if (btn.disabled) return; // 연타 방지
+  if (!uploadedFilename) {
+    status.textContent = '먼저 영상을 업로드해주세요';
+    status.className = 'ai-status error';
+    return;
+  }
+
+  btn.disabled = true;
+  status.textContent = '영상 분석 중… 사진을 추출하고 있습니다…';
+  status.className = 'ai-status';
+
+  try {
+    const res = await apiFetch('/api/video/frames', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: uploadedFilename }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+
+    currentFrameJobId = data.jobId;
+    currentFrames = data.frames || [];
+    selectedFrameUrls = [];
+    renderFrameCandidates();
+
+    status.textContent = `${currentFrames.length}장의 장면을 찾았어요 · 최대 ${MAX_SELECTED_FRAMES}장까지 선택하세요`;
+    status.className = 'ai-status ok';
+  } catch (err) {
+    status.textContent = '추출 실패: ' + err.message;
+    status.className = 'ai-status error';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function fmtFrameTime(t) {
+  return `${Number(t).toFixed(1)}초`;
+}
+
+function renderFrameCandidates() {
+  const grid = document.getElementById('frameCandidatesGrid');
+  const box = document.getElementById('frameCandidatesBox');
+
+  grid.innerHTML = currentFrames
+    .map(
+      (f) => `
+    <div class="frame-thumb ${selectedFrameUrls.includes(f.url) ? 'selected' : ''}" data-url="${f.url}">
+      <img src="${f.url}" alt="" />
+      <span class="frame-time">${fmtFrameTime(f.time)}</span>
+      <span class="frame-check"></span>
+    </div>`
+    )
+    .join('');
+  box.classList.remove('hidden');
+
+  grid.querySelectorAll('.frame-thumb').forEach((thumb) => {
+    thumb.addEventListener('click', () => {
+      const url = thumb.dataset.url;
+      const status = document.getElementById('extractFramesStatus');
+      const idx = selectedFrameUrls.indexOf(url);
+      if (idx >= 0) {
+        selectedFrameUrls.splice(idx, 1);
+      } else {
+        if (selectedFrameUrls.length >= MAX_SELECTED_FRAMES) {
+          status.textContent = `Threads 게시 이미지로 최대 ${MAX_SELECTED_FRAMES}장까지 선택할 수 있습니다.`;
+          status.className = 'ai-status error';
+          return;
+        }
+        selectedFrameUrls.push(url);
+      }
+      renderFrameCandidates();
+      applyImageComposition();
+    });
+  });
+
+  document.getElementById('imageCompositionRow').classList.toggle('hidden', selectedFrameUrls.length === 0);
+  // 상품 이미지가 아예 없으면(쿠팡 검색 없이 영상만 올린 경우) 상품 이미지 조합 옵션은 숨긴다
+  const hasProductImage = !!originalProductImage;
+  document.getElementById('compositionFramesPlusProductRow').classList.toggle('hidden', !hasProductImage);
+  document.getElementById('compositionProductOnlyRow').classList.toggle('hidden', !hasProductImage);
+}
+
+// 선택한 프레임(+상품 이미지) 조합을 실제로 composeForm의 image_url/extra_image_url에 반영.
+// 현재 Threads 발행 로직이 이미지 2장(image_url + extra_image_url)까지만 지원하므로 그 범위 안에서 조합한다.
+function applyImageComposition() {
+  const form = document.getElementById('composeForm');
+  const mode = document.querySelector('input[name="imageComposition"]:checked')?.value || 'frames_only';
+  const previewImg = document.getElementById('imagePreviewImg');
+  const previewBox = document.getElementById('imagePreviewBox');
+
+  let imageUrl = '';
+  let extraImageUrl = '';
+
+  if (mode === 'product_only') {
+    imageUrl = originalProductImage || '';
+  } else if (mode === 'frames_plus_product') {
+    imageUrl = selectedFrameUrls[0] || originalProductImage || '';
+    extraImageUrl = selectedFrameUrls[0] ? originalProductImage || '' : '';
+  } else {
+    // frames_only
+    imageUrl = selectedFrameUrls[0] || '';
+    extraImageUrl = selectedFrameUrls[1] || '';
+  }
+
+  form.image_url.value = imageUrl;
+  form.extra_image_url.value = extraImageUrl;
+
+  if (imageUrl) {
+    previewImg.src = imageUrl;
+    previewBox.classList.remove('hidden');
+  } else {
+    previewBox.classList.add('hidden');
+  }
+}
+
+document.querySelectorAll('input[name="imageComposition"]').forEach((radio) => {
+  radio.addEventListener('change', applyImageComposition);
+});
 
 // ---- 링크 입력 시 상품 이미지/제목 자동 가져오기 ----
 let scrapeTimer = null;
@@ -969,6 +1153,7 @@ document.getElementById('composeForm').addEventListener('submit', async (e) => {
     text: form.text.value,
     link: form.link.value,
     image_url: form.image_url.value,
+    extra_image_url: form.extra_image_url.value,
     video_url: form.video_url.value,
     scheduled_at: new Date(form.scheduled_at.value).toISOString(),
     auto_comment_enabled: form.auto_comment_enabled.checked,
@@ -994,6 +1179,16 @@ document.getElementById('composeForm').addEventListener('submit', async (e) => {
     document.getElementById('imageToolsRow').classList.add('hidden');
     document.getElementById('detailImagesGallery').classList.add('hidden');
     document.getElementById('retouchStatus').textContent = '';
+    document.getElementById('videoUsageRow').classList.add('hidden');
+    // 선택된 프레임 이미지는 방금 등록한 예약글이 계속 참조하므로 여기서 파일을 지우지 않는다 —
+    // 상태 변수만 초기화한다 (실제 정리는 영상 교체/삭제 시 resetVideoFrameUI에서 처리됨).
+    currentFrameJobId = null;
+    currentFrames = [];
+    selectedFrameUrls = [];
+    document.getElementById('frameCandidatesBox').classList.add('hidden');
+    document.getElementById('frameCandidatesGrid').innerHTML = '';
+    document.getElementById('imageCompositionRow').classList.add('hidden');
+    uploadedVideoUrl = '';
     currentDetailImages = [];
     originalProductImage = '';
     currentScene = null;

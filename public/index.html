@@ -172,6 +172,7 @@
           <label>영상 URL <span class="label-note">(이미지와 동시 사용 불가, 하나만 첨부됨)</span>
             <input type="url" name="video_url" id="videoUrlInput" placeholder="https://..." />
           </label>
+          <input type="hidden" name="extra_image_url" id="extraImageUrlInput" />
 
           <div class="upload-row">
             <label class="btn-secondary upload-btn">
@@ -188,6 +189,41 @@
           <div id="videoPreviewBox" class="image-preview hidden">
             <video id="videoPreviewEl" controls></video>
             <button type="button" id="removeVideoBtn" class="remove-media-btn">✕ 첨부 삭제</button>
+          </div>
+
+          <div id="videoUsageRow" class="hidden">
+            <p class="hint" style="margin-top:6px;">이 영상을 어떻게 사용할까요?</p>
+            <label class="checkbox-row" style="font-weight:normal;">
+              <input type="radio" name="videoUsageMode" id="videoUsageAsIs" value="asis" checked />
+              영상 그대로 게시
+            </label>
+            <label class="checkbox-row" style="font-weight:normal;">
+              <input type="radio" name="videoUsageMode" id="videoUsageExtract" value="extract" />
+              영상에서 사진 추출
+            </label>
+            <button type="button" id="extractFramesBtn" class="btn-secondary hidden" style="width:100%; margin-top:6px;">🎬 영상에서 사진 추출</button>
+            <p id="extractFramesStatus" class="ai-status"></p>
+          </div>
+
+          <div id="frameCandidatesBox" class="hidden">
+            <p class="hint" style="margin-top:6px; margin-bottom:4px;">영상에서 추출한 사진 <span class="label-note">최대 2장까지 선택 가능</span></p>
+            <div id="frameCandidatesGrid" class="frame-grid"></div>
+          </div>
+
+          <div id="imageCompositionRow" class="hidden">
+            <p class="hint" style="margin-top:6px; margin-bottom:4px;">게시 이미지 구성</p>
+            <label class="checkbox-row" style="font-weight:normal;">
+              <input type="radio" name="imageComposition" id="compositionFramesOnly" value="frames_only" checked />
+              추출한 사진만 게시
+            </label>
+            <label class="checkbox-row hidden" id="compositionFramesPlusProductRow" style="font-weight:normal;">
+              <input type="radio" name="imageComposition" id="compositionFramesPlusProduct" value="frames_plus_product" />
+              추출한 사진 + 상품 이미지
+            </label>
+            <label class="checkbox-row hidden" id="compositionProductOnlyRow" style="font-weight:normal;">
+              <input type="radio" name="imageComposition" id="compositionProductOnly" value="product_only" />
+              기존 상품 이미지만 사용
+            </label>
           </div>
 
           <div id="imageToolsRow" class="upload-row hidden">
