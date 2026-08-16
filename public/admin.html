@@ -64,6 +64,9 @@
       <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--text-dim);">네이버 데이터랩 Client Secret
         <input type="password" name="naver_client_secret" placeholder="변경할 때만 입력" />
       </label>
+      <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--text-dim);">YouTube Data API Key
+        <input type="password" name="youtube_api_key" placeholder="Google YouTube Data API Key" />
+      </label>
       <button type="submit" style="align-self:flex-start;font-size:12.5px;padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:var(--amber);color:#1a1300;font-weight:600;cursor:pointer;">공용 API 저장</button>
       <p id="systemApiStatus" style="font-size:12px;color:var(--text-dim);margin:0;"></p>
       <p id="systemApiMsg" style="font-size:12.5px;margin:0;"></p>
@@ -205,8 +208,9 @@
       form.threads_app_secret.placeholder = data.has_threads_app_secret ? '저장됨 — 변경할 때만 입력' : '변경할 때만 입력';
       form.openai_api_key.placeholder = data.has_openai_api_key ? '저장됨 — 변경할 때만 입력' : 'sk-...';
       form.naver_client_secret.placeholder = data.has_naver_client_secret ? '저장됨 — 변경할 때만 입력' : '변경할 때만 입력';
+      form.youtube_api_key.placeholder = data.has_youtube_api_key ? '저장됨 — 변경할 때만 입력' : 'Google YouTube Data API Key';
       document.getElementById('systemApiStatus').textContent =
-        `Threads Secret ${data.has_threads_app_secret ? '✓' : '✕'} · OpenAI ${data.has_openai_api_key ? '✓' : '✕'} · Naver Secret ${data.has_naver_client_secret ? '✓' : '✕'}`;
+        `Threads Secret ${data.has_threads_app_secret ? '✓' : '✕'} · OpenAI ${data.has_openai_api_key ? '✓' : '✕'} · Naver Secret ${data.has_naver_client_secret ? '✓' : '✕'} · YouTube ${data.has_youtube_api_key ? '✓' : '✕'}`;
     }
 
     document.getElementById('systemApiForm').addEventListener('submit', async (e) => {
@@ -222,12 +226,14 @@
             openai_api_key: form.openai_api_key.value,
             naver_client_id: form.naver_client_id.value,
             naver_client_secret: form.naver_client_secret.value,
+            youtube_api_key: form.youtube_api_key.value,
           })
         });
         if (!res.ok) throw new Error((await res.json()).error || '저장 실패');
         form.threads_app_secret.value = '';
         form.openai_api_key.value = '';
         form.naver_client_secret.value = '';
+        form.youtube_api_key.value = '';
         msg.textContent = '공용 API 설정 저장 완료'; msg.style.color='var(--green)';
         loadSystemApiSettings();
       } catch (err) { msg.textContent='오류: '+err.message; msg.style.color='var(--red)'; }

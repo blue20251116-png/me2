@@ -67,6 +67,18 @@
           <button type="button" id="autopilotToggleBtn" class="btn-secondary">시작</button>
         </div>
         <p id="autopilotDetail" class="hint"></p>
+
+        <label class="checkbox-row" style="margin-top:10px;">
+          <input type="checkbox" id="autopilotYoutubeToggle" checked />
+          관련 쇼츠 콘텐츠 참고 <span class="label-note">선택한 상품과 관련된 YouTube 콘텐츠를 찾아 글 소재에 참고합니다</span>
+        </label>
+        <label>콘텐츠 탐색 방식
+          <select id="autopilotYoutubeOrderSelect">
+            <option value="relevance">상품 관련도 우선</option>
+            <option value="viewCount">조회수 높은 콘텐츠 우선</option>
+            <option value="date">최신 콘텐츠 우선</option>
+          </select>
+        </label>
       </div>
 
       <div class="panel narrow">
@@ -98,6 +110,24 @@
       </div>
 
       <div class="panel narrow">
+        <h2>🔥 관련 쇼츠 찾기</h2>
+        <p class="hint">선택한 상품과 관련된 YouTube 짧은 영상을 찾아 콘텐츠 소재로 활용합니다.</p>
+        <label>상품명
+          <input type="text" id="youtubeSearchInput" placeholder="예: 접이식 실리콘 텀블러" />
+        </label>
+        <label>정렬
+          <select id="youtubeOrderSelect">
+            <option value="relevance">상품 관련도</option>
+            <option value="viewCount">조회수 높은 순</option>
+            <option value="date">최신순</option>
+          </select>
+        </label>
+        <button type="button" id="youtubeSearchBtn" class="btn-secondary" style="width:100%; margin-top:4px;">관련 영상 찾기</button>
+        <p id="youtubeSearchMsg" class="msg"></p>
+        <div id="youtubeResults" class="youtube-results"></div>
+      </div>
+
+      <div class="panel narrow">
         <h2>새 글 예약</h2>
         <form id="composeForm">
           <label>타겟 독자
@@ -110,6 +140,12 @@
               <option value="40대 이상">40대 이상</option>
             </select>
           </label>
+          <div id="youtubeSourceBox" class="youtube-source-box hidden">
+            <span class="youtube-source-label">선택한 콘텐츠 소재</span>
+            <p class="yt-source-title" id="youtubeSourceTitle"></p>
+            <p class="yt-source-channel" id="youtubeSourceChannel"></p>
+            <button type="button" id="clearYoutubeSourceBtn" class="clear-source-btn">선택 해제</button>
+          </div>
           <label>본문
             <div class="textarea-toolbar">
               <button type="button" id="aiGenerateBtn" class="btn-ai">✨ AI로 글 써주기</button>

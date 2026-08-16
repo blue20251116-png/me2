@@ -251,6 +251,7 @@ async function runAiGenerate() {
         productName,
         price: currentProduct.price,
         target: document.getElementById('composeTargetSelect').value,
+        youtubeSource: selectedYoutubeSource || undefined,
       }),
     });
     const data = await res.json();
@@ -346,6 +347,137 @@ async function searchCoupangProducts() {
   }
 }
 
+// ---- 🔥 관련 쇼츠 찾기 (YouTube 콘텐츠 소싱 — 다운로드 아님, 소재 탐색용) ----
+let selectedYoutubeSource = null;
+// 같은 키워드+정렬로 짧은 시간 내 반복 검색하면 API 쿼터를 아끼기 위해 프론트 메모리에만 잠깐 캐시
+const youtubeSearchCache = new Map();
+const YOUTUBE_CACHE_TTL_MS = 2 * 60 * 1000;
+
+function fmtViews(n) {
+  const num = Number(n) || 0;
+  if (num >= 1000000) return `${Math.round(num / 10000)}만`;
+  if (num >= 10000) return `${(num / 10000).toFixed(1)}만`;
+  return num.toLocaleString('ko-KR');
+}
+
+function fmtYoutubeDate(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString('ko-KR', { year: 'numeric', month: 'numeric', day: 'numeric' });
+}
+
+function renderSelectedYoutubeSource() {
+  const box = document.getElementById('youtubeSourceBox');
+  if (!selectedYoutubeSource) {
+    box.classList.add('hidden');
+    return;
+  }
+  document.getElementById('youtubeSourceTitle').textContent = selectedYoutubeSource.title || '';
+  document.getElementById('youtubeSourceChannel').textContent = selectedYoutubeSource.channelTitle || '';
+  box.classList.remove('hidden');
+}
+
+function renderYoutubeResults(videos) {
+  const msg = document.getElementById('youtubeSearchMsg');
+  const resultsBox = document.getElementById('youtubeResults');
+
+  msg.textContent = `${videos.length}개 영상 찾음 · 참고할 영상을 골라주세요`;
+  msg.className = 'msg';
+
+  resultsBox.innerHTML = videos
+    .map(
+      (v, i) => `
+    <div class="youtube-card">
+      <img src="${v.thumbnail}" alt="" onerror="this.style.visibility='hidden'" />
+      <div class="yt-info">
+        <div class="yt-title">${(v.title || '').replace(/</g, '&lt;')}</div>
+        <div class="yt-meta">${(v.channelTitle || '').replace(/</g, '&lt;')} · 조회수 ${fmtViews(v.views)} · ${v.duration || ''} · ${fmtYoutubeDate(v.publishedAt)}</div>
+        <div class="yt-actions">
+          <a href="${v.url}" target="_blank" rel="noopener noreferrer">YouTube에서 보기</a>
+          <button type="button" class="use-btn" data-idx="${i}">이 소재 사용</button>
+        </div>
+      </div>
+    </div>`
+    )
+    .join('');
+
+  resultsBox.querySelectorAll('.use-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const v = videos[Number(btn.dataset.idx)];
+      selectedYoutubeSource = {
+        id: v.id,
+        title: v.title,
+        description: v.description,
+        channelTitle: v.channelTitle,
+        url: v.url,
+      };
+      renderSelectedYoutubeSource();
+    });
+  });
+}
+
+async function searchYoutubeVideos() {
+  const btn = document.getElementById('youtubeSearchBtn');
+  if (btn.disabled) return; // 검색 버튼 연타 방지
+
+  const keyword = document.getElementById('youtubeSearchInput').value.trim();
+  const order = document.getElementById('youtubeOrderSelect').value;
+  const msg = document.getElementById('youtubeSearchMsg');
+  const resultsBox = document.getElementById('youtubeResults');
+
+  if (!keyword) {
+    msg.textContent = '상품명을 먼저 입력해주세요';
+    msg.className = 'msg error';
+    return;
+  }
+
+  const cacheKey = `${keyword}::${order}`;
+  const cached = youtubeSearchCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < YOUTUBE_CACHE_TTL_MS) {
+    renderYoutubeResults(cached.videos);
+    return;
+  }
+
+  btn.disabled = true;
+  msg.textContent = '검색 중…';
+  msg.className = 'msg';
+  resultsBox.innerHTML = '';
+
+  try {
+    const res = await apiFetch(
+      `/api/youtube/search?keyword=${encodeURIComponent(keyword)}&order=${encodeURIComponent(order)}&limit=10`
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+
+    const videos = (data.videos || []).slice(0, 6);
+    youtubeSearchCache.set(cacheKey, { videos, at: Date.now() });
+
+    if (!videos.length) {
+      msg.textContent = data.message || '관련 영상을 찾지 못했습니다. 검색어를 조금 다르게 입력해보세요.';
+      msg.className = 'msg error';
+      return;
+    }
+    renderYoutubeResults(videos);
+  } catch (err) {
+    msg.textContent = err.message || 'YouTube 검색 중 오류가 발생했습니다.';
+    msg.className = 'msg error';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('youtubeSearchBtn').addEventListener('click', searchYoutubeVideos);
+document.getElementById('youtubeSearchInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    searchYoutubeVideos();
+  }
+});
+document.getElementById('clearYoutubeSourceBtn').addEventListener('click', () => {
+  selectedYoutubeSource = null;
+  renderSelectedYoutubeSource();
+});
+
 // ---- 완전 자동발행(오토파일럿) ----
 function fmtDateTime(iso) {
   if (!iso) return '';
@@ -376,11 +508,32 @@ async function loadAutopilotStatus() {
       btn.className = 'btn-secondary off';
       detail.textContent = data.lastKeyword ? `마지막으로 썼던${lastInfo}` : '';
     }
+    // "관련 쇼츠 콘텐츠 참고" 옵션 — 서버 값으로 화면 동기화 (저장 이벤트가 다시 발생하지 않도록 change 리스너 붙이기 전에 값만 세팅)
+    document.getElementById('autopilotYoutubeToggle').checked = data.youtubeSourceEnabled !== false;
+    document.getElementById('autopilotYoutubeOrderSelect').value = data.youtubeOrder || 'relevance';
   } catch {
     textEl.textContent = '상태를 불러오지 못했어요';
     textEl.className = 'autopilot-status-text off';
   }
 }
+
+// 완전자동화 "관련 쇼츠 콘텐츠 참고" ON/OFF + 탐색 방식은 시작/중지 버튼과 별개로 바로 저장
+async function saveAutopilotYoutubeSettings() {
+  if (!activeAccountId) return;
+  const enabled = document.getElementById('autopilotYoutubeToggle').checked;
+  const order = document.getElementById('autopilotYoutubeOrderSelect').value;
+  try {
+    await apiFetch(`/api/accounts/${activeAccountId}/autopilot/youtube-settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, order }),
+    });
+  } catch {
+    // 저장에 실패해도 완전자동화 자체는 계속 정상 동작하므로 조용히 무시
+  }
+}
+document.getElementById('autopilotYoutubeToggle').addEventListener('change', saveAutopilotYoutubeSettings);
+document.getElementById('autopilotYoutubeOrderSelect').addEventListener('change', saveAutopilotYoutubeSettings);
 
 document.getElementById('autopilotToggleBtn').addEventListener('click', async () => {
   const btn = document.getElementById('autopilotToggleBtn');
@@ -471,6 +624,9 @@ function applyPickedProduct(p) {
   lastScrapedLink = p.url; // 자동 스크래핑이 이 링크로 또 돌지 않도록 표시
   currentProduct = { name: p.name, price: p.price };
   originalProductImage = p.image; // 라이프스타일 이미지 생성 시 레퍼런스로 사용
+  // 쇼츠 찾기 입력창에도 상품명을 자동으로 채워준다 (직접 수정도 가능)
+  const youtubeInput = document.getElementById('youtubeSearchInput');
+  if (youtubeInput) youtubeInput.value = p.name || '';
   currentScene = null;
   resetLifestyleUI();
 
@@ -846,6 +1002,11 @@ document.getElementById('composeForm').addEventListener('submit', async (e) => {
     lastScrapedLink = '';
     uploadedFilename = null;
     currentProduct = { name: '', price: null };
+    selectedYoutubeSource = null;
+    renderSelectedYoutubeSource();
+    document.getElementById('youtubeSearchInput').value = '';
+    document.getElementById('youtubeResults').innerHTML = '';
+    document.getElementById('youtubeSearchMsg').textContent = '';
     loadDashboard();
   } catch (err) {
     msg.textContent = '오류: ' + err.message;
