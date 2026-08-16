@@ -185,10 +185,14 @@ async function refreshLongLivedToken(currentToken) {
 
 
 // 연결 직후 Threads 사용자명 가져오기
+// 참고: 예전엔 GET /{userId}로 직접 조회했는데, 유저 액세스 토큰으로는 이 방식이
+// "Unsupported get request" (code=100 subcode=33) 오류를 낸다 — 게시/댓글은 같은 토큰으로
+// 정상 동작하는 걸 보면 토큰 자체는 문제가 없고, 액세스 토큰 소유자 본인을 가리키는 GET /me가
+// 맞는 방식이다 (userId는 이제 URL에 안 쓰이지만 로그 상관관계 확인용으로 남겨둔다).
 async function fetchProfile(accessToken, userId) {
   try {
     const res = await axios.get(
-      `${GRAPH_BASE}/${userId}`,
+      `${GRAPH_BASE}/me`,
       {
         params: {
           fields: 'username',
