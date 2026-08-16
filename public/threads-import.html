@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Threads 영상 가져오기</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#faf8fb;color:#222;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:720px;margin:0 auto;padding:22px 16px 60px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.top h1{font-size:22px;margin:0}.back{color:#7d5bd6;text-decoration:none;font-weight:700}.card{background:#fff;border:1px solid #eee3f2;border-radius:20px;padding:18px;margin-bottom:14px;box-shadow:0 5px 20px rgba(80,40,100,.05)}label{display:block;font-weight:700;font-size:14px;margin:12px 0 7px}input,select{width:100%;border:1px solid #ddd1e6;border-radius:13px;padding:13px;font-size:15px;background:#fff}button{width:100%;border:0;border-radius:14px;padding:13px 14px;font-size:15px;font-weight:800;cursor:pointer;background:#111;color:#fff;margin-top:12px}button.secondary{background:#f1e8f6;color:#633d7c}button:disabled{opacity:.45;cursor:default}.hint{font-size:13px;color:#777;line-height:1.55;margin:6px 0}.status{font-size:14px;line-height:1.5;margin-top:10px;white-space:pre-wrap}.ok{color:#118846}.error{color:#d44747}.hidden{display:none!important}video{width:100%;max-height:480px;background:#111;border-radius:16px;margin-top:12px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.check{display:flex;align-items:center;gap:8px;margin-top:12px;font-weight:700}.check input{width:auto}.meta{font-size:12px;color:#777;word-break:break-all;margin-top:8px}.result-title{font-size:16px;font-weight:800;margin:4px 0}.pill{display:inline-block;background:#f3eef8;border-radius:999px;padding:5px 9px;font-size:12px;color:#6e4c86;margin-top:6px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <h1>🎬 Threads 영상 가져오기</h1>
+      <a class="back" href="/">글 예약으로</a>
+    </div>
+
+    <div class="card">
+      <div class="result-title">공개 Threads 게시물 URL</div>
+      <p class="hint">영상이 포함된 공개 Threads 게시물 주소를 붙여넣으면 서버로 MP4를 가져옵니다. Threads가 페이지 접근을 제한하거나 영상 주소를 숨긴 게시물은 실패할 수 있습니다.</p>
+      <label>사용할 Threads 계정</label>
+      <select id="accountSelect"><option value="">계정 불러오는 중…</option></select>
+      <label>Threads 게시물 URL</label>
+      <input id="threadsUrl" type="url" placeholder="https://www.threads.com/@아이디/post/..." />
+      <button id="importBtn">영상 가져오기</button>
+      <div id="importStatus" class="status"></div>
+    </div>
+
+    <div id="videoCard" class="card hidden">
+      <div class="result-title">가져온 영상</div>
+      <span class="pill" id="filePill"></span>
+      <video id="preview" controls playsinline></video>
+      <div id="sourceMeta" class="meta"></div>
+
+      <hr style="border:0;border-top:1px solid #eee;margin:18px 0" />
+      <div class="result-title">✂️ 짧게 자르기 / 음소거</div>
+      <p class="hint">시간을 비우면 원본 시작/끝을 그대로 사용합니다. 음소거는 기본 ON입니다.</p>
+      <div class="row">
+        <div><label>시작 초</label><input id="startSec" type="number" min="0" step="0.1" placeholder="0" /></div>
+        <div><label>끝 초</label><input id="endSec" type="number" min="0" step="0.1" placeholder="예: 12.5" /></div>
+      </div>
+      <label class="check"><input id="muteCheck" type="checkbox" checked /> 원본 소리 제거</label>
+      <button id="editBtn" class="secondary">편집본 만들기</button>
+      <div id="editStatus" class="status"></div>
+    </div>
+  </div>
+
+  <script>
+    let currentFilename = '';
+    let currentUrl = '';
+
+    async function jsonFetch(url, options = {}) {
+      const res = await fetch(url, { credentials: 'same-origin', ...options });
+      let data = {};
+      try { data = await res.json(); } catch {}
+      if (!res.ok) throw new Error(data.error || `요청 실패 (${res.status})`);
+      return data;
+    }
+
+    async function loadAccounts() {
+      const select = document.getElementById('accountSelect');
+      try {
+        const data = await jsonFetch('/api/threads/accounts');
+        const accounts = data.accounts || [];
+        if (!accounts.length) {
+          select.innerHTML = '<option value="">등록된 계정 없음</option>';
+          return;
+        }
+        select.innerHTML = accounts.map(a => `<option value="${a.id}">${a.label || '계정 ' + a.id}${a.threads_username ? ' · @' + a.threads_username : ''}</option>`).join('');
+      } catch (err) {
+        select.innerHTML = '<option value="">계정을 불러오지 못함</option>';
+        document.getElementById('importStatus').textContent = err.message;
+        document.getElementById('importStatus').className = 'status error';
+      }
+    }
+
+    document.getElementById('importBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('importBtn');
+      const accountId = document.getElementById('accountSelect').value;
+      const url = document.getElementById('threadsUrl').value.trim();
+      const status = document.getElementById('importStatus');
+      if (!accountId) return alert('Threads 계정을 선택해주세요.');
+      if (!url) return alert('Threads 게시물 URL을 입력해주세요.');
+      btn.disabled = true;
+      status.textContent = 'Threads 게시물에서 영상 찾는 중…';
+      status.className = 'status';
+      try {
+        const data = await jsonFetch('/api/threads/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountId: Number(accountId), url }),
+        });
+        currentFilename = data.filename;
+        currentUrl = data.url;
+        document.getElementById('preview').src = data.url;
+        document.getElementById('filePill').textContent = data.filename;
+        document.getElementById('sourceMeta').textContent = data.sourceUrl || url;
+        document.getElementById('videoCard').classList.remove('hidden');
+        status.textContent = '영상 가져오기 완료 · 아래에서 바로 음소거/컷 편집할 수 있어요.';
+        status.className = 'status ok';
+      } catch (err) {
+        status.textContent = '가져오기 실패: ' + err.message;
+        status.className = 'status error';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('editBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('editBtn');
+      const accountId = document.getElementById('accountSelect').value;
+      const status = document.getElementById('editStatus');
+      if (!currentFilename) return alert('먼저 Threads 영상을 가져와주세요.');
+      btn.disabled = true;
+      status.textContent = 'FFmpeg로 편집 중…';
+      status.className = 'status';
+      try {
+        const startRaw = document.getElementById('startSec').value;
+        const endRaw = document.getElementById('endSec').value;
+        const body = {
+          accountId: Number(accountId),
+          filename: currentFilename,
+          mute: document.getElementById('muteCheck').checked,
+        };
+        if (startRaw !== '') body.start = Number(startRaw);
+        if (endRaw !== '') body.end = Number(endRaw);
+        const data = await jsonFetch('/api/video/edit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        currentFilename = data.filename;
+        currentUrl = data.url;
+        document.getElementById('preview').src = data.url;
+        document.getElementById('filePill').textContent = data.filename;
+        status.textContent = `편집 완료 · ${data.duration.toFixed(1)}초${data.muted ? ' · 음소거' : ''}`;
+        status.className = 'status ok';
+      } catch (err) {
+        status.textContent = '편집 실패: ' + err.message;
+        status.className = 'status error';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    loadAccounts();
+  </script>
+</body>
+</html>
