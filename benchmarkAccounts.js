@@ -83,7 +83,7 @@ async function collectProfilePostsWithContext(context, username, { limit = 2 } =
     await page.waitForTimeout(1400);
     await page.mouse.wheel(0, 850);
     await page.waitForTimeout(350);
-    const raw = await page.evaluate(() => {
+    const raw = await page.evaluate(({ username, limit }) => {
       const out = [], seen = new Set();
       for (const a of document.querySelectorAll('a[href*="/post/"]')) {
         const href = a.href || '';
@@ -106,7 +106,7 @@ async function collectProfilePostsWithContext(context, username, { limit = 2 } =
         if (out.length >= limit) break;
       }
       return out;
-    });
+    }, { username, limit });
     return raw;
   } finally {
     try { await page.close(); } catch {}
