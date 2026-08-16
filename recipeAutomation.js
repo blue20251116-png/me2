@@ -2,7 +2,7 @@ const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 const youtubeApi = require('./youtubeApi');
 const coupangApi = require('./coupangApi');
-const { searchFoodPhoto } = require('./pexelsApi');
+const { searchFoodPhotos } = require('./pexelsApi');
 
 const RECIPE_TOPICS = [
   '비빔국수', '김치찌개', '된장찌개', '제육볶음', '닭볶음탕', '떡볶이',
@@ -88,23 +88,23 @@ async function findRecipeVideo(accountId, topic, order = 'relevance') {
   return null;
 }
 
-async function findRecipePhoto(recipe, topic) {
+async function findRecipePhotos(recipe, topic) {
   const apiKey = process.env.PEXELS_API_KEY;
   if (!apiKey) {
     console.log('[Recipe] Pexels API Key 없음 — 레시피 이미지는 생략');
-    return null;
+    return [];
   }
 
   const queries = [recipe.dishName, topic, `${recipe.dishName} korean food`];
 
   for (const query of queries) {
     try {
-      const photo = await searchFoodPhoto({ apiKey, query });
-      if (photo?.imageUrl) {
+      const photos = await searchFoodPhotos({ apiKey, query, count: 2 });
+      if (photos.length) {
         console.log(
-          `[Recipe] Pexels 요리사진 선택 — query="${query}" photographer="${photo.photographer || '-'}"`
+          `[Recipe] Pexels 요리사진 ${photos.length}장 선택 — query="${query}"`
         );
-        return photo;
+        return photos.slice(0, 2);
       }
     } catch (err) {
       console.log(
@@ -114,7 +114,7 @@ async function findRecipePhoto(recipe, topic) {
     }
   }
 
-  return null;
+  return [];
 }
 
 function sanitizeRecipeJson(data, fallbackDish) {
@@ -232,8 +232,8 @@ function buildRecipePostText(recipe) {
 
   const variants = {
     secret: `${hook}\n\n${recipe.dishName} 별거 안 들어가는데\n마지막 재료 하나에서 맛 방향이 꽤 갈리더라.\n\n정확한 계량이랑 포인트 재료는 댓글에 적어둘게.`,
-    family: `${recipe.dishName} 레시피 찾아보다가\n이 비율이 제일 따라 하기 쉽더라.\n\n재료 몇 개만 맞추면 생각보다 간단함.\n${recipe.servings} 기준은 댓글에 적어둘게.`,
-    viral: `${hook}\n\n요즘 이런 조합이 자주 보여서 레시피만 깔끔하게 정리해봄.\n핵심은 양념 비율이랑 마지막 재료 하나더라.\n\n정확한 계량은 댓글에 적어둘게.`,
+    family: `${recipe.dishName} 레시피 찾아보다가\n이 비율이 제일 따라 하기 쉽더라.\n\n재료 몇 개만 맞추면 생각보다 간단해.\n${recipe.servings} 기준은 댓글에 적어둘게.`,
+    viral: `${hook}\n\n요즘 이런 조합이 자주 보여서 레시피만 깔끔하게 정리해봤어.\n핵심은 양념 비율이랑 마지막 재료 하나더라.\n\n정확한 계량은 댓글에 적어둘게.`,
     restaurant: `${recipe.dishName} 집에서 만들 때\n양념 비율만 맞춰도 맛이 꽤 달라지는데\n마지막 한 가지가 포인트더라.\n\n${recipe.servings} 레시피 댓글에 남겨둘게.`,
     simple: `${hook}\n\n복잡한 레시피 말고\n딱 따라 하기 쉽게 계량만 다시 정리했어.\n포인트 재료까지 댓글에 같이 적어둘게.`,
   };
@@ -316,12 +316,16 @@ async function buildRecipeAutopilot({ account, target }) {
   // 상품컷은 레시피 게시 이미지에 절대 넣지 않는다.
   const product = await chooseCoupangProduct(account.id, recipe.coupangSearchKeyword);
 
-  // 레시피 게시 미디어는 Pexels 완성 요리사진 한 장만 사용한다.
-  // Pexels 실패/키 없음이면 이미지 없이 TEXT로 발행하고, 상품컷으로 fallback하지 않는다.
-  const foodPhoto = await findRecipePhoto(recipe, topic);
-  const imageUrl = foodPhoto?.imageUrl || null;
-  const extraImageUrl = null;
-  const imageSourceLabel = imageUrl ? 'Pexels 요리사진 1장' : '없음';
+  // 현재 posts 구조가 image_url + extra_image_url 2장을 안정적으로 지원하므로
+  // 서로 다른 Pexels 완성 요리사진을 최대 2장 사용한다.
+  const foodPhotos = await findRecipePhotos(recipe, topic);
+  const imageUrl = foodPhotos[0]?.imageUrl || null;
+  const extraImageUrl = foodPhotos[1]?.imageUrl || null;
+  const imageSourceLabel = extraImageUrl
+    ? 'Pexels 요리사진 2장'
+    : imageUrl
+      ? 'Pexels 요리사진 1장'
+      : '없음';
 
   console.log(
     `[Recipe] 핵심 재료="${recipe.secretIngredient}" 쿠팡검색="${recipe.coupangSearchKeyword}" 선택상품="${product.name}"`
@@ -339,7 +343,7 @@ async function buildRecipeAutopilot({ account, target }) {
     trendNote: `레시피형 · ${recipe.dishName}`,
     recipe,
     youtubeSource: video,
-    pexelsPhoto: foodPhoto,
+    pexelsPhotos: foodPhotos,
     target,
   };
 }
