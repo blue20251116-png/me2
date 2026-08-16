@@ -233,13 +233,6 @@ function startPublishJob() {
 
           // ------------------------------------------
           // 기존 게시물 호환
-          //
-          // 과거에 저장된 캐러셀 게시물이 있으면
-          // 기존 방식 그대로 발행.
-          //
-          // 새 오토파일럿은 AI 이미지를 만들지 않으므로
-          // 기본적으로 상품 원본사진 1장 또는
-          // 이미지 없는 썰형 게시물이 됨.
           // ------------------------------------------
 
           let mediaId;
@@ -273,10 +266,6 @@ function startPublishJob() {
               );
           }
 
-          // ------------------------------------------
-          // 게시 완료 처리
-          // ------------------------------------------
-
           db.prepare(
             `
             UPDATE posts
@@ -291,10 +280,6 @@ function startPublishJob() {
             new Date().toISOString(),
             post.id
           );
-
-          // ------------------------------------------
-          // 인사이트 기본값 생성
-          // ------------------------------------------
 
           db.prepare(
             `
@@ -317,15 +302,10 @@ function startPublishJob() {
             `[발행 완료] account #${account.id} post #${post.id} -> media ${mediaId}`
           );
 
-          // Threads 게시 직후 약간 대기
           await new Promise(
             (resolve) =>
               setTimeout(resolve, 3000)
           );
-
-          // ------------------------------------------
-          // 자연스러운 첫 댓글 + 고지 + 링크
-          // ------------------------------------------
 
           await postAffiliateComment(
             account,
@@ -791,10 +771,11 @@ async function runAutopilotOnce(
 
   let extraImageUrl = null;
 
+  let imageSourceLabel = '없음';
+
 
   // ==================================================
   // 썰형 상품글
-  //
   // 상품은 쿠팡 베스트/골드박스에서 먼저 선택.
   // 본문에서는 상품을 노골적으로 공개하지 않음.
   // 이미지 없음.
@@ -820,23 +801,17 @@ async function runAutopilotOnce(
       );
 
     imageUrl = null;
+    extraImageUrl = null;
+    imageSourceLabel = '없음';
 
 
   // ==================================================
   // 일반 상품글
-  //
-  // AI 이미지 생성하지 않음.
-  // 쿠팡 실제 상품사진 1장만 사용.
+  // YouTube 소싱이 성공하면 쇼츠 썸네일 + 쿠팡 상품 이미지.
+  // 저장된 직접 업로드 프레임이 있으면 그 프레임이 최우선.
   // ==================================================
 
   } else {
-
-    // ================================================
-    // 완전자동화 옵션 "관련 쇼츠 콘텐츠 참고"가 켜져 있으면(기본 ON) 상품과 관련된
-    // YouTube 콘텐츠를 찾아 글 소재로 참고한다. 이 단계는 절대 예외를 던지지 않으며
-    // (findAutopilotYoutubeSource 내부에서 전부 캐치), 실패하면 youtubeSource가 null이 되어
-    // 그냥 기존 상품 기반 글 생성으로 계속 진행된다 — 자동화 전체가 멈추지 않는다.
-    // ================================================
 
     let youtubeSource =
       null;
@@ -879,17 +854,29 @@ async function runAutopilotOnce(
         )
       ];
 
-    // ================================================
-    // 완전자동화 옵션 "업로드 영상 프레임 자동 사용"이 켜져 있으면(기본 OFF), 수동으로 이미
-    // 골라둔 영상 프레임(media_sources)이 이 상품과 이름이 겹치는지 확인해서 있으면 재사용한다.
-    // 이 단계도 절대 예외를 던지지 않는다 — 실패/불일치/파일 소실 시 조용히 기존 상품사진으로
-    // 되돌아간다(완전자동화 전체를 막지 않음). Railway가 재배포되어 프레임 파일이 사라졌을 수도
-    // 있으므로, DB에 기록만 있고 실제 파일이 없으면 사용하지 않는다.
-    // ================================================
-
+    // 기본 fallback은 기존 쿠팡 상품 이미지.
     imageUrl = picked.image || null;
     extraImageUrl = null;
+    imageSourceLabel = imageUrl
+      ? '원본 상품컷 1장'
+      : '없음';
 
+    // 관련 YouTube 콘텐츠의 공식 썸네일이 있으면 첫 장으로 사용하고,
+    // 쿠팡 상품 이미지는 두 번째 장으로 배치한다.
+    if (youtubeSource?.thumbnail) {
+      imageUrl = youtubeSource.thumbnail;
+      extraImageUrl = picked.image || null;
+      imageSourceLabel = extraImageUrl
+        ? 'YouTube 썸네일 + 상품컷'
+        : 'YouTube 썸네일 1장';
+
+      console.log(
+        `[Media] YouTube 썸네일 사용 — "${youtubeSource.title}"${extraImageUrl ? ' + 상품 이미지' : ''}`
+      );
+    }
+
+    // 사용자가 직접 업로드해 저장한 프레임이 있고 자동 프레임 사용 옵션이 켜져 있으면
+    // YouTube 썸네일보다 우선한다.
     if (account.autopilot_frame_media_enabled) {
       try {
         const media = findMediaSourceForProduct(account.id, picked.name);
@@ -899,13 +886,16 @@ async function runAutopilotOnce(
             console.log(`[Media] 연결된 영상 프레임 확인 — "${picked.name}" ↔ "${media.product_keyword}"`);
             imageUrl = media.image_url;
             extraImageUrl = media.extra_image_url || null;
+            imageSourceLabel = extraImageUrl
+              ? '업로드 프레임 2장'
+              : '업로드 프레임 1장';
             markMediaSourceUsed(media.id);
           } else {
-            console.log('[Media] 저장된 프레임 파일을 찾을 수 없음(재배포로 소실 추정) — 상품 이미지로 진행');
+            console.log('[Media] 저장된 프레임 파일을 찾을 수 없음(재배포로 소실 추정) — YouTube/상품 이미지 fallback 유지');
           }
         }
       } catch (err) {
-        console.log('[Media] 프레임 매칭 중 오류, 상품 이미지로 진행:', err.message);
+        console.log('[Media] 프레임 매칭 중 오류 — YouTube/상품 이미지 fallback 유지:', err.message);
       }
     }
   }
@@ -972,11 +962,7 @@ async function runAutopilotOnce(
 
 
   console.log(
-    `[자동발행 예약] account #${account.id} mode="${contentMode}" target="${target}" keyword="${keyword}" (${trendNote}) product="${picked.name}" image="${
-      imageUrl
-        ? '원본 상품컷 1장'
-        : '없음'
-    }"`
+    `[자동발행 예약] account #${account.id} mode="${contentMode}" target="${target}" keyword="${keyword}" (${trendNote}) product="${picked.name}" image="${imageSourceLabel}"`
   );
 }
 
@@ -1013,10 +999,6 @@ function startAutopilotJob() {
         of dueAccounts
       ) {
 
-        // --------------------------------------------
-        // 다음 발행 시간 먼저 지정
-        // --------------------------------------------
-
         const nextAt =
           new Date(
             Date.now() +
@@ -1035,10 +1017,6 @@ function startAutopilotJob() {
           account.id
         );
 
-
-        // --------------------------------------------
-        // 자동발행 실행
-        // --------------------------------------------
 
         try {
 
