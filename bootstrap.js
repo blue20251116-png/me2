@@ -19,11 +19,14 @@ require('./server');
 
 if (!appInstance) throw new Error('Express app 초기화에 실패했습니다.');
 
-const { getAccount, listAccounts, logUsage } = require('./db');
+const { db, getAccount, listAccounts, logUsage } = require('./db');
 const videoEditor = require('./videoEditor');
 const threadsMediaImporter = require('./threadsMediaImporter');
 const { searchThreadsMaterials } = require('./threadsMaterialSearch');
 const { generateFromThreadsMaterial } = require('./threadsMaterialWriter');
+
+// 예전 DB에도 레시피 댓글 컬럼이 확실히 있도록 보강한다.
+try { db.exec(`ALTER TABLE posts ADD COLUMN recipe_comment_text TEXT`); } catch {}
 
 const uploadsDir = path.join(__dirname, 'uploads');
 const videoEditLocks = new Set();
@@ -82,20 +85,59 @@ appInstance.get('/api/threads/material-search', requireOwnedAccount, async (req,
   }
 });
 
-// 검색된 Threads 소재를 참고해 원문 복사 없이 새 Threads 본문을 만든다. 쿠팡 API는 전혀 사용하지 않는다.
+// 검색된 Threads 소재를 참고해 원문 복사 없이 새 Threads 본문과(레시피면) 2/2 댓글을 만든다.
+// 쿠팡 API는 전혀 사용하지 않는다.
 appInstance.post('/api/threads/material-write', requireOwnedAccount, async (req, res) => {
   const keyword = String(req.body?.keyword || '').trim();
   const sourceText = String(req.body?.sourceText || '').trim();
   const mode = req.body?.mode === 'recipe' ? 'recipe' : 'product';
   if (!keyword && !sourceText) return res.status(400).json({ error: '검색어 또는 소재 내용이 필요합니다.' });
   try {
-    const texts = await generateFromThreadsMaterial(req.account.id, { keyword, sourceText, mode });
+    const generated = await generateFromThreadsMaterial(req.account.id, { keyword, sourceText, mode });
     if (req.currentUser?.id) logUsage(req.currentUser.id, 'text');
-    res.json({ success: true, texts });
+    res.json({ success: true, mode, ...generated });
   } catch (err) {
     console.error(`[Threads material write] account #${req.account.id}:`, err.message);
     res.status(422).json({ error: err.response?.data?.error?.message || err.message });
   }
+});
+
+// Threads 소재 레시피에서 만들어진 2/2 댓글까지 함께 저장하는 예약 엔드포인트.
+// 일반 예약은 기존 /api/posts를 그대로 사용하고, 레시피 소재를 쓴 경우에만 프론트가 이 API를 호출한다.
+appInstance.post('/api/threads/material-post', requireOwnedAccount, (req, res) => {
+  const text = String(req.body?.text || '').trim();
+  const scheduledAt = String(req.body?.scheduled_at || '').trim();
+  const recipeCommentText = String(req.body?.recipe_comment_text || '').trim();
+  if (!text || !scheduledAt) {
+    return res.status(400).json({ error: '본문과 발행 예정 시각은 필수입니다.' });
+  }
+
+  const link = String(req.body?.link || '').trim() || null;
+  const imageUrl = String(req.body?.image_url || '').trim() || null;
+  const extraImageUrl = req.body?.video_url ? null : (String(req.body?.extra_image_url || '').trim() || null);
+  const videoUrl = String(req.body?.video_url || '').trim() || null;
+  const autoCommentEnabled = req.body?.auto_comment_enabled === false ? 0 : 1;
+  const commentStatus = (link || recipeCommentText) && autoCommentEnabled ? 'pending' : 'none';
+
+  const info = db.prepare(`
+    INSERT INTO posts
+      (account_id, text, link, image_url, extra_image_url, video_url, scheduled_at,
+       auto_comment_enabled, comment_status, recipe_comment_text)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    req.account.id,
+    text,
+    link,
+    imageUrl,
+    extraImageUrl,
+    videoUrl,
+    scheduledAt,
+    autoCommentEnabled,
+    commentStatus,
+    recipeCommentText || null
+  );
+
+  res.json({ success: true, id: info.lastInsertRowid });
 });
 
 // 공개 Threads 게시물 URL에서 영상 주소를 찾아 계정별 영상 폴더에 MP4로 저장한다.
@@ -182,5 +224,6 @@ appInstance.post('/api/video/edit', requireOwnedAccount, async (req, res) => {
 });
 
 console.log('[Threads material] 쿠팡 API 없는 Threads 소재 검색/AI 글쓰기 API 활성화');
+console.log('[Threads material] 레시피 2/2 댓글 예약 저장 API 활성화');
 console.log('[Threads import] 공개 Threads 영상 가져오기 API 활성화');
 console.log('[Video edit] 영상 음소거/앞뒤 컷 API 활성화');
