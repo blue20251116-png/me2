@@ -264,18 +264,23 @@ function buildRecipeCommentText(recipe) {
 
   let text = `✅ ${recipe.dishName} (${recipe.servings})\n\n🛒 재료\n${main}${optional}\n\n♦ ${label}\n${recipe.secretIngredient}${reason}\n\n🥢 만드는 법\n${steps}\n\n${label} 찾기 쉽게 아래에 링크 붙여둘게👇`;
 
-  // 고지문+URL이 뒤에 붙을 여유를 남긴다.
-  if (text.length > 390) {
+  // scheduler에서 쿠팡파트너스 고지문+URL을 뒤에 추가하므로,
+  // 레시피 본문 자체는 240자 안쪽으로 제한해 Threads 댓글 500자 한도를 안전하게 지킨다.
+  if (text.length > 240) {
+    const compactIngredients = recipe.ingredients
+      .slice(0, 7)
+      .map((x) => `${x.name} ${x.amount}`)
+      .join(', ');
     const compactSteps = recipe.steps
-      .slice(0, 4)
+      .slice(0, 3)
       .map((x, i) => `${i + 1}. ${x}`)
       .join('\n');
 
-    text = `✅ ${recipe.dishName} (${recipe.servings})\n\n🛒 재료\n${main}\n\n♦ ${label}\n${recipe.secretIngredient}${reason}\n\n🥢 레시피\n${compactSteps}\n\n${label} 찾기 쉽게 아래에 링크 붙여둘게👇`;
+    text = `✅ ${recipe.dishName} (${recipe.servings})\n재료: ${compactIngredients}\n♦ ${label}: ${recipe.secretIngredient}\n${compactSteps}\n${label} 링크는 아래에👇`;
   }
 
-  if (text.length > 430) {
-    text = `${text.slice(0, 410).trimEnd()}…\n\n${label}: ${recipe.secretIngredient}\n아래 링크에서 바로 확인 가능👇`;
+  if (text.length > 240) {
+    text = `${text.slice(0, 232).trimEnd()}…\n링크는 아래에👇`;
   }
 
   return text;
@@ -305,8 +310,6 @@ async function chooseCoupangProduct(accountId, searchKeyword) {
     throw new Error(`쿠팡에서 "${searchKeyword}" 관련 상품을 찾지 못했습니다`);
   }
 
-  // 단순 첫 결과 대신 검색어 직접 일치도를 최우선으로 보고,
-  // 동점에 가까울 때 로켓/이미지 보유 상품에 소폭 가점한다.
   return products
     .map((product, index) => ({
       product,
