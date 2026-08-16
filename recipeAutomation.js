@@ -16,19 +16,16 @@ const RECIPE_TOPICS = [
 
 const POST_STYLES = ['problem', 'difference', 'simple', 'ratio', 'ingredient', 'leftover'];
 const SECRET_LABELS = [
-  '여기서 포인트',
-  '마지막에 넣은 재료',
-  '맛 잡을 때 넣은 건',
-  '양념에서 중요한 건',
+  '맛 잡아주는 재료',
+  '포인트 재료',
+  '양념에서 중요한 재료',
   '국물 맛 잡는 재료',
   '한 끗 차이 나는 재료',
 ];
 const LINK_LEADS = [
-  '찾기 쉽게 아래에 링크 붙여둘게👇',
-  '내가 고른 재료는 아래에 붙여둘게👇',
-  '같은 재료 찾는 사람 있을까 봐 아래에 남겨둘게👇',
-  '재료 이름 헷갈릴 수 있어서 링크도 같이 둘게👇',
-  '이 재료 찾기 귀찮으면 아래 링크 보면 돼👇',
+  '맛 잡아주는 재료 링크는 아래에👇',
+  '포인트 재료 링크는 아래에👇',
+  '재료 찾기 쉽게 링크는 아래에👇',
 ];
 
 function getOpenAIKey(accountId) {
@@ -260,29 +257,49 @@ function buildRecipePostText(recipe) {
 function buildRecipeCommentText(recipe) {
   const label = pickOne(SECRET_LABELS);
   const linkLead = pickOne(LINK_LEADS);
-  const main = recipe.ingredients.map((x) => `${x.name} ${x.amount}`).join(', ');
-  const optional = recipe.optional.length
-    ? `\n\n있으면 좋은 재료: ${recipe.optional.join(', ')}`
+
+  const ingredientLines = recipe.ingredients
+    .slice(0, 10)
+    .map((x) => `▪ ${x.name} ${x.amount}`)
+    .join('\n');
+
+  const optionalLine = recipe.optional.length
+    ? `\n✔ 취향껏 ${recipe.optional.slice(0, 5).join(', ')} 추가해도 좋아` 
     : '';
-  const steps = recipe.steps.map((x, i) => `${i + 1}. ${x}`).join('\n');
 
-  let text = `✅ ${recipe.dishName} (${recipe.servings})\n재료: ${main}${optional}\n\n♦ ${label}: ${recipe.secretIngredient}\n${steps}\n\n${linkLead}`;
+  const stepLines = recipe.steps
+    .slice(0, 4)
+    .map((x, i) => `${i + 1}. ${x}`)
+    .join('\n');
 
-  if (text.length > 240) {
+  let text = `✅ ${recipe.dishName} (${recipe.servings} 기준)\n${ingredientLines}${optionalLine}\n\n♦ ${label}: ${recipe.secretIngredient}\n${stepLines}\n\n${linkLead}`;
+
+  // 최종 고지문/쿠팡 링크가 뒤에 붙으므로 레시피 댓글 자체는 여유 있게 제한한다.
+  // 내용이 길면 재료/조리순서를 우선 유지하면서 단계적으로 압축한다.
+  if (text.length > 320) {
     const compactIngredients = recipe.ingredients
-      .slice(0, 7)
-      .map((x) => `${x.name} ${x.amount}`)
-      .join(', ');
+      .slice(0, 8)
+      .map((x) => `▪ ${x.name} ${x.amount}`)
+      .join('\n');
     const compactSteps = recipe.steps
       .slice(0, 3)
       .map((x, i) => `${i + 1}. ${x}`)
       .join('\n');
 
-    text = `✅ ${recipe.dishName} (${recipe.servings})\n재료: ${compactIngredients}\n♦ ${label}: ${recipe.secretIngredient}\n${compactSteps}\n${linkLead}`;
+    text = `✅ ${recipe.dishName} (${recipe.servings} 기준)\n${compactIngredients}\n\n♦ ${label}: ${recipe.secretIngredient}\n${compactSteps}\n\n${linkLead}`;
   }
 
-  if (text.length > 240) {
-    text = `${text.slice(0, 224).trimEnd()}…\n${linkLead}`;
+  if (text.length > 300) {
+    const compactIngredients = recipe.ingredients
+      .slice(0, 7)
+      .map((x) => `▪ ${x.name} ${x.amount}`)
+      .join('\n');
+    const compactSteps = recipe.steps
+      .slice(0, 2)
+      .map((x, i) => `${i + 1}. ${x}`)
+      .join('\n');
+
+    text = `✅ ${recipe.dishName} (${recipe.servings} 기준)\n${compactIngredients}\n♦ ${label}: ${recipe.secretIngredient}\n${compactSteps}\n${linkLead}`;
   }
 
   return text;
