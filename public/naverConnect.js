@@ -54,8 +54,6 @@
       return;
     }
 
-    // 서버는 기존 link 필드 하나를 저장하므로 내부적으로 같은 필드에 미러링한다.
-    // 둘 다 입력된 경우 사용자가 명시적으로 넣은 네이버 커넥트 링크를 우선한다.
     coupangInput.value = url;
     lastMirroredNaver = url;
     if (msg) {
@@ -69,7 +67,6 @@
   naverInput.addEventListener('change', syncNaverLink);
   autoComment?.addEventListener('change', () => setTimeout(renderPreview, 0));
 
-  // 기존 app.js의 submit 핸들러보다 먼저 실행되도록 capture 단계에서 링크를 동기화한다.
   form.addEventListener('submit', (e) => {
     const url = naverInput.value.trim();
     if (!url) return;
@@ -87,7 +84,6 @@
     lastMirroredNaver = url;
   }, true);
 
-  // 쿠팡 링크를 직접 다시 입력하면 네이버 커넥트 선택을 해제한다.
   coupangInput.addEventListener('input', () => {
     const current = coupangInput.value.trim();
     if (naverInput.value.trim() && current !== naverInput.value.trim()) {
@@ -96,4 +92,39 @@
       if (msg) msg.textContent = '';
     }
   });
+})();
+
+// 쿠팡 API가 없어도 사용할 수 있는 Threads 소재 찾기 UI를 글 예약 탭에 추가한다.
+(() => {
+  if (document.getElementById('threadsMaterialSearchInput')) return;
+  const panels = [...document.querySelectorAll('#tab-compose > .panel')];
+  const shortsPanel = panels.find(p => p.querySelector('h2')?.textContent.includes('관련 쇼츠'));
+  const composePanel = panels.find(p => p.querySelector('h2')?.textContent.includes('새 글 예약'));
+  const anchor = shortsPanel || composePanel;
+  if (!anchor?.parentElement) return;
+
+  const panel = document.createElement('div');
+  panel.className = 'panel narrow';
+  panel.innerHTML = `
+    <h2>Threads 소재 자동찾기</h2>
+    <p class="hint">쿠팡 API 없이 Threads 공개 게시물에서 상품·레시피 소재를 찾고, 선택한 소재로 AI 글과 영상을 한 번에 준비합니다.</p>
+    <label>종류
+      <select id="threadsMaterialMode">
+        <option value="product">상품/생활용품</option>
+        <option value="recipe">레시피/요리</option>
+      </select>
+    </label>
+    <div class="search-row">
+      <input type="text" id="threadsMaterialSearchInput" placeholder="예: 폼롤러, 접이식 계단, 김치볶음밥" />
+      <button type="button" id="threadsMaterialSearchBtn" class="btn-secondary">찾기</button>
+    </div>
+    <p id="threadsMaterialMsg" class="msg"></p>
+    <div id="threadsMaterialResults" class="product-results"></div>
+  `;
+  anchor.parentElement.insertBefore(panel, anchor);
+
+  const script = document.createElement('script');
+  script.src = '/threadsMaterialUi.js';
+  script.defer = true;
+  document.body.appendChild(script);
 })();
