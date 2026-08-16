@@ -3,14 +3,14 @@ const crypto = require('crypto');
 const { getAccount } = require('./db');
 
 const DOMAIN = 'https://api-gateway.coupang.com';
+const PARTNERS_BASE = '/v2/providers/affiliate_open_api/apis/openapi/v1';
 
-// 쿠팡파트너스 Open API는 HMAC-SHA256 서명 인증(CEA 알고리즘)을 사용한다.
 function buildAuthHeader(account, method, pathWithQuery) {
-  if (!account.coupang_access_key || !account.coupang_secret_key) {
+  if (!account?.coupang_access_key || !account?.coupang_secret_key) {
     throw new Error('이 계정에 쿠팡파트너스 Access Key/Secret Key가 설정되지 않았습니다');
   }
-  const [path, query = ''] = pathWithQuery.split('?');
 
+  const [path, query = ''] = pathWithQuery.split('?');
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const signedDate =
@@ -24,26 +24,23 @@ function buildAuthHeader(account, method, pathWithQuery) {
     'Z';
 
   const message = signedDate + method + path + query;
-  const signature = crypto.createHmac('sha256', account.coupang_secret_key).update(message).digest('hex');
+  const signature = crypto
+    .createHmac('sha256', account.coupang_secret_key)
+    .update(message)
+    .digest('hex');
 
   return `CEA algorithm=HmacSHA256, access-key=${account.coupang_access_key}, signed-date=${signedDate}, signature=${signature}`;
 }
 
-async function searchProducts(accountId, keyword, limit = 10) {
-  const account = getAccount(accountId);
-  const params = new URLSearchParams({ keyword, limit: String(limit) });
-  if (account.coupang_sub_id) params.set('subId', account.coupang_sub_id);
+function assertPartnersSuccess(data, label) {
+  const rCode = data?.rCode;
+  if (rCode != null && String(rCode) !== '0') {
+    throw new Error(`${label} 실패: rCode=${rCode} ${data?.rMessage || ''}`.trim());
+  }
+}
 
-  const path = '/v2/providers/affiliate_open_api/apis/openapi/products/search';
-  const pathWithQuery = `${path}?${params.toString()}`;
-
-  const res = await axios.get(`${DOMAIN}${pathWithQuery}`, {
-    headers: { Authorization: buildAuthHeader(account, 'GET', pathWithQuery) },
-    timeout: 10000,
-  });
-
-  const list = res.data?.data?.productData || [];
-  return list.map((p) => ({
+function mapProduct(p) {
+  return {
     productId: p.productId,
     name: p.productName,
     image: p.productImage,
@@ -51,12 +48,59 @@ async function searchProducts(accountId, keyword, limit = 10) {
     url: p.productUrl,
     isRocket: !!p.isRocket,
     isFreeShipping: !!p.isFreeShipping,
-  }));
+    rank: p.rank || null,
+    categoryName: p.categoryName || null,
+  };
+}
+
+async function signedGet(accountId, pathWithQuery, label) {
+  const account = getAccount(accountId);
+  if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
+
+  const res = await axios.get(`${DOMAIN}${pathWithQuery}`, {
+    headers: {
+      Authorization: buildAuthHeader(account, 'GET', pathWithQuery),
+      'Content-Type': 'application/json',
+    },
+    timeout: 10000,
+  });
+
+  assertPartnersSuccess(res.data, label);
+  return res.data;
+}
+
+async function searchProducts(accountId, keyword, limit = 10) {
+  const account = getAccount(accountId);
+  if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
+
+  const cleanKeyword = String(keyword || '').trim();
+  if (!cleanKeyword) throw new Error('쿠팡 상품 검색어가 비어 있습니다');
+
+  // 쿠팡파트너스 상품검색 API의 limit 최대값은 10이다.
+  const safeLimit = Math.max(1, Math.min(10, Number(limit) || 10));
+  const params = new URLSearchParams({
+    keyword: cleanKeyword,
+    limit: String(safeLimit),
+    srpLinkOnly: 'false',
+  });
+  if (account.coupang_sub_id) params.set('subId', account.coupang_sub_id);
+
+  const path = `${PARTNERS_BASE}/products/search`;
+  const pathWithQuery = `${path}?${params.toString()}`;
+  const data = await signedGet(accountId, pathWithQuery, '쿠팡 상품검색');
+
+  const list = Array.isArray(data?.data?.productData) ? data.data.productData : [];
+  if (!list.length) {
+    console.log(`[Coupang][SEARCH] 결과 0개 keyword="${cleanKeyword}" rCode=${data?.rCode ?? '-'} message="${data?.rMessage || ''}"`);
+  }
+  return list.map(mapProduct);
 }
 
 async function createDeeplink(accountId, urls) {
   const account = getAccount(accountId);
-  const path = '/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink';
+  if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
+
+  const path = `${PARTNERS_BASE}/deeplink`;
   const body = {
     coupangUrls: Array.isArray(urls) ? urls : [urls],
     ...(account.coupang_sub_id ? { subId: account.coupang_sub_id } : {}),
@@ -70,6 +114,7 @@ async function createDeeplink(accountId, urls) {
     timeout: 10000,
   });
 
+  assertPartnersSuccess(res.data, '쿠팡 딥링크');
   return (res.data?.data || []).map((d) => ({
     originalUrl: d.originalUrl,
     shortenUrl: d.shortenUrl,
@@ -77,43 +122,30 @@ async function createDeeplink(accountId, urls) {
   }));
 }
 
-// 골드박스(오늘의 특가) 조회 — 카테고리를 우리가 지정하지 않고, 쿠팡이 지금 실제로 미는 특가 상품을
-// 카테고리 상관없이 통째로 준다. 식품이 실제로 잘 팔리는 날엔 골드박스에도 식품이 많이 걸리기 때문에,
-// 카테고리 비중을 우리가 손으로 정하지 않고도 실제 판매 데이터를 자연스럽게 반영할 수 있다.
-// 주의: goldbox 엔드포인트 경로는 공식 문서를 직접 열람하지 못한 상태로 구현한 것이라 100% 확정은 아님 —
-// 아래에서 실패하면 기존 카테고리 랜덤 방식으로, 그마저 실패하면 키워드 검색으로 순서대로 폴백한다
 async function getGoldboxProducts(accountId, limit = 20) {
   const account = getAccount(accountId);
-  const params = new URLSearchParams({ limit: String(limit) });
+  if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
+
+  // 골드박스 API는 별도 limit 파라미터 없이 호출하는 것이 문서 기준이다.
+  const params = new URLSearchParams();
   if (account.coupang_sub_id) params.set('subId', account.coupang_sub_id);
 
-  const path = '/v2/providers/affiliate_open_api/apis/openapi/products/goldbox';
-  const pathWithQuery = `${path}?${params.toString()}`;
+  const path = `${PARTNERS_BASE}/products/goldbox`;
+  const query = params.toString();
+  const pathWithQuery = query ? `${path}?${query}` : path;
+  const data = await signedGet(accountId, pathWithQuery, '쿠팡 골드박스');
+  const list = Array.isArray(data?.data) ? data.data : [];
 
-  const res = await axios.get(`${DOMAIN}${pathWithQuery}`, {
-    headers: { Authorization: buildAuthHeader(account, 'GET', pathWithQuery) },
-    timeout: 10000,
-  });
+  if (!list.length) {
+    console.log(`[Coupang][GOLDBOX] 결과 0개 account=${accountId} rCode=${data?.rCode ?? '-'} message="${data?.rMessage || ''}"`);
+  }
 
-  const list = res.data?.data || [];
-  return list.map((p) => ({
-    productId: p.productId,
-    name: p.productName,
-    image: p.productImage,
-    price: p.productPrice,
-    url: p.productUrl,
-    isRocket: !!p.isRocket,
-    isFreeShipping: !!p.isFreeShipping,
+  return list.slice(0, Math.max(1, Number(limit) || 20)).map((p) => ({
+    ...mapProduct(p),
     discountRate: p.discountRate || null,
   }));
 }
 
-// 카테고리별 베스트 상품 조회 — 키워드 검색과 별개인 쿠팡파트너스 랭킹 기반 엔드포인트.
-// 검색 API는 "그 키워드에 걸리는 상품"을 주는 거라 실제 잘 팔리는지는 보장 안 되는데,
-// 이건 쿠팡이 매기는 카테고리별 베스트셀러 순위를 그대로 준다.
-// categoryId는 쿠팡파트너스가 정의한 고정 카테고리 코드(displayCategoryCode와는 다른 체계)라
-// 아래 목록은 커뮤니티에 통용되는 값 기준 — 실제 응답이 비거나 에러 나는 카테고리가 있으면
-// 파트너스 사이트(https://partners.coupang.com) "베스트 카테고리" 화면에서 정확한 코드로 교체할 것
 const BEST_CATEGORY_IDS = {
   '여성패션': 1001,
   '남성패션': 1002,
@@ -132,28 +164,22 @@ const BEST_CATEGORY_IDS = {
 
 async function getBestCategoryProducts(accountId, categoryId, limit = 20) {
   const account = getAccount(accountId);
-  const params = new URLSearchParams({ limit: String(limit) });
+  if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
+
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+  const params = new URLSearchParams({ limit: String(safeLimit) });
   if (account.coupang_sub_id) params.set('subId', account.coupang_sub_id);
 
-  const path = `/v2/providers/affiliate_open_api/apis/openapi/products/bestcategories/${categoryId}`;
+  const path = `${PARTNERS_BASE}/products/bestcategories/${categoryId}`;
   const pathWithQuery = `${path}?${params.toString()}`;
+  const data = await signedGet(accountId, pathWithQuery, '쿠팡 베스트카테고리');
+  const list = Array.isArray(data?.data) ? data.data : [];
 
-  const res = await axios.get(`${DOMAIN}${pathWithQuery}`, {
-    headers: { Authorization: buildAuthHeader(account, 'GET', pathWithQuery) },
-    timeout: 10000,
-  });
+  if (!list.length) {
+    console.log(`[Coupang][BEST] 결과 0개 account=${accountId} category=${categoryId} rCode=${data?.rCode ?? '-'} message="${data?.rMessage || ''}"`);
+  }
 
-  const list = res.data?.data || [];
-  return list.map((p) => ({
-    productId: p.productId,
-    name: p.productName,
-    image: p.productImage,
-    price: p.productPrice,
-    url: p.productUrl,
-    isRocket: !!p.isRocket,
-    isFreeShipping: !!p.isFreeShipping,
-    rank: p.rank || null,
-  }));
+  return list.map(mapProduct);
 }
 
 module.exports = {
