@@ -31,23 +31,47 @@ async function callOpenAI(accountId, system, user, { maxTokens = 1000, json = fa
   return json ? JSON.parse(text) : text;
 }
 
+async function buildImageQueries(accountId, dish) {
+  const queries = [];
+  const push = (q) => {
+    const v = String(q || '').trim();
+    if (v && !queries.some(x => x.toLowerCase() === v.toLowerCase())) queries.push(v);
+  };
+  push(dish);
+  try {
+    const d = await callOpenAI(
+      accountId,
+      '너는 음식 이미지 검색어 생성기다. 요리명을 Pexels/Pixabay에서 잘 검색되는 짧은 영어 음식명으로 바꾼다. 수식어를 줄이고 음식 자체를 나타내는 2~5단어 검색어를 만든다. 첫 검색어는 최대한 정확하게, 두 번째는 조금 더 넓게 만든다. JSON={"queries":["tomato pasta","pasta"]} 형식만 출력한다.',
+      `요리명: ${dish}`,
+      { maxTokens: 180, json: true, temperature: 0.2 }
+    );
+    if (Array.isArray(d.queries)) d.queries.slice(0, 3).forEach(push);
+  } catch (e) {
+    console.log(`[ContentOnly][ImageQuery] AI 변환 실패 dish="${dish}": ${e.message}`);
+  }
+  return queries.slice(0, 4);
+}
+
 async function visionCheck(accountId, dish, imageUrl) {
   const apiKey = getOpenAIKey(accountId);
   if (!apiKey) return false;
   try {
     const res = await axios.post('https://api.openai.com/v1/chat/completions', {
-      model: 'gpt-4o-mini', temperature: 0, max_tokens: 140, response_format: { type: 'json_object' },
+      model: 'gpt-4o-mini', temperature: 0, max_tokens: 170, response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: '음식 사진 검수기다. 목표 음식과 같은 완성요리가 명확할 때만 accept=true. JSON={"accept":true/false,"confidence":0-100,"reason":"짧은 이유"}' },
+        { role: 'system', content: '음식 사진 검수기다. 목표 음식과 완전히 동일하거나 일반 사용자가 봤을 때 같은 종류의 완성요리로 자연스럽게 받아들일 수 있으면 accept=true. 조리 전 재료, 포장제품, 완전히 다른 음식, 음식이 아닌 이미지는 false. 토핑/그릇/고명/재료 배치 차이는 허용한다. JSON={"accept":true/false,"confidence":0-100,"reason":"짧은 이유"}' },
         { role: 'user', content: [
-          { type: 'text', text: `목표 음식: ${dish}\n사진이 정확히 이 완성요리인지 판정해.` },
+          { type: 'text', text: `목표 음식: ${dish}\n이 사진이 Threads 레시피 대표사진으로 써도 자연스러운 같은 종류의 완성요리인지 판정해.` },
           { type: 'image_url', image_url: { url: imageUrl, detail: 'low' } },
         ] },
       ],
     }, { headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, timeout: 30000 });
     const d = JSON.parse(res.data.choices[0].message.content);
-    const ok = d.accept === true && Number(d.confidence || 0) >= 80;
-    console.log(`[ContentOnly][Vision] ${ok ? '승인' : '거절'} dish="${dish}" confidence=${Number(d.confidence || 0)}`);
+    const confidence = Number(d.confidence || 0);
+    const reason = String(d.reason || '');
+    const hardReject = /다른 음식|조리 전|생재료|포장|제품 사진|음식이 아님|완성요리가 아님/i.test(reason);
+    const ok = d.accept === true && (confidence >= 70) && !hardReject;
+    console.log(`[ContentOnly][Vision] ${ok ? '승인' : '거절'} dish="${dish}" confidence=${confidence} reason="${reason}"`);
     return ok;
   } catch (e) {
     console.log(`[ContentOnly][Vision] 실패 dish="${dish}": ${e.message}`);
@@ -55,35 +79,47 @@ async function visionCheck(accountId, dish, imageUrl) {
   }
 }
 
+async function collectApproved(accountId, dish, photos, approved) {
+  for (const p of photos || []) {
+    if (!p?.imageUrl || approved.some(x => x.imageUrl === p.imageUrl)) continue;
+    if (await visionCheck(accountId, dish, p.imageUrl)) approved.push(p);
+    if (approved.length >= 2) break;
+  }
+}
+
 async function pickPhotos(accountId, dish) {
   const approved = [];
-  const sources = [];
+  const sources = new Set();
+  const queries = await buildImageQueries(accountId, dish);
+  console.log(`[ContentOnly][ImageQuery] dish="${dish}" queries=${queries.map(q => `"${q}"`).join(' / ')}`);
+
   const pexelsKey = getPexelsApiKey() || process.env.PEXELS_API_KEY;
   if (pexelsKey) {
-    try {
-      const photos = await searchPexels({ apiKey: pexelsKey, query: dish, count: 8 });
-      for (const p of photos) {
-        if (p?.imageUrl && await visionCheck(accountId, dish, p.imageUrl)) approved.push(p);
-        if (approved.length >= 2) break;
-      }
-      if (approved.length) sources.push('Pexels');
-    } catch (e) { console.log(`[ContentOnly][Pexels] 실패: ${e.message}`); }
-  }
-  if (approved.length < 2) {
-    const pixabayKey = getPixabayApiKey() || process.env.PIXABAY_API_KEY;
-    if (pixabayKey) {
+    for (const query of queries) {
+      if (approved.length >= 2) break;
       try {
-        const photos = await searchPixabay({ apiKey: pixabayKey, query: dish, count: 8 });
-        for (const p of photos) {
-          if (!p?.imageUrl || approved.some(x => x.imageUrl === p.imageUrl)) continue;
-          if (await visionCheck(accountId, dish, p.imageUrl)) approved.push(p);
-          if (approved.length >= 2) break;
-        }
-        if (approved.length) sources.push('Pixabay');
-      } catch (e) { console.log(`[ContentOnly][Pixabay] 실패: ${e.message}`); }
+        const photos = await searchPexels({ apiKey: pexelsKey, query, count: 3 });
+        const before = approved.length;
+        await collectApproved(accountId, dish, photos, approved);
+        if (approved.length > before) sources.add('Pexels');
+      } catch (e) { console.log(`[ContentOnly][Pexels] 실패 query="${query}": ${e.message}`); }
     }
   }
-  return { photos: approved.slice(0, 2), source: sources.join('+') || null };
+
+  const pixabayKey = getPixabayApiKey() || process.env.PIXABAY_API_KEY;
+  if (approved.length < 2 && pixabayKey) {
+    for (const query of queries) {
+      if (approved.length >= 2) break;
+      try {
+        const photos = await searchPixabay({ apiKey: pixabayKey, query, count: 2 });
+        const before = approved.length;
+        await collectApproved(accountId, dish, photos, approved);
+        if (approved.length > before) sources.add('Pixabay');
+      } catch (e) { console.log(`[ContentOnly][Pixabay] 실패 query="${query}": ${e.message}`); }
+    }
+  }
+
+  return { photos: approved.slice(0, 2), source: [...sources].join('+') || null };
 }
 
 async function generateRecipe(accountId, target) {
