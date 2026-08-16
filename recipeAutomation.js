@@ -2,7 +2,7 @@ const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 const youtubeApi = require('./youtubeApi');
 const coupangApi = require('./coupangApi');
-const { cropYoutubeThumbnail } = require('./youtubeThumbnailCrop');
+const { searchFoodPhoto } = require('./pexelsApi');
 
 const RECIPE_TOPICS = [
   '비빔국수', '김치찌개', '된장찌개', '제육볶음', '닭볶음탕', '떡볶이',
@@ -98,6 +98,35 @@ async function findRecipeVideo(accountId, topic, order = 'relevance') {
       console.log(
         `[Recipe] YouTube 검색 실패 "${q}":`,
         err.response?.data?.error?.message || err.message
+      );
+    }
+  }
+
+  return null;
+}
+
+async function findRecipePhoto(recipe, topic) {
+  const apiKey = process.env.PEXELS_API_KEY;
+  if (!apiKey) {
+    console.log('[Recipe] Pexels API Key 없음 — 상품컷 fallback 사용');
+    return null;
+  }
+
+  const queries = [recipe.dishName, topic, `${recipe.dishName} korean food`];
+
+  for (const query of queries) {
+    try {
+      const photo = await searchFoodPhoto({ apiKey, query });
+      if (photo?.imageUrl) {
+        console.log(
+          `[Recipe] Pexels 요리사진 선택 — query="${query}" photographer="${photo.photographer || '-'}"`
+        );
+        return photo;
+      }
+    } catch (err) {
+      console.log(
+        `[Recipe] Pexels 이미지 검색 실패 "${query}":`,
+        err.response?.data?.error || err.message
       );
     }
   }
@@ -323,6 +352,7 @@ async function buildRecipeAutopilot({ account, target }) {
   const topic = pickRecipeTopic();
   console.log(`[Recipe] 레시피형 시작 — 주제="${topic}"`);
 
+  // YouTube는 레시피 내용 참고용으로만 사용한다. 게시 이미지는 사용하지 않는다.
   const video = await findRecipeVideo(
     account.id,
     topic,
@@ -335,33 +365,15 @@ async function buildRecipeAutopilot({ account, target }) {
     recipe.coupangSearchKeyword
   );
 
-  let imageUrl = product.image || null;
-  let extraImageUrl = null;
-  let imageSourceLabel = imageUrl ? '비밀소스 상품컷 1장' : '없음';
+  // 게시 이미지는 Pexels 완성요리 사진을 1장으로, 쿠팡 핵심재료 상품컷을 2장으로 사용한다.
+  // Pexels가 실패하거나 키가 없으면 기존처럼 상품컷 1장으로 안전하게 fallback한다.
+  const foodPhoto = await findRecipePhoto(recipe, topic);
 
-  if (video?.thumbnail) {
-    let thumbnail = video.thumbnail;
-
-    try {
-      thumbnail = await cropYoutubeThumbnail({
-        account,
-        thumbnailUrl: video.thumbnail,
-        videoId: video.id,
-      });
-      console.log('[Recipe] 레시피 썸네일 중앙 크롭 완료');
-    } catch (err) {
-      console.log(
-        '[Recipe] 레시피 썸네일 크롭 실패 — 원본 사용:',
-        err.message
-      );
-    }
-
-    imageUrl = thumbnail;
-    extraImageUrl = product.image || null;
-    imageSourceLabel = extraImageUrl
-      ? '레시피 썸네일 + 비밀소스 상품컷'
-      : '레시피 썸네일 1장';
-  }
+  let imageUrl = foodPhoto?.imageUrl || product.image || null;
+  let extraImageUrl = foodPhoto?.imageUrl && product.image ? product.image : null;
+  let imageSourceLabel = foodPhoto?.imageUrl
+    ? (extraImageUrl ? 'Pexels 요리사진 + 핵심재료 상품컷' : 'Pexels 요리사진 1장')
+    : (imageUrl ? '핵심재료 상품컷 1장' : '없음');
 
   console.log(
     `[Recipe] 핵심 재료="${recipe.secretIngredient}" 쿠팡검색="${recipe.coupangSearchKeyword}" 선택상품="${product.name}"`
@@ -379,6 +391,7 @@ async function buildRecipeAutopilot({ account, target }) {
     trendNote: `레시피형 · ${recipe.dishName}`,
     recipe,
     youtubeSource: video,
+    pexelsPhoto: foodPhoto,
     target,
   };
 }
