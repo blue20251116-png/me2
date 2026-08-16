@@ -1,8 +1,5 @@
 const axios = require('axios');
 
-// Pexels는 한국어 세부 메뉴명을 잘못 이해하는 경우가 많아서
-// 레시피 자동화에서 쓰는 메뉴는 검색용 영문명 + 검증 토큰을 명시적으로 관리한다.
-// 정확한 사진을 못 찾으면 다른 'Korean food' 사진으로 대체하지 않고 빈 배열을 반환한다.
 const FOOD_QUERY_MAP = {
   '비빔국수': { search: 'bibim guksu Korean spicy noodles', tokens: ['bibim guksu', 'spicy noodles'] },
   '김치찌개': { search: 'kimchi jjigae Korean kimchi stew', tokens: ['kimchi jjigae', 'kimchi stew'] },
@@ -46,125 +43,43 @@ const FOOD_QUERY_MAP = {
 };
 
 function normalizeDishQuery(query) {
-  return String(query || '')
-    .replace(/\s+korean\s+food.*$/i, '')
-    .replace(/\s+dish.*$/i, '')
-    .trim();
+  return String(query || '').replace(/\s+korean\s+food.*$/i, '').replace(/\s+dish.*$/i, '').trim();
 }
-
 function resolveFoodQuery(query) {
   const normalized = normalizeDishQuery(query);
   if (!normalized) return null;
-
-  if (FOOD_QUERY_MAP[normalized]) {
-    return { dish: normalized, ...FOOD_QUERY_MAP[normalized] };
-  }
-
-  // 한국어인데 매핑이 없는 메뉴는 Pexels에 광범위 검색을 던지지 않는다.
-  // 잘못된 음식 사진보다 사진 없음이 낫다.
+  if (FOOD_QUERY_MAP[normalized]) return { dish: normalized, ...FOOD_QUERY_MAP[normalized], mapped: true };
   if (/[가-힣]/.test(normalized)) return null;
-
-  const words = normalized
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((word) => word.length >= 3)
-    .slice(0, 4);
-
-  return {
-    dish: normalized,
-    search: normalized,
-    tokens: words,
-  };
+  const words = normalized.toLowerCase().split(/[^a-z0-9]+/).filter(word => word.length >= 3).slice(0, 5);
+  return { dish: normalized, search: normalized, tokens: words, mapped: false };
 }
-
 function textMatchesDish(photo, resolved) {
   const haystack = `${photo?.alt || ''} ${photo?.url || ''}`.toLowerCase();
   if (!haystack || !resolved?.tokens?.length) return false;
-
-  return resolved.tokens.some((token) => {
+  return resolved.tokens.some(token => {
     const parts = String(token).toLowerCase().split(/\s+/).filter(Boolean);
-    return parts.length && parts.every((part) => haystack.includes(part));
+    return parts.length && parts.every(part => haystack.includes(part));
   });
 }
-
 function visualSignature(photo) {
   const alt = String(photo?.alt || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const photographer = String(photo?.photographer || '').toLowerCase().trim();
   return `${photographer}|${alt}`;
 }
-
+function toItem(photo,resolved){const imageUrl=photo.src?.large2x||photo.src?.large||photo.src?.portrait||photo.src?.original||null;if(!imageUrl)return null;return{id:photo.id,imageUrl,photographer:photo.photographer||'',photographerUrl:photo.photographer_url||'',pexelsUrl:photo.url||'',alt:photo.alt||'',matchedDish:resolved.dish,searchQuery:resolved.search,source:'pexels'};}
 async function searchFoodPhotos({ apiKey, query, count = 3 }) {
   if (!apiKey) return [];
-
   const resolved = resolveFoodQuery(query);
-  if (!resolved) {
-    console.log(`[Pexels] 정확한 이미지 검색어 없음 — 원문="${String(query || '').trim()}"`);
-    return [];
-  }
-
+  if (!resolved) { console.log(`[Pexels] 정확한 이미지 검색어 없음 — 원문="${String(query || '').trim()}"`); return []; }
   const wanted = Math.max(1, Math.min(3, Number(count) || 3));
-  const res = await axios.get('https://api.pexels.com/v1/search', {
-    headers: { Authorization: apiKey },
-    params: {
-      query: resolved.search,
-      per_page: 30,
-      orientation: 'portrait',
-      size: 'large',
-    },
-    timeout: 15000,
-  });
-
+  const res = await axios.get('https://api.pexels.com/v1/search', { headers:{Authorization:apiKey}, params:{query:resolved.search,per_page:30,orientation:'portrait',size:'large'}, timeout:15000 });
   const photos = Array.isArray(res.data?.photos) ? res.data.photos : [];
-  const seenIds = new Set();
-  const seenVisuals = new Set();
-  const exact = [];
-
-  for (const photo of photos) {
-    if (!photo?.id || seenIds.has(photo.id)) continue;
-    seenIds.add(photo.id);
-
-    // 검색 결과라고 무조건 쓰지 않고, Pexels alt/URL에도 메뉴 특징이 확인되는 사진만 통과.
-    // 특히 tofu/pork/chicken처럼 너무 넓은 단어 하나만으로는 통과하지 않도록
-    // FOOD_QUERY_MAP의 검증 토큰을 구체적인 2단어 이상 표현 위주로 유지한다.
-    if (!textMatchesDish(photo, resolved)) continue;
-
-    const signature = visualSignature(photo);
-    if (signature && seenVisuals.has(signature)) continue;
-    if (signature) seenVisuals.add(signature);
-
-    const imageUrl = photo.src?.large2x || photo.src?.large || photo.src?.portrait || photo.src?.original || null;
-    if (!imageUrl) continue;
-
-    exact.push({
-      id: photo.id,
-      imageUrl,
-      photographer: photo.photographer || '',
-      photographerUrl: photo.photographer_url || '',
-      pexelsUrl: photo.url || '',
-      alt: photo.alt || '',
-      matchedDish: resolved.dish,
-      searchQuery: resolved.search,
-    });
-
-    if (exact.length >= wanted) break;
-  }
-
-  if (!exact.length) {
-    console.log(
-      `[Pexels] 정확한 음식사진 없음 — dish="${resolved.dish}" search="${resolved.search}" (엉뚱한 음식으로 대체하지 않음)`
-    );
-  } else {
-    console.log(
-      `[Pexels] 정확 매칭 ${exact.length}장 — dish="${resolved.dish}" search="${resolved.search}"`
-    );
-  }
-
-  return exact;
+  const seenIds=new Set(),seenVisuals=new Set(),exact=[],fallback=[];
+  for(const photo of photos){if(!photo?.id||seenIds.has(photo.id))continue;seenIds.add(photo.id);const sig=visualSignature(photo);if(sig&&seenVisuals.has(sig))continue;if(sig)seenVisuals.add(sig);const item=toItem(photo,resolved);if(!item)continue;if(textMatchesDish(photo,resolved))exact.push(item);else if(!resolved.mapped)fallback.push(item);if(exact.length>=wanted)break;}
+  const out=exact.slice(0,wanted);
+  if(out.length<wanted&&!resolved.mapped){for(const item of fallback){if(!out.some(x=>x.imageUrl===item.imageUrl))out.push(item);if(out.length>=wanted)break;}}
+  if(!out.length)console.log(`[Pexels] 음식사진 후보 없음 — dish="${resolved.dish}" search="${resolved.search}"`);else console.log(`[Pexels] 후보 ${out.length}장 — dish="${resolved.dish}" search="${resolved.search}" exact=${exact.length}`);
+  return out;
 }
-
-async function searchFoodPhoto({ apiKey, query }) {
-  const photos = await searchFoodPhotos({ apiKey, query, count: 1 });
-  return photos[0] || null;
-}
-
-module.exports = { searchFoodPhoto, searchFoodPhotos };
+async function searchFoodPhoto({apiKey,query}){const photos=await searchFoodPhotos({apiKey,query,count:1});return photos[0]||null;}
+module.exports={searchFoodPhoto,searchFoodPhotos};
