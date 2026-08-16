@@ -79,6 +79,11 @@
             <option value="date">최신 콘텐츠 우선</option>
           </select>
         </label>
+
+        <label class="checkbox-row" style="margin-top:10px;">
+          <input type="checkbox" id="autopilotFrameMediaToggle" />
+          업로드 영상 프레임 자동 사용 <span class="label-note">현재 상품과 연결된 업로드 영상이 있을 경우 AI 추천 프레임을 게시 이미지로 사용합니다. 없으면 자동으로 상품 이미지를 사용합니다.</span>
+        </label>
       </div>
 
       <div class="panel narrow">
@@ -202,11 +207,16 @@
               영상에서 사진 추출
             </label>
             <button type="button" id="extractFramesBtn" class="btn-secondary hidden" style="width:100%; margin-top:6px;">🎬 영상에서 사진 추출</button>
+            <label class="checkbox-row hidden" id="aiVisionToggleRow" style="font-weight:normal; margin-top:6px;">
+              <input type="checkbox" id="aiVisionToggle" checked />
+              AI 베스트컷 자동 추천 <span class="label-note">사람 신원은 식별하지 않고 장면 품질만 분석합니다</span>
+            </label>
             <p id="extractFramesStatus" class="ai-status"></p>
           </div>
 
           <div id="frameCandidatesBox" class="hidden">
             <p class="hint" style="margin-top:6px; margin-bottom:4px;">영상에서 추출한 사진 <span class="label-note">최대 2장까지 선택 가능</span></p>
+            <p id="aiVisionStatus" class="ai-status"></p>
             <div id="frameCandidatesGrid" class="frame-grid"></div>
           </div>
 
@@ -214,11 +224,11 @@
             <p class="hint" style="margin-top:6px; margin-bottom:4px;">게시 이미지 구성</p>
             <label class="checkbox-row" style="font-weight:normal;">
               <input type="radio" name="imageComposition" id="compositionFramesOnly" value="frames_only" checked />
-              추출한 사진만 게시
+              <span id="compositionFramesOnlyLabel">추출한 사진만 게시</span>
             </label>
             <label class="checkbox-row hidden" id="compositionFramesPlusProductRow" style="font-weight:normal;">
               <input type="radio" name="imageComposition" id="compositionFramesPlusProduct" value="frames_plus_product" />
-              추출한 사진 + 상품 이미지
+              <span id="compositionFramesPlusProductLabel">추출한 사진 + 상품 이미지</span>
             </label>
             <label class="checkbox-row hidden" id="compositionProductOnlyRow" style="font-weight:normal;">
               <input type="radio" name="imageComposition" id="compositionProductOnly" value="product_only" />

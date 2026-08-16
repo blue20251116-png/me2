@@ -743,6 +743,24 @@ input:focus, select:focus, textarea:focus {
   background: var(--green);
   border-color: var(--green);
 }
+.frame-thumb.ai-recommended { border-color: var(--amber); }
+.frame-thumb .frame-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  color: #1a1300;
+  background: var(--amber);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-weight: 600;
+  max-width: calc(100% - 30px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.frame-thumb.ai-excluded { opacity: 0.55; }
 
 #detailImagesGallery {
   display: grid;

@@ -511,6 +511,7 @@ async function loadAutopilotStatus() {
     // "관련 쇼츠 콘텐츠 참고" 옵션 — 서버 값으로 화면 동기화 (저장 이벤트가 다시 발생하지 않도록 change 리스너 붙이기 전에 값만 세팅)
     document.getElementById('autopilotYoutubeToggle').checked = data.youtubeSourceEnabled !== false;
     document.getElementById('autopilotYoutubeOrderSelect').value = data.youtubeOrder || 'relevance';
+    document.getElementById('autopilotFrameMediaToggle').checked = !!data.frameMediaEnabled;
   } catch {
     textEl.textContent = '상태를 불러오지 못했어요';
     textEl.className = 'autopilot-status-text off';
@@ -534,6 +535,21 @@ async function saveAutopilotYoutubeSettings() {
 }
 document.getElementById('autopilotYoutubeToggle').addEventListener('change', saveAutopilotYoutubeSettings);
 document.getElementById('autopilotYoutubeOrderSelect').addEventListener('change', saveAutopilotYoutubeSettings);
+
+// 완전자동화 "업로드 영상 프레임 자동 사용" ON/OFF 저장
+document.getElementById('autopilotFrameMediaToggle').addEventListener('change', async () => {
+  if (!activeAccountId) return;
+  const enabled = document.getElementById('autopilotFrameMediaToggle').checked;
+  try {
+    await apiFetch(`/api/accounts/${activeAccountId}/autopilot/frame-media-settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+  } catch {
+    // 저장 실패해도 완전자동화 자체는 계속 정상 동작하므로 조용히 무시
+  }
+});
 
 document.getElementById('autopilotToggleBtn').addEventListener('click', async () => {
   const btn = document.getElementById('autopilotToggleBtn');
@@ -736,7 +752,17 @@ document.getElementById('removeVideoBtn').addEventListener('click', removeUpload
 let currentFrameJobId = null;
 let currentFrames = []; // [{id, time, url}]
 let selectedFrameUrls = []; // 최대 2장 (기존 Threads 게시 로직이 image_url+extra_image_url 2장까지만 지원)
+let frameRecommendations = {}; // frameId -> {category, score, reason} (AI 분석 성공 시에만 채워짐)
+let recommendedFrameIds = []; // AI가 우선순위대로 추천한 frameId 목록 (최대 2개)
 const MAX_SELECTED_FRAMES = 2;
+
+const CATEGORY_LABELS = {
+  person_hook: '인물/후킹',
+  product_usage: '제품 사용',
+  product_closeup: '제품 클로즈업',
+  general: '기타',
+  bad: '사용 부적합',
+};
 
 // 아직 게시물에 쓰이지 않은(선택 확정 전) 추출 작업 폴더를 정리. 이미 예약글로 제출된 프레임은
 // 여기서 지우지 않는다 — 이 함수는 영상 교체/삭제 시점에만 호출된다.
@@ -751,26 +777,34 @@ async function resetVideoFrameUI() {
   currentFrameJobId = null;
   currentFrames = [];
   selectedFrameUrls = [];
+  frameRecommendations = {};
+  recommendedFrameIds = [];
   document.getElementById('frameCandidatesBox').classList.add('hidden');
   document.getElementById('frameCandidatesGrid').innerHTML = '';
+  document.getElementById('aiVisionStatus').textContent = '';
   document.getElementById('imageCompositionRow').classList.add('hidden');
   document.getElementById('extractFramesStatus').textContent = '';
   document.getElementById('compositionFramesOnly').checked = true;
+  document.getElementById('compositionFramesOnlyLabel').textContent = '추출한 사진만 게시';
+  document.getElementById('compositionFramesPlusProductLabel').textContent = '추출한 사진 + 상품 이미지';
   applyImageComposition();
 }
 
 document.querySelectorAll('input[name="videoUsageMode"]').forEach((radio) => {
   radio.addEventListener('change', () => {
     const btn = document.getElementById('extractFramesBtn');
+    const toggleRow = document.getElementById('aiVisionToggleRow');
     const form = document.getElementById('composeForm');
     if (document.getElementById('videoUsageExtract').checked) {
       btn.classList.remove('hidden');
+      toggleRow.classList.remove('hidden');
       // 이미지(추출 프레임)로 게시할 것이므로 영상 URL은 비운다 — 발행 로직이 videoUrl을
       // 우선하므로, 비워두지 않으면 프레임을 골라도 영상으로 그대로 게시돼버린다.
       form.video_url.value = '';
       applyImageComposition();
     } else {
       btn.classList.add('hidden');
+      toggleRow.classList.add('hidden');
       // "영상 그대로 게시"로 되돌리면 지금까지 고른 프레임/상품 이미지는 게시에 쓰이지 않으므로 비운다
       form.video_url.value = uploadedVideoUrl;
       form.image_url.value = '';
@@ -806,10 +840,18 @@ document.getElementById('extractFramesBtn').addEventListener('click', async () =
     currentFrameJobId = data.jobId;
     currentFrames = data.frames || [];
     selectedFrameUrls = [];
+    frameRecommendations = {};
+    recommendedFrameIds = [];
     renderFrameCandidates();
 
     status.textContent = `${currentFrames.length}장의 장면을 찾았어요 · 최대 ${MAX_SELECTED_FRAMES}장까지 선택하세요`;
     status.className = 'ai-status ok';
+
+    // "AI 베스트컷 자동 추천"이 켜져 있으면 이어서 자동으로 분석을 시도한다. 실패해도 이미
+    // 위에서 프레임 후보는 정상적으로 표시된 상태라 수동 선택은 그대로 가능하다.
+    if (document.getElementById('aiVisionToggle').checked) {
+      await runAiFrameRecommendation();
+    }
   } catch (err) {
     status.textContent = '추출 실패: ' + err.message;
     status.className = 'ai-status error';
@@ -818,8 +860,62 @@ document.getElementById('extractFramesBtn').addEventListener('click', async () =
   }
 });
 
+// AI 베스트컷 추천 — 실패해도 예외를 던지지 않고 "수동 선택 가능" 상태로 조용히 남는다
+async function runAiFrameRecommendation() {
+  if (!currentFrameJobId) return;
+  const visionStatus = document.getElementById('aiVisionStatus');
+  visionStatus.textContent = 'AI가 베스트컷을 고르는 중…';
+  visionStatus.className = 'ai-status';
+
+  try {
+    const res = await apiFetch(`/api/video/frames/${currentFrameJobId}/recommend`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+
+    frameRecommendations = {};
+    (data.recommendations || []).forEach((r) => {
+      frameRecommendations[r.frameId] = r;
+    });
+    recommendedFrameIds = data.recommended || [];
+
+    // 추천 결과를 기본 선택으로 반영 (사용자가 이후 자유롭게 바꿀 수 있음)
+    selectedFrameUrls = recommendedFrameIds
+      .map((id) => currentFrames.find((f) => f.id === id)?.url)
+      .filter(Boolean)
+      .slice(0, MAX_SELECTED_FRAMES);
+
+    // 추천 성공 시 조합 옵션 문구를 "AI 추천 프레임" 기준으로 바꿔서 어떤 걸 쓰는지 명확히 함
+    document.getElementById('compositionFramesOnlyLabel').textContent = 'AI 추천 프레임만';
+    document.getElementById('compositionFramesPlusProductLabel').textContent = 'AI 추천 프레임 + 상품 이미지';
+    // 기본값은 "AI 추천 프레임 + 상품 이미지" 권장 — 상품 이미지가 있을 때만 그 옵션을 기본으로 선택
+    if (originalProductImage && document.getElementById('compositionFramesPlusProduct')) {
+      document.getElementById('compositionFramesPlusProduct').checked = true;
+    }
+
+    renderFrameCandidates();
+    applyImageComposition();
+
+    visionStatus.textContent = recommendedFrameIds.length
+      ? `AI가 ${recommendedFrameIds.length}개 장면을 추천했어요 · 마음에 안 들면 직접 바꿔도 됩니다`
+      : 'AI가 추천할 만한 장면을 찾지 못했어요 · 직접 선택해주세요';
+    visionStatus.className = 'ai-status ok';
+  } catch (err) {
+    visionStatus.textContent = 'AI 추천 없이 수동 선택 가능 (' + err.message + ')';
+    visionStatus.className = 'ai-status';
+  }
+}
+
 function fmtFrameTime(t) {
   return `${Number(t).toFixed(1)}초`;
+}
+
+function frameBadgeHtml(frameId) {
+  const rec = frameRecommendations[frameId];
+  if (!rec) return '';
+  const rank = recommendedFrameIds.indexOf(frameId);
+  const label = CATEGORY_LABELS[rec.category] || rec.category;
+  const star = rank >= 0 ? '⭐'.repeat(1) + (rank + 1) + '순위 ' : '';
+  return `<span class="frame-badge">${star}${label} ${rec.score}점</span>`;
 }
 
 function renderFrameCandidates() {
@@ -827,14 +923,26 @@ function renderFrameCandidates() {
   const box = document.getElementById('frameCandidatesBox');
 
   grid.innerHTML = currentFrames
-    .map(
-      (f) => `
-    <div class="frame-thumb ${selectedFrameUrls.includes(f.url) ? 'selected' : ''}" data-url="${f.url}">
+    .map((f) => {
+      const rec = frameRecommendations[f.id];
+      const isBad = rec && rec.category === 'bad';
+      const isRecommended = recommendedFrameIds.includes(f.id);
+      const classes = [
+        'frame-thumb',
+        selectedFrameUrls.includes(f.url) ? 'selected' : '',
+        isRecommended ? 'ai-recommended' : '',
+        isBad ? 'ai-excluded' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      return `
+    <div class="${classes}" data-url="${f.url}" data-id="${f.id}">
       <img src="${f.url}" alt="" />
+      ${frameBadgeHtml(f.id)}
       <span class="frame-time">${fmtFrameTime(f.time)}</span>
       <span class="frame-check"></span>
-    </div>`
-    )
+    </div>`;
+    })
     .join('');
   box.classList.remove('hidden');
 
@@ -1157,6 +1265,10 @@ document.getElementById('composeForm').addEventListener('submit', async (e) => {
     video_url: form.video_url.value,
     scheduled_at: new Date(form.scheduled_at.value).toISOString(),
     auto_comment_enabled: form.auto_comment_enabled.checked,
+    // 영상 프레임을 실제로 골라서 쓴 경우에만 채워짐 — 완전자동화가 나중에 비슷한 상품을 고를 때
+    // 이 조합을 재사용할 수 있도록 media_sources에 저장하는 용도(선택 사항)
+    product_name: currentFrameJobId ? currentProduct.name || '' : undefined,
+    frame_job_id: currentFrameJobId || undefined,
   };
   try {
     const res = await apiFetch('/api/posts', {
@@ -1185,9 +1297,14 @@ document.getElementById('composeForm').addEventListener('submit', async (e) => {
     currentFrameJobId = null;
     currentFrames = [];
     selectedFrameUrls = [];
+    frameRecommendations = {};
+    recommendedFrameIds = [];
     document.getElementById('frameCandidatesBox').classList.add('hidden');
     document.getElementById('frameCandidatesGrid').innerHTML = '';
+    document.getElementById('aiVisionStatus').textContent = '';
     document.getElementById('imageCompositionRow').classList.add('hidden');
+    document.getElementById('compositionFramesOnlyLabel').textContent = '추출한 사진만 게시';
+    document.getElementById('compositionFramesPlusProductLabel').textContent = '추출한 사진 + 상품 이미지';
     uploadedVideoUrl = '';
     currentDetailImages = [];
     originalProductImage = '';
