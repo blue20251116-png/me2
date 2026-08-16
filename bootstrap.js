@@ -19,11 +19,13 @@ require('./server');
 
 if (!appInstance) throw new Error('Express app 초기화에 실패했습니다.');
 
-const { getAccount } = require('./db');
+const { getAccount, listAccounts } = require('./db');
 const videoEditor = require('./videoEditor');
+const threadsMediaImporter = require('./threadsMediaImporter');
 
 const uploadsDir = path.join(__dirname, 'uploads');
 const videoEditLocks = new Set();
+const threadsImportLocks = new Set();
 
 function requireOwnedAccount(req, res, next) {
   const accountId = Number(req.query.accountId || req.body?.accountId || req.params?.accountId);
@@ -52,7 +54,50 @@ function ownVideoPath(accountId, filename) {
   return path.join(uploadsDir, 'videos', String(accountId), safeFilename);
 }
 
-// 직접 업로드한 계정 소유 영상만 편집 가능.
+// Threads 영상 가져오기 전용 화면에서 현재 사용자의 계정 목록을 불러오기 위한 최소 API.
+appInstance.get('/api/threads/accounts', (req, res) => {
+  if (!req.currentUser) return res.status(401).json({ error: '로그인이 필요합니다' });
+  res.json({ accounts: listAccounts(req.currentUser.id) });
+});
+
+// 공개 Threads 게시물 URL에서 영상 주소를 찾아 계정별 영상 폴더에 MP4로 저장한다.
+// 페이지 HTML에 공개 영상 주소가 노출되는 게시물만 지원하며, Threads가 접근을 제한하면 실패할 수 있다.
+appInstance.post('/api/threads/import', requireOwnedAccount, async (req, res) => {
+  const url = String(req.body?.url || '').trim();
+  if (!url) return res.status(400).json({ error: 'Threads 게시물 URL을 입력해주세요.' });
+
+  if (threadsImportLocks.has(req.account.id)) {
+    return res.status(429).json({ error: '이미 Threads 영상을 가져오는 중입니다. 완료 후 다시 시도해주세요.' });
+  }
+
+  threadsImportLocks.add(req.account.id);
+  try {
+    const outputDir = path.join(uploadsDir, 'videos', String(req.account.id));
+    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
+    const result = await threadsMediaImporter.importThreadsVideo({ url, outputDir });
+    const base = publicBaseUrl(req, req.account);
+    const publicUrl = `${base}/uploads/videos/${req.account.id}/${encodeURIComponent(result.filename)}`;
+
+    res.json({
+      success: true,
+      filename: result.filename,
+      url: publicUrl,
+      mediaType: 'video',
+      size: result.size,
+      sourceUrl: result.sourceUrl,
+      poster: result.poster || null,
+      title: result.title || '',
+    });
+  } catch (err) {
+    console.error(`[Threads import] account #${req.account.id}:`, err.message);
+    res.status(422).json({ error: err.message || 'Threads 영상을 가져오지 못했습니다.' });
+  } finally {
+    threadsImportLocks.delete(req.account.id);
+  }
+});
+
+// 직접 업로드하거나 Threads에서 이 계정 영상 폴더로 가져온 영상만 편집 가능.
 // 입력 filename은 basename만 사용하고 실제 경로는 계정별 폴더에서 서버가 직접 조립한다.
 appInstance.post('/api/video/edit', requireOwnedAccount, async (req, res) => {
   const filename = path.basename(String(req.body?.filename || ''));
@@ -100,4 +145,5 @@ appInstance.post('/api/video/edit', requireOwnedAccount, async (req, res) => {
   }
 });
 
+console.log('[Threads import] 공개 Threads 영상 가져오기 API 활성화');
 console.log('[Video edit] 영상 음소거/앞뒤 컷 API 활성화');
