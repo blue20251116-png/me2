@@ -74,19 +74,30 @@
       const ta=form.querySelector('textarea[name="text"]');if(generatedTexts[0]&&ta)ta.value=generatedTexts[0];showComment(generatedComments[0]||'');
       const box=document.getElementById('aiCandidates');if(box&&generatedTexts.length){box.innerHTML=generatedTexts.map((t,n)=>`<div class="ai-candidate ${n===0?'selected':''}" data-threads-idx="${n}"><span class="pick-label">버전 ${n+1} · 클릭해서 교체</span><p style="white-space:pre-wrap;">${esc(t)}</p></div>`).join('');box.classList.remove('hidden');box.querySelectorAll('.ai-candidate').forEach(c=>c.onclick=()=>{box.querySelectorAll('.ai-candidate').forEach(z=>z.classList.remove('selected'));c.classList.add('selected');selectVersion(Number(c.dataset.threadsIdx));});}
 
-      const exactImages=(wr.value.sourceMedia?.images||item.images||[]).filter(Boolean);
+      // 소재 목록에서 이미 판별한 원본 사진 개수를 신뢰한다.
+      // 상세 페이지에는 영상 poster/프리뷰용 img가 추가로 생길 수 있어서
+      // sourceMedia.images를 그대로 쓰면 원본 사진 1장이 7~9장으로 증식할 수 있다.
+      const listedImages=(item.images||[]).filter(Boolean);
+      const detailedImages=(wr.value.sourceMedia?.images||[]).filter(Boolean);
+      const listedImageCount=Math.max(0,Number(item.imageCount||listedImages.length||0));
+      let exactImages=[];
+      if(listedImageCount>0){
+        exactImages=(listedImages.length?listedImages:detailedImages).slice(0,listedImageCount);
+      } else if(!item.hasVideo){
+        exactImages=detailedImages;
+      }
+
       const directVideos=(wr.value.sourceMedia?.videos||[]).filter(Boolean);
       const importedVideo=(ir.status==='fulfilled'&&ir.value?.url)?ir.value.url:'';
       const videoUrl=importedVideo||directVideos[0]||'';
       const expectedVideo=!!item.hasVideo||!!wr.value.sourceMedia?.hasVideo||directVideos.length>0;
 
-      // 영상이 있는 원본은 사진이 10장이어도 영상 자리를 반드시 1칸 확보한다.
-      const maxImages=videoUrl?9:10;
-      const imageItems=exactImages.slice(0,maxImages).map(url=>({type:'IMAGE',url}));
+      // 원본에서 판별된 사진 개수만 사용하고, 영상은 영상 1개로 별도 유지한다.
+      // 1사진+1영상이면 정확히 2개만, 0사진+1영상이면 영상 1개만 사용한다.
+      const imageItems=exactImages.map(url=>({type:'IMAGE',url}));
       const videoItems=videoUrl?[{type:'VIDEO',url:videoUrl}]:[];
-      activeMediaItems=[...imageItems,...videoItems];
+      activeMediaItems=[...imageItems,...videoItems].slice(0,10);
 
-      // 원본에서 영상이 확인됐는데 영상 URL까지 못 얻었으면 사진만으로 성공 처리하지 않는다.
       if(expectedVideo&&!videoUrl){
         const why=ir.status==='rejected'?(ir.reason?.message||'영상 추출 실패'):'영상 URL 확인 실패';
         throw new Error(`원본에 영상이 있는데 영상을 가져오지 못했습니다: ${why}`);
