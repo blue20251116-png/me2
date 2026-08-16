@@ -62,46 +62,52 @@
   function selectVersion(i){const ta=form.querySelector('textarea[name="text"]');if(generatedTexts[i]&&ta)ta.value=generatedTexts[i];showComment(generatedComments[i]||'');}
 
   async function prepare(i,btn){
-    const item=lastItems[i]; if(!item)return; const mode=inferMode(item),old=btn.textContent; btn.disabled=true;btn.textContent='준비 중…';setMsg('선택한 게시물의 글·댓글·원본 미디어를 확인하는 중…');
+    const item=lastItems[i]; if(!item)return;
+    const mode=inferMode(item),old=btn.textContent;
+    btn.disabled=true;btn.textContent='준비 중…';
+    activeMaterial=false;activeMediaItems=[];showMediaPreview([]);
+    setMsg('1/3 원문과 댓글 확인 중…');
     try{
-      const writePromise=fetchWithTimeout('/api/threads/material-write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceText:item.text||'',sourceUrl:item.url||'',username:item.username||'',mode,images:item.images||[],hasVideo:!!item.hasVideo})},35000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'글 생성 실패');return d;});
+      const writePromise=fetchWithTimeout('/api/threads/material-write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceText:item.text||'',sourceUrl:item.url||'',username:item.username||'',mode,images:item.images||[],hasVideo:!!item.hasVideo})},33000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'글 생성 실패');return d;});
 
-      const videoPromise=fetchWithTimeout('/api/threads/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:item.url})},35000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'영상 없음');return d;});
+      // 사진 게시물에는 영상 import를 아예 호출하지 않는다.
+      // 영상이 있다고 이미 판별된 소재만 별도로 원본 영상 파일을 확보한다.
+      const videoPromise=item.hasVideo
+        ? fetchWithTimeout('/api/threads/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:item.url})},24000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'영상 가져오기 실패');return d;})
+        : Promise.resolve(null);
 
+      setMsg(item.hasVideo?'2/3 글 작성과 원본 영상 준비 중…':'2/3 글 작성 중…');
       const [wr,ir]=await Promise.allSettled([writePromise,videoPromise]);
-      if(wr.status!=='fulfilled')throw new Error(wr.reason?.message||'글 생성 실패');
+      if(wr.status!=='fulfilled')throw new Error(wr.reason?.name==='AbortError'?'글 준비 시간이 초과됐어요. 다시 눌러주세요.':(wr.reason?.message||'글 생성 실패'));
+
       generatedTexts=wr.value.texts||[];generatedComments=wr.value.comments||[];activeMaterial=true;
       const ta=form.querySelector('textarea[name="text"]');if(generatedTexts[0]&&ta)ta.value=generatedTexts[0];showComment(generatedComments[0]||'');
       const box=document.getElementById('aiCandidates');if(box&&generatedTexts.length){box.innerHTML=generatedTexts.map((t,n)=>`<div class="ai-candidate ${n===0?'selected':''}" data-threads-idx="${n}"><span class="pick-label">버전 ${n+1} · 클릭해서 교체</span><p style="white-space:pre-wrap;">${esc(t)}</p></div>`).join('');box.classList.remove('hidden');box.querySelectorAll('.ai-candidate').forEach(c=>c.onclick=()=>{box.querySelectorAll('.ai-candidate').forEach(z=>z.classList.remove('selected'));c.classList.add('selected');selectVersion(Number(c.dataset.threadsIdx));});}
 
-      // 소재 목록에서 이미 판별한 원본 사진 개수를 신뢰한다.
-      // 상세 페이지에는 영상 poster/프리뷰용 img가 추가로 생길 수 있어서
-      // sourceMedia.images를 그대로 쓰면 원본 사진 1장이 7~9장으로 증식할 수 있다.
+      setMsg('3/3 원본 미디어 맞추는 중…');
+      // 검색 단계에서 판별한 사진 개수를 최종 기준으로 사용한다.
+      // 상세페이지의 영상 poster/thumbnail 이미지는 추가 사진으로 세지 않는다.
       const listedImages=(item.images||[]).filter(Boolean);
       const detailedImages=(wr.value.sourceMedia?.images||[]).filter(Boolean);
       const listedImageCount=Math.max(0,Number(item.imageCount||listedImages.length||0));
       let exactImages=[];
-      if(listedImageCount>0){
-        exactImages=(listedImages.length?listedImages:detailedImages).slice(0,listedImageCount);
-      } else if(!item.hasVideo){
-        exactImages=detailedImages;
-      }
+      if(listedImageCount>0)exactImages=(listedImages.length?listedImages:detailedImages).slice(0,listedImageCount);
+      else if(!item.hasVideo)exactImages=detailedImages;
 
       const directVideos=(wr.value.sourceMedia?.videos||[]).filter(Boolean);
       const importedVideo=(ir.status==='fulfilled'&&ir.value?.url)?ir.value.url:'';
       const videoUrl=importedVideo||directVideos[0]||'';
       const expectedVideo=!!item.hasVideo||!!wr.value.sourceMedia?.hasVideo||directVideos.length>0;
 
-      // 원본에서 판별된 사진 개수만 사용하고, 영상은 영상 1개로 별도 유지한다.
-      // 1사진+1영상이면 정확히 2개만, 0사진+1영상이면 영상 1개만 사용한다.
       const imageItems=exactImages.map(url=>({type:'IMAGE',url}));
       const videoItems=videoUrl?[{type:'VIDEO',url:videoUrl}]:[];
       activeMediaItems=[...imageItems,...videoItems].slice(0,10);
 
       if(expectedVideo&&!videoUrl){
-        const why=ir.status==='rejected'?(ir.reason?.message||'영상 추출 실패'):'영상 URL 확인 실패';
-        throw new Error(`원본에 영상이 있는데 영상을 가져오지 못했습니다: ${why}`);
+        const why=ir.status==='rejected'?(ir.reason?.name==='AbortError'?'영상 준비 시간 초과':(ir.reason?.message||'영상 추출 실패')):'영상 URL 확인 실패';
+        throw new Error(`원본 영상은 확인했지만 영상 파일을 준비하지 못했어요: ${why}`);
       }
+      if(!activeMediaItems.length)throw new Error('선택한 게시물의 원본 미디어를 가져오지 못했습니다.');
 
       const im=document.getElementById('imageUrlInput'),ex=document.getElementById('extraImageUrlInput'),v=document.getElementById('videoUrlInput');
       if(im)im.value=exactImages[0]||'';
@@ -109,12 +115,15 @@
       if(v)v.value=videoUrl||'';
 
       showMediaPreview(activeMediaItems);
-      if(!activeMediaItems.length)throw new Error('선택한 게시물의 원본 미디어를 가져오지 못했습니다.');
       const imageCount=activeMediaItems.filter(m=>m.type==='IMAGE').length;
       const videoCount=activeMediaItems.filter(m=>m.type==='VIDEO').length;
-      const videoSource=videoCount?(importedVideo?' · 영상 파일 저장 완료':' · 원본 영상 URL 사용'):'';
-      setMsg(`완료 · 글 ${generatedTexts.length}개 · 원본 사진 ${imageCount}개${videoCount?` · 원본 영상 ${videoCount}개`:''}${videoSource} 가져왔어요.`);form.scrollIntoView({behavior:'smooth',block:'start'});
-    }catch(e){activeMaterial=false;activeMediaItems=[];showMediaPreview([]);setMsg(e.message||'글 준비에 실패했어요. 다시 시도해주세요.','error');}finally{btn.disabled=false;btn.textContent=old;}
+      const replyInfo=Number(wr.value.authorRepliesFound||0)>0?` · 원문 댓글 ${wr.value.authorRepliesFound}개 참고`:wr.value.detailWarning?' · 댓글 확인은 건너뜀':'';
+      setMsg(`완료 · 글 ${generatedTexts.length}개 · 사진 ${imageCount}개${videoCount?` · 영상 ${videoCount}개`:''}${replyInfo}`);
+      form.scrollIntoView({behavior:'smooth',block:'start'});
+    }catch(e){
+      activeMaterial=false;activeMediaItems=[];showMediaPreview([]);
+      setMsg(e.message||'글 준비에 실패했어요. 다시 시도해주세요.','error');
+    }finally{btn.disabled=false;btn.textContent=old;}
   }
 
   form.addEventListener('submit',async e=>{
