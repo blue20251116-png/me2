@@ -22,7 +22,13 @@ function publicBaseUrl(req,account){if(account?.threads_redirect_uri){try{const 
 function ownVideoPath(accountId,filename){return path.join(uploadsDir,'videos',String(accountId),path.basename(String(filename||'')));}
 function normalizeMediaItems(items){if(!Array.isArray(items))return[];const out=[];for(const item of items){const type=String(item?.type||'').toUpperCase();const url=String(item?.url||'').trim();if(!url||!['IMAGE','VIDEO'].includes(type))continue;if(!out.some(x=>x.type===type&&x.url===url))out.push({type,url});if(out.length>=10)break;}return out;}
 function mediaBundleSentinel(items){return `__THREADS_MEDIA_BUNDLE__${encodeURIComponent(JSON.stringify(items))}`;}
-function containsExternalLink(text){const t=String(text||'');return /(https?:\/\/|www\.|(?:^|\s)(?:link\.)?[a-z0-9.-]+\.(?:com|net|org|kr|co\.kr|me|io|app|shop|store)(?:\/|\s|$))/i.test(t);}
+// 텍스트 링크 판별은 '실제 링크 형태'만 본다.
+// 예전의 일반 도메인 정규식은 Threads 아이디/문장 속 점(.)까지 링크로 오판할 수 있었다.
+function containsExternalLink(text){
+  const t=String(text||'');
+  return /(?:https?:\/\/|www\.)\S+/i.test(t)
+    || /\b(?:link\.coupang\.com|naver\.me|brandconnect\.naver\.com|m\.site\.naver\.com)\b/i.test(t);
+}
 function isUsableMaterial(item){const hasMedia=!!item?.hasVideo||Number(item?.videoCount||0)>0||Number(item?.imageCount||0)>0||(Array.isArray(item?.images)&&item.images.length>0);return hasMedia&&!containsExternalLink(item?.text);}
 function withTimeout(promise,ms,label='작업'){let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(`${label} 시간 초과`)),ms);})]).finally(()=>clearTimeout(timer));}
 appInstance.get('/api/threads/accounts',(req,res)=>{if(!req.currentUser)return res.status(401).json({error:'로그인이 필요합니다'});res.json({accounts:listAccounts(req.currentUser.id)});});
@@ -40,9 +46,6 @@ appInstance.post('/api/threads/material-write',requireOwnedAccount,async(req,res
     let detailWarning='';
     let sourceMedia={images:Array.isArray(req.body?.images)?req.body.images.filter(Boolean):[],videos:[],hasVideo:!!req.body?.hasVideo};
 
-    // V2 파이프라인: 상세/댓글 재스크래핑은 보강 단계다.
-    // Threads가 느리거나 DOM이 바뀌어도 전체 글 생성을 멈추지 않고,
-    // 소재 검색 단계에서 확보한 본문/미디어를 fallback으로 유지한다.
     if(sourceUrl&&username){
       try{
         const details=await withTimeout(collectPostDetails(sourceUrl,username),9000,'원문·댓글 확인');
