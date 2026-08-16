@@ -61,9 +61,8 @@
     try{
       const writePromise=fetchWithTimeout('/api/threads/material-write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceText:item.text||'',sourceUrl:item.url||'',username:item.username||'',mode,images:item.images||[],hasVideo:!!item.hasVideo})},35000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'글 생성 실패');return d;});
 
-      // 목록 화면의 hasVideo 판정은 Threads DOM 때문에 틀릴 수 있다.
-      // 따라서 사용자가 소재를 선택하면 게시물 URL에서 실제 영상 추출을 항상 한 번 시도한다.
-      // 성공하면 영상 게시물로 확정하고 poster/thumbnail 이미지는 모두 버린다.
+      // 영상 유무와 상관없이 원본 게시물의 사진도 유지한다.
+      // Threads의 혼합 게시물(사진+영상)은 둘 다 원본 미디어이므로 사진을 버리지 않는다.
       const videoPromise=fetchWithTimeout('/api/threads/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:item.url})},35000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'영상 없음');return d;});
 
       const [wr,ir]=await Promise.allSettled([writePromise,videoPromise]);
@@ -74,28 +73,24 @@
 
       const exactImages=(wr.value.sourceMedia?.images||item.images||[]).filter(Boolean);
       const importedVideo=(ir.status==='fulfilled'&&ir.value?.url)?ir.value.url:'';
-      const actualVideo=!!importedVideo;
+      const imageItems=exactImages.slice(0,10).map(url=>({type:'IMAGE',url}));
+      const videoItems=importedVideo?[{type:'VIDEO',url:importedVideo}]:[];
 
-      if(actualVideo){
-        activeMediaItems=[{type:'VIDEO',url:importedVideo}];
-      }else{
-        activeMediaItems=exactImages.slice(0,10).map(url=>({type:'IMAGE',url}));
-      }
+      // 혼합 게시물도 사진 + 영상을 모두 유지한다.
+      // 현재 백엔드가 이미지/영상 원본 순서를 따로 주지 않으므로 사진들 뒤에 영상을 붙인다.
+      // 원본 순서 정보가 추가되면 mediaItems 순서를 그대로 사용하도록 바꿀 수 있다.
+      activeMediaItems=[...imageItems,...videoItems].slice(0,10);
 
       const im=document.getElementById('imageUrlInput'),ex=document.getElementById('extraImageUrlInput'),v=document.getElementById('videoUrlInput');
-      if(actualVideo){
-        if(im)im.value='';
-        if(ex)ex.value='';
-        if(v)v.value=importedVideo;
-      }else{
-        if(im)im.value=exactImages[0]||'';
-        if(ex)ex.value=exactImages[1]||'';
-        if(v)v.value='';
-      }
+      if(im)im.value=exactImages[0]||'';
+      if(ex)ex.value=exactImages[1]||'';
+      if(v)v.value=importedVideo||'';
 
       showMediaPreview(activeMediaItems);
       if(!activeMediaItems.length)throw new Error('선택한 게시물의 원본 미디어를 가져오지 못했습니다.');
-      setMsg(`완료 · 글 ${generatedTexts.length}개 · ${actualVideo?'원본 영상':'원본 사진 '+activeMediaItems.length+'개'} 가져왔어요.`);form.scrollIntoView({behavior:'smooth',block:'start'});
+      const imageCount=activeMediaItems.filter(m=>m.type==='IMAGE').length;
+      const videoCount=activeMediaItems.filter(m=>m.type==='VIDEO').length;
+      setMsg(`완료 · 글 ${generatedTexts.length}개 · 원본 사진 ${imageCount}개${videoCount?` · 원본 영상 ${videoCount}개`:''} 가져왔어요.`);form.scrollIntoView({behavior:'smooth',block:'start'});
     }catch(e){activeMaterial=false;activeMediaItems=[];setMsg(e.message||'글 준비에 실패했어요. 다시 시도해주세요.','error');}finally{btn.disabled=false;btn.textContent=old;}
   }
 
