@@ -42,27 +42,38 @@
 
   function inferMode(item) {
     const t = String(item?.text || '').toLowerCase();
-    return /(레시피|요리|먹|맛|볶|구이|밥|면|소스|재료|에어프라이어|간식|야식|대파|삼겹|양념|끓|굽|튀김)/.test(t) ? 'recipe' : 'product';
+    return /(레시피|요리|먹|맛|볶|구이|밥|면|소스|재료|에어프라이어|간식|야식|대파|삼겹|양념|끓|굽|튀김|요거트|바나나|알룰로스|계란|두부|샐러드)/.test(t) ? 'recipe' : 'product';
   }
 
   function ensureRecipePreview() {
     let box = document.getElementById('threadsRecipeCommentPreview');
     if (box) return box;
+
     box = document.createElement('div');
     box.id = 'threadsRecipeCommentPreview';
-    box.className = 'comment-preview hidden';
-    box.style.marginTop = '10px';
-    box.innerHTML = '<span class="comment-preview-label">재료 · 만드는 법 댓글</span><p id="threadsRecipeCommentText" style="white-space:pre-wrap;line-height:1.55;"></p>';
-    const c = document.getElementById('aiCandidates');
-    if (c?.parentNode) c.parentNode.insertBefore(box, c.nextSibling);
+    box.className = 'hidden';
+    box.style.marginTop = '14px';
+    box.innerHTML = `
+      <label style="display:block;margin:0 0 7px;font-size:14px;font-weight:700;">댓글</label>
+      <textarea id="threadsRecipeCommentText" rows="6" placeholder="재료 · 만드는 법 · 추가 설명이 여기에 들어갑니다" style="width:100%;box-sizing:border-box;resize:vertical;line-height:1.55;padding:14px;border-radius:14px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);font:inherit;"></textarea>
+      <p style="margin:6px 0 0;font-size:12px;color:var(--text-dim);">예약 발행하면 본문 다음 댓글로 자동 등록됩니다.</p>`;
+
+    const candidates = document.getElementById('aiCandidates');
+    if (candidates?.parentNode) candidates.parentNode.insertBefore(box, candidates);
+    else form.appendChild(box);
+
+    const textarea = box.querySelector('#threadsRecipeCommentText');
+    textarea?.addEventListener('input', () => {
+      activeRecipeComment = textarea.value.trim();
+    });
     return box;
   }
 
   function showComment(value) {
     activeRecipeComment = String(value || '').trim();
     const box = ensureRecipePreview();
-    const p = document.getElementById('threadsRecipeCommentText');
-    if (p) p.textContent = activeRecipeComment;
+    const textarea = document.getElementById('threadsRecipeCommentText');
+    if (textarea) textarea.value = activeRecipeComment;
     box.classList.toggle('hidden', !activeRecipeComment);
   }
 
@@ -140,7 +151,7 @@
       generatedTexts = wr.value.texts || [];
       generatedComments = wr.value.comments || [];
       if (generatedTexts[0] && ta) ta.value = generatedTexts[0];
-      showComment(mode === 'recipe' ? (generatedComments[0] || '') : '');
+      showComment(generatedComments[0] || '');
 
       if (box && generatedTexts.length) {
         box.innerHTML = generatedTexts.map((t, n) => `<div class="ai-candidate ${n === 0 ? 'selected' : ''}" data-threads-idx="${n}"><span class="pick-label">버전 ${n + 1} · 클릭해서 교체</span><p style="white-space:pre-wrap;">${esc(t)}</p></div>`).join('');
@@ -190,7 +201,7 @@
       const r = await apiFetch('/api/threads/material-post', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || '예약 실패');
-      if (cm) cm.textContent = '예약 등록 완료 · 레시피 댓글도 함께 예약됐어요.';
+      if (cm) cm.textContent = '예약 등록 완료 · 댓글도 함께 예약됐어요.';
       form.reset();
       activeRecipeComment = '';
       document.getElementById('threadsRecipeCommentPreview')?.classList.add('hidden');
