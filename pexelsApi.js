@@ -1,15 +1,16 @@
 const axios = require('axios');
 
-async function searchFoodPhoto({ apiKey, query }) {
-  if (!apiKey) return null;
+async function searchFoodPhotos({ apiKey, query, count = 3 }) {
+  if (!apiKey) return [];
   const q = String(query || '').trim();
-  if (!q) return null;
+  if (!q) return [];
 
+  const wanted = Math.max(1, Math.min(3, Number(count) || 3));
   const res = await axios.get('https://api.pexels.com/v1/search', {
     headers: { Authorization: apiKey },
     params: {
       query: `${q} korean food dish`,
-      per_page: 12,
+      per_page: 15,
       orientation: 'portrait',
       size: 'large',
     },
@@ -17,16 +18,28 @@ async function searchFoodPhoto({ apiKey, query }) {
   });
 
   const photos = Array.isArray(res.data?.photos) ? res.data.photos : [];
-  if (!photos.length) return null;
+  const seen = new Set();
 
-  const photo = photos[0];
-  return {
-    id: photo.id,
-    imageUrl: photo.src?.large2x || photo.src?.large || photo.src?.portrait || photo.src?.original || null,
-    photographer: photo.photographer || '',
-    photographerUrl: photo.photographer_url || '',
-    pexelsUrl: photo.url || '',
-  };
+  return photos
+    .filter((photo) => {
+      if (!photo?.id || seen.has(photo.id)) return false;
+      seen.add(photo.id);
+      return true;
+    })
+    .slice(0, wanted)
+    .map((photo) => ({
+      id: photo.id,
+      imageUrl: photo.src?.large2x || photo.src?.large || photo.src?.portrait || photo.src?.original || null,
+      photographer: photo.photographer || '',
+      photographerUrl: photo.photographer_url || '',
+      pexelsUrl: photo.url || '',
+    }))
+    .filter((photo) => photo.imageUrl);
 }
 
-module.exports = { searchFoodPhoto };
+async function searchFoodPhoto({ apiKey, query }) {
+  const photos = await searchFoodPhotos({ apiKey, query, count: 1 });
+  return photos[0] || null;
+}
+
+module.exports = { searchFoodPhoto, searchFoodPhotos };
