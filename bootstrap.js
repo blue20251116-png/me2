@@ -19,13 +19,16 @@ require('./server');
 
 if (!appInstance) throw new Error('Express app 초기화에 실패했습니다.');
 
-const { getAccount, listAccounts } = require('./db');
+const { getAccount, listAccounts, logUsage } = require('./db');
 const videoEditor = require('./videoEditor');
 const threadsMediaImporter = require('./threadsMediaImporter');
+const { searchThreadsMaterials } = require('./threadsMaterialSearch');
+const { generateFromThreadsMaterial } = require('./threadsMaterialWriter');
 
 const uploadsDir = path.join(__dirname, 'uploads');
 const videoEditLocks = new Set();
 const threadsImportLocks = new Set();
+const threadsSearchLocks = new Set();
 
 function requireOwnedAccount(req, res, next) {
   const accountId = Number(req.query.accountId || req.body?.accountId || req.params?.accountId);
@@ -60,8 +63,42 @@ appInstance.get('/api/threads/accounts', (req, res) => {
   res.json({ accounts: listAccounts(req.currentUser.id) });
 });
 
+// 쿠팡 API 없이 Threads 공개 검색 화면에서 소재 후보를 찾는다.
+appInstance.get('/api/threads/material-search', requireOwnedAccount, async (req, res) => {
+  const keyword = String(req.query.keyword || '').trim();
+  if (!keyword) return res.status(400).json({ error: '검색어를 입력해주세요.' });
+  if (threadsSearchLocks.has(req.account.id)) {
+    return res.status(429).json({ error: '이미 Threads 소재를 찾는 중입니다. 잠시 후 다시 시도해주세요.' });
+  }
+  threadsSearchLocks.add(req.account.id);
+  try {
+    const result = await searchThreadsMaterials(keyword, { limit: Number(req.query.limit) || 10 });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error(`[Threads material search] account #${req.account.id}:`, err.message);
+    res.status(422).json({ error: err.message || 'Threads 소재 검색에 실패했습니다.' });
+  } finally {
+    threadsSearchLocks.delete(req.account.id);
+  }
+});
+
+// 검색된 Threads 소재를 참고해 원문 복사 없이 새 Threads 본문을 만든다. 쿠팡 API는 전혀 사용하지 않는다.
+appInstance.post('/api/threads/material-write', requireOwnedAccount, async (req, res) => {
+  const keyword = String(req.body?.keyword || '').trim();
+  const sourceText = String(req.body?.sourceText || '').trim();
+  const mode = req.body?.mode === 'recipe' ? 'recipe' : 'product';
+  if (!keyword && !sourceText) return res.status(400).json({ error: '검색어 또는 소재 내용이 필요합니다.' });
+  try {
+    const texts = await generateFromThreadsMaterial(req.account.id, { keyword, sourceText, mode });
+    if (req.currentUser?.id) logUsage(req.currentUser.id, 'text');
+    res.json({ success: true, texts });
+  } catch (err) {
+    console.error(`[Threads material write] account #${req.account.id}:`, err.message);
+    res.status(422).json({ error: err.response?.data?.error?.message || err.message });
+  }
+});
+
 // 공개 Threads 게시물 URL에서 영상 주소를 찾아 계정별 영상 폴더에 MP4로 저장한다.
-// 페이지 HTML에 공개 영상 주소가 노출되는 게시물만 지원하며, Threads가 접근을 제한하면 실패할 수 있다.
 appInstance.post('/api/threads/import', requireOwnedAccount, async (req, res) => {
   const url = String(req.body?.url || '').trim();
   if (!url) return res.status(400).json({ error: 'Threads 게시물 URL을 입력해주세요.' });
@@ -98,7 +135,6 @@ appInstance.post('/api/threads/import', requireOwnedAccount, async (req, res) =>
 });
 
 // 직접 업로드하거나 Threads에서 이 계정 영상 폴더로 가져온 영상만 편집 가능.
-// 입력 filename은 basename만 사용하고 실제 경로는 계정별 폴더에서 서버가 직접 조립한다.
 appInstance.post('/api/video/edit', requireOwnedAccount, async (req, res) => {
   const filename = path.basename(String(req.body?.filename || ''));
   if (!filename) return res.status(400).json({ error: '편집할 영상 filename이 필요합니다.' });
@@ -145,5 +181,6 @@ appInstance.post('/api/video/edit', requireOwnedAccount, async (req, res) => {
   }
 });
 
+console.log('[Threads material] 쿠팡 API 없는 Threads 소재 검색/AI 글쓰기 API 활성화');
 console.log('[Threads import] 공개 Threads 영상 가져오기 API 활성화');
 console.log('[Video edit] 영상 음소거/앞뒤 컷 API 활성화');
