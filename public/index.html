@@ -70,6 +70,8 @@
           <div id="youtubeSourceBox" class="youtube-source-box hidden"><span class="youtube-source-label">선택한 콘텐츠 소재</span><p class="yt-source-title" id="youtubeSourceTitle"></p><p class="yt-source-channel" id="youtubeSourceChannel"></p><button type="button" id="clearYoutubeSourceBtn" class="clear-source-btn">선택 해제</button></div>
           <label>본문<div class="textarea-toolbar"><button type="button" id="aiGenerateBtn" class="btn-ai">✨ AI로 글 써주기</button><span id="aiGenerateStatus" class="ai-status"></span></div><textarea name="text" rows="7" placeholder="글 내용을 입력하세요" required></textarea><div id="aiCandidates" class="ai-candidates hidden"></div></label>
           <label>쿠팡파트너스 링크 (선택)<input type="url" name="link" id="linkInput" placeholder="https://link.coupang.com/..." /></label>
+          <label>네이버 쇼핑 커넥트 링크 (수동)<span class="label-note"> API가 없어 직접 발급한 링크를 넣어주세요. 입력하면 네이버 커넥트 댓글 문구가 자동 적용됩니다.</span><input type="url" id="naverConnectInput" placeholder="https://naver.me/..." /></label>
+          <p id="naverConnectMsg" class="msg"></p>
           <div id="scrapeStatus" class="scrape-status hidden"></div>
           <label class="checkbox-row"><input type="checkbox" name="auto_comment_enabled" id="autoCommentToggle" checked />본문 발행 후 안내문구+링크를 <b>댓글로 자동 등록</b></label>
           <div id="commentPreview" class="comment-preview hidden"><span class="comment-preview-label">자동 등록될 댓글 미리보기</span><p id="commentPreviewText"></p></div>
@@ -121,5 +123,6 @@
     <nav class="bottom-nav"><button class="nav-btn active" data-tab="dashboard"><span class="nav-icon">📊</span><span class="nav-label">대시보드</span></button><button class="nav-btn" data-tab="compose"><span class="nav-icon">✏️</span><span class="nav-label">글 예약</span></button><button class="nav-btn" data-tab="posts"><span class="nav-icon">📋</span><span class="nav-label">전체 글</span></button><button class="nav-btn" data-tab="settings"><span class="nav-icon">⚙️</span><span class="nav-label">연결 설정</span></button></nav>
   </div>
   <script src="app.js"></script>
+  <script src="naverConnect.js"></script>
 </body>
 </html>
