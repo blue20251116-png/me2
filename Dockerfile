@@ -7,7 +7,9 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev \
+    && npm install --no-save playwright@1.62.0 \
+    && npx playwright install --with-deps --only-shell chromium
 
 COPY . .
 
