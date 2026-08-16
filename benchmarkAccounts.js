@@ -44,16 +44,25 @@ function addBenchmarkAccount(value) {
 function addBenchmarkAccountsBulk(value) {
   const usernames = parseUsernames(value);
   if (!usernames.length) throw new Error('등록할 Threads 아이디가 없습니다.');
+
   const insert = db.prepare('INSERT OR IGNORE INTO threads_benchmark_accounts (username) VALUES (?)');
-  let added = 0, skipped = 0;
-  const tx = db.transaction(items => {
-    for (const username of items) {
-      const info = insert.run(username);
-      if (info.changes) added++; else skipped++;
-    }
-  });
-  tx(usernames);
-  return { added, skipped, total: usernames.length, accounts: listBenchmarkAccounts() };
+  let added = 0;
+  let skipped = 0;
+
+  // Node 내장 SQLite(DatabaseSync)는 better-sqlite3의 db.transaction() API가 없다.
+  // 현재 규모에서는 순차 INSERT가 충분하고, UNIQUE + INSERT OR IGNORE로 중복은 안전하게 건너뛴다.
+  for (const username of usernames) {
+    const info = insert.run(username);
+    if (Number(info?.changes || 0) > 0) added++;
+    else skipped++;
+  }
+
+  return {
+    added,
+    skipped,
+    total: usernames.length,
+    accounts: listBenchmarkAccounts()
+  };
 }
 function deleteBenchmarkAccount(id) { return db.prepare('DELETE FROM threads_benchmark_accounts WHERE id=?').run(Number(id)); }
 function markUsedPost(url) { if (url) db.prepare('INSERT OR IGNORE INTO threads_benchmark_used_posts (post_url) VALUES (?)').run(String(url)); }
@@ -183,8 +192,6 @@ async function collectPostDetails(url, username) {
         }
       }
 
-      // Threads의 2/2, 3/3 같은 작성자 연속글은 article 태그가 아닐 때가 많다.
-      // 작성자 프로필 링크를 기준으로 각 독립 게시물 블록을 찾아 원문 다음 연속글까지 수집한다.
       const authorReplies=[];
       const seenText=new Set();
       const profileAnchors=[...document.querySelectorAll('a[href]')].filter(a=>{
@@ -196,14 +203,12 @@ async function collectPostDetails(url, username) {
         if(!root||root===main||main?.contains(root)||root.contains(main))continue;
         let text=clean(root.innerText);
         if(!text||text.length<8)continue;
-        // UI 잡음 제거
         text=text.replace(/^(?:@?[^ ]+\s+)?(?:방금|\d+\s*(?:분|시간|일))\s*/,'').trim();
         if(text.length<8||seenText.has(text))continue;
         seenText.add(text);
         authorReplies.push(text.slice(0,3500));
       }
 
-      // article 기반도 보조로 한 번 더 확인
       for(const block of document.querySelectorAll('article,[role="article"]')){
         if(block===main||main?.contains(block)||block.contains(main))continue;
         let text=clean(block.innerText); if(!text||text.length<8)continue;
