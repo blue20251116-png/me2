@@ -59,14 +59,17 @@
     </form>
 
     <h2 style="font-family:var(--font-display);font-size:15px;margin:28px 0 10px;">레시피 이미지 API 설정</h2>
-    <form id="pexelsApiForm" class="settings-form">
-      <p style="font-size:12.5px;color:var(--text-dim);margin:0;line-height:1.55;">레시피 글의 음식 사진을 Pexels에서 자동으로 가져올 때 사용하는 관리자 공용 키입니다. 저장된 키 값은 다시 표시하지 않습니다.</p>
+    <form id="recipeImageApiForm" class="settings-form">
+      <p style="font-size:12.5px;color:var(--text-dim);margin:0;line-height:1.55;">레시피 사진은 Pexels를 먼저 검색하고, 정확한 사진이 없으면 Pixabay로 자동 재검색합니다. 저장된 키 값은 다시 표시하지 않습니다.</p>
       <label>Pexels API Key
         <input type="password" name="pexels_api_key" placeholder="Pexels API Key 입력" autocomplete="off" />
       </label>
-      <button type="submit" style="align-self:flex-start;font-size:12.5px;padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:var(--amber);color:#1a1300;font-weight:600;cursor:pointer;">Pexels API 저장</button>
-      <p id="pexelsApiStatus" style="font-size:12px;color:var(--text-dim);margin:0;"></p>
-      <p id="pexelsApiMsg" style="font-size:12.5px;margin:0;"></p>
+      <label>Pixabay API Key
+        <input type="password" name="pixabay_api_key" placeholder="Pixabay API Key 입력" autocomplete="off" />
+      </label>
+      <button type="submit" style="align-self:flex-start;font-size:12.5px;padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:var(--amber);color:#1a1300;font-weight:600;cursor:pointer;">레시피 이미지 API 저장</button>
+      <p id="recipeImageApiStatus" style="font-size:12px;color:var(--text-dim);margin:0;"></p>
+      <p id="recipeImageApiMsg" style="font-size:12.5px;margin:0;"></p>
     </form>
 
     <h2 style="font-family:var(--font-display);font-size:15px;margin:28px 0 10px;">회원가입 화면에 보일 결제 안내</h2>
@@ -143,31 +146,35 @@
       form.tax_email.value = data.tax_email || '';
       form.payment_guide.value = data.payment_guide || '';
 
-      const pexelsForm = document.getElementById('pexelsApiForm');
-      pexelsForm.pexels_api_key.placeholder = data.has_pexels_api_key
-        ? '저장됨 — 변경할 때만 입력'
-        : 'Pexels API Key 입력';
-      document.getElementById('pexelsApiStatus').textContent = `Pexels ${data.has_pexels_api_key ? '✓ 저장됨' : '✕ 미설정'}`;
+      const imageForm = document.getElementById('recipeImageApiForm');
+      imageForm.pexels_api_key.placeholder = data.has_pexels_api_key ? '저장됨 — 변경할 때만 입력' : 'Pexels API Key 입력';
+      imageForm.pixabay_api_key.placeholder = data.has_pixabay_api_key ? '저장됨 — 변경할 때만 입력' : 'Pixabay API Key 입력';
+      document.getElementById('recipeImageApiStatus').textContent =
+        `Pexels ${data.has_pexels_api_key ? '✓ 저장됨' : '✕ 미설정'} · Pixabay ${data.has_pixabay_api_key ? '✓ 저장됨' : '✕ 미설정'}`;
     }
 
-    document.getElementById('pexelsApiForm').addEventListener('submit', async (e) => {
+    document.getElementById('recipeImageApiForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const form = e.target;
-      const msg = document.getElementById('pexelsApiMsg');
-      const key = form.pexels_api_key.value.trim();
-      if (!key) {
-        msg.textContent = 'Pexels API Key를 입력해주세요.';
+      const msg = document.getElementById('recipeImageApiMsg');
+      const payload = {};
+      const pexels = form.pexels_api_key.value.trim();
+      const pixabay = form.pixabay_api_key.value.trim();
+      if (pexels) payload.pexels_api_key = pexels;
+      if (pixabay) payload.pixabay_api_key = pixabay;
+      if (!Object.keys(payload).length) {
+        msg.textContent = '변경할 API Key를 하나 이상 입력해주세요.';
         msg.style.color = 'var(--red)';
         return;
       }
       try {
         const res = await fetch('/api/admin/site-settings', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({ pexels_api_key:key }),
+          method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload),
         });
         if (!res.ok) throw new Error('저장 실패');
         form.pexels_api_key.value = '';
-        msg.textContent = 'Pexels API Key 저장 완료';
+        form.pixabay_api_key.value = '';
+        msg.textContent = '레시피 이미지 API 저장 완료';
         msg.style.color = 'var(--green)';
         loadSiteSettings();
       } catch (err) {
