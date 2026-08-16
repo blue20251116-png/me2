@@ -33,7 +33,12 @@
   const compact = t => { t=String(t||'').replace(/\s+/g,' ').trim(); return t.length>240?t.slice(0,240)+'…':t; };
   const setMsg=(text,type='')=>{msg.textContent=text||'';msg.className=`msg${type?' '+type:''}`;};
   const fetchWithTimeout=async(url,options={},ms=22000)=>{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),ms);try{return await apiFetch(url,{...options,signal:controller.signal});}finally{clearTimeout(timer);}};
-  function inferMode(item){const t=String(item?.text||'').toLowerCase();return /(레시피|요리|먹|맛|볶|구이|밥|면|소스|재료|에어프라이어|간식|야식|대파|삼겹|양념|끓|굽|튀김|요거트|바나나|알룰로스|계란|두부|샐러드)/.test(t)?'recipe':'product';}
+  function inferMode(item){
+    const t=String(item?.text||'').toLowerCase();
+    const cookingAction=/(레시피|만드는 법|만드는방법|재료|양념|소스|볶|굽|구이|끓|튀기|튀김|에어프라이어|찜|삶|썰어|섞어|버무|조리)/.test(t);
+    const foodContext=/(밥|면|계란|두부|고기|삼겹|닭|대파|야채|채소|샐러드|간식|야식|요리)/.test(t);
+    return cookingAction && foodContext ? 'recipe' : 'product';
+  }
 
   function ensureRecipePreview(){
     let box=document.getElementById('threadsRecipeCommentPreview'); if(box)return box;
@@ -61,8 +66,6 @@
     try{
       const writePromise=fetchWithTimeout('/api/threads/material-write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceText:item.text||'',sourceUrl:item.url||'',username:item.username||'',mode,images:item.images||[],hasVideo:!!item.hasVideo})},35000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'글 생성 실패');return d;});
 
-      // 영상 유무와 상관없이 원본 게시물의 사진도 유지한다.
-      // Threads의 혼합 게시물(사진+영상)은 둘 다 원본 미디어이므로 사진을 버리지 않는다.
       const videoPromise=fetchWithTimeout('/api/threads/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:item.url})},35000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'영상 없음');return d;});
 
       const [wr,ir]=await Promise.allSettled([writePromise,videoPromise]);
@@ -72,26 +75,35 @@
       const box=document.getElementById('aiCandidates');if(box&&generatedTexts.length){box.innerHTML=generatedTexts.map((t,n)=>`<div class="ai-candidate ${n===0?'selected':''}" data-threads-idx="${n}"><span class="pick-label">버전 ${n+1} · 클릭해서 교체</span><p style="white-space:pre-wrap;">${esc(t)}</p></div>`).join('');box.classList.remove('hidden');box.querySelectorAll('.ai-candidate').forEach(c=>c.onclick=()=>{box.querySelectorAll('.ai-candidate').forEach(z=>z.classList.remove('selected'));c.classList.add('selected');selectVersion(Number(c.dataset.threadsIdx));});}
 
       const exactImages=(wr.value.sourceMedia?.images||item.images||[]).filter(Boolean);
+      const directVideos=(wr.value.sourceMedia?.videos||[]).filter(Boolean);
       const importedVideo=(ir.status==='fulfilled'&&ir.value?.url)?ir.value.url:'';
-      const imageItems=exactImages.slice(0,10).map(url=>({type:'IMAGE',url}));
-      const videoItems=importedVideo?[{type:'VIDEO',url:importedVideo}]:[];
+      const videoUrl=importedVideo||directVideos[0]||'';
+      const expectedVideo=!!item.hasVideo||!!wr.value.sourceMedia?.hasVideo||directVideos.length>0;
 
-      // 혼합 게시물도 사진 + 영상을 모두 유지한다.
-      // 현재 백엔드가 이미지/영상 원본 순서를 따로 주지 않으므로 사진들 뒤에 영상을 붙인다.
-      // 원본 순서 정보가 추가되면 mediaItems 순서를 그대로 사용하도록 바꿀 수 있다.
-      activeMediaItems=[...imageItems,...videoItems].slice(0,10);
+      // 영상이 있는 원본은 사진이 10장이어도 영상 자리를 반드시 1칸 확보한다.
+      const maxImages=videoUrl?9:10;
+      const imageItems=exactImages.slice(0,maxImages).map(url=>({type:'IMAGE',url}));
+      const videoItems=videoUrl?[{type:'VIDEO',url:videoUrl}]:[];
+      activeMediaItems=[...imageItems,...videoItems];
+
+      // 원본에서 영상이 확인됐는데 영상 URL까지 못 얻었으면 사진만으로 성공 처리하지 않는다.
+      if(expectedVideo&&!videoUrl){
+        const why=ir.status==='rejected'?(ir.reason?.message||'영상 추출 실패'):'영상 URL 확인 실패';
+        throw new Error(`원본에 영상이 있는데 영상을 가져오지 못했습니다: ${why}`);
+      }
 
       const im=document.getElementById('imageUrlInput'),ex=document.getElementById('extraImageUrlInput'),v=document.getElementById('videoUrlInput');
       if(im)im.value=exactImages[0]||'';
       if(ex)ex.value=exactImages[1]||'';
-      if(v)v.value=importedVideo||'';
+      if(v)v.value=videoUrl||'';
 
       showMediaPreview(activeMediaItems);
       if(!activeMediaItems.length)throw new Error('선택한 게시물의 원본 미디어를 가져오지 못했습니다.');
       const imageCount=activeMediaItems.filter(m=>m.type==='IMAGE').length;
       const videoCount=activeMediaItems.filter(m=>m.type==='VIDEO').length;
-      setMsg(`완료 · 글 ${generatedTexts.length}개 · 원본 사진 ${imageCount}개${videoCount?` · 원본 영상 ${videoCount}개`:''} 가져왔어요.`);form.scrollIntoView({behavior:'smooth',block:'start'});
-    }catch(e){activeMaterial=false;activeMediaItems=[];setMsg(e.message||'글 준비에 실패했어요. 다시 시도해주세요.','error');}finally{btn.disabled=false;btn.textContent=old;}
+      const videoSource=videoCount?(importedVideo?' · 영상 파일 저장 완료':' · 원본 영상 URL 사용'):'';
+      setMsg(`완료 · 글 ${generatedTexts.length}개 · 원본 사진 ${imageCount}개${videoCount?` · 원본 영상 ${videoCount}개`:''}${videoSource} 가져왔어요.`);form.scrollIntoView({behavior:'smooth',block:'start'});
+    }catch(e){activeMaterial=false;activeMediaItems=[];showMediaPreview([]);setMsg(e.message||'글 준비에 실패했어요. 다시 시도해주세요.','error');}finally{btn.disabled=false;btn.textContent=old;}
   }
 
   form.addEventListener('submit',async e=>{
