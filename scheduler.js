@@ -251,13 +251,13 @@ const AUTOPILOT_TARGETS = [
   '40대 이상',
 ];
 
-// 사용자 요청 비율:
-// recipe 50% / product 20% / story 30%
+// 수익화 우선 비율:
+// recipe 60% / story 25% / product 15%
 function chooseContentMode() {
   const r = Math.random();
-  if (r < 0.5) return 'recipe';
-  if (r < 0.7) return 'product';
-  return 'story';
+  if (r < 0.6) return 'recipe';
+  if (r < 0.85) return 'story';
+  return 'product';
 }
 
 function saveAutopilotPost({
@@ -377,7 +377,7 @@ async function runAutopilotOnce(account) {
   let contentMode = chooseContentMode();
 
   // ==================================================
-  // 50% 레시피형
+  // 60% 레시피형
   // 레시피 주제 → 관련 짧은 YouTube 영상 → 상세 레시피 생성
   // → 비밀 소스 키워드 → 쿠팡 검색 → 상세 레시피 댓글 + 쿠파스 링크
   // ==================================================
