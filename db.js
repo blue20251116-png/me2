@@ -4,24 +4,20 @@ const path = require('path');
 const fs = require('fs');
 
 const dbDir = path.join(__dirname, 'db');
-// 배포 환경에 빈 폴더가 누락되는 경우가 있어(git은 빈 폴더를 추적하지 않음) 없으면 직접 생성
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
 const db = new DatabaseSync(path.join(dbDir, 'scheduler.db'));
 
-// 기본 쿠팡파트너스 안내문구 (공정위 표기 의무 문구 포함) - {link} 자리에 실제 링크가 들어감
 const DEFAULT_DISCLOSURE_TEMPLATE =
   '이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.\n\n{link}';
 
 db.exec(`
--- 계정 하나 = 스레드 계정 하나 + 그 계정에 딸린 쿠팡파트너스/AI 설정
 CREATE TABLE IF NOT EXISTS accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER,                     -- 이 스레드 계정을 소유한 회원 (SaaS 회원별 데이터 분리용)
-  label TEXT NOT NULL,                 -- 화면에 표시할 이름 (예: 홈템픽, 젠틀블루)
-
+  user_id INTEGER,
+  label TEXT NOT NULL,
   threads_app_id TEXT,
   threads_app_secret TEXT,
   threads_redirect_uri TEXT,
@@ -29,17 +25,14 @@ CREATE TABLE IF NOT EXISTS accounts (
   threads_access_token TEXT,
   threads_token_expires_at TEXT,
   threads_username TEXT,
-
   coupang_access_key TEXT,
   coupang_secret_key TEXT,
   coupang_sub_id TEXT,
   coupang_disclosure_template TEXT,
-
   anthropic_api_key TEXT,
   openai_api_key TEXT,
   naver_client_id TEXT,
   naver_client_secret TEXT,
-
   autopilot_enabled INTEGER DEFAULT 0,
   autopilot_next_at TEXT,
   autopilot_last_keyword TEXT,
@@ -47,18 +40,13 @@ CREATE TABLE IF NOT EXISTS accounts (
   autopilot_youtube_source_enabled INTEGER DEFAULT 1,
   autopilot_youtube_order TEXT DEFAULT 'relevance',
   autopilot_frame_media_enabled INTEGER DEFAULT 0,
-
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- 계정별로 "이 상품(키워드)에는 이 영상/프레임이 어울린다"를 최소한으로 기억해두는 테이블.
--- 수동으로 영상 업로드 → 프레임 선택까지 마친 결과를 저장해두면, 완전자동화가 나중에 같은/비슷한
--- 상품을 고를 때 다시 검색·추출 없이 재사용할 수 있다. 대규모 미디어 라이브러리가 아니라
--- "상품 키워드 → 마지막으로 고른 이미지 조합" 최소 매핑만 저장한다.
 CREATE TABLE IF NOT EXISTS media_sources (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id INTEGER NOT NULL,
-  product_keyword TEXT NOT NULL,   -- 정규화된 상품명(소문자/공백 정리) — 완전자동화가 유사 매칭할 때 사용
+  product_keyword TEXT NOT NULL,
   frame_job_id TEXT,
   image_url TEXT,
   extra_image_url TEXT,
@@ -71,16 +59,16 @@ CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id INTEGER NOT NULL,
   text TEXT NOT NULL,
-  link TEXT,               -- 쿠팡파트너스 링크 등 첨부 링크 (댓글로 자동 등록됨)
-  image_url TEXT,          -- 이미지 URL (선택)
-  video_url TEXT,          -- 영상 URL (선택, image_url과 동시 사용 불가)
-  scheduled_at TEXT NOT NULL,   -- ISO 문자열, 발행 예정 시각
-  status TEXT NOT NULL DEFAULT 'pending', -- pending | posted | failed
-  threads_media_id TEXT,   -- 발행 성공 후 스레드 미디어 ID
+  link TEXT,
+  image_url TEXT,
+  video_url TEXT,
+  scheduled_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  threads_media_id TEXT,
   posted_at TEXT,
   error_message TEXT,
-  auto_comment_enabled INTEGER DEFAULT 1, -- 1: 본문 발행 후 안내문구+링크를 댓글로 자동 등록
-  comment_status TEXT DEFAULT 'none',     -- none | pending | posted | failed (link 없으면 계속 none)
+  auto_comment_enabled INTEGER DEFAULT 1,
+  comment_status TEXT DEFAULT 'none',
   comment_media_id TEXT,
   comment_posted_at TEXT,
   comment_error_message TEXT,
@@ -99,20 +87,18 @@ CREATE TABLE IF NOT EXISTS insights (
   FOREIGN KEY (post_id) REFERENCES posts(id)
 );
 
--- 예전 버전(단일 계정)에서 쓰던 전역 설정 테이블. 마이그레이션 시 참고용으로만 유지.
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
 
--- SaaS 회원 계정 (스레드 "account"와는 다른 개념 — 여기 "user"가 로그인하는 서비스 회원)
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   name TEXT,
-  role TEXT DEFAULT 'user',            -- user | admin
-  status TEXT DEFAULT 'pending',       -- pending | active | suspended
+  role TEXT DEFAULT 'user',
+  status TEXT DEFAULT 'pending',
   plan TEXT DEFAULT 'pro',
   daily_publish_limit INTEGER DEFAULT 20,
   max_threads_accounts INTEGER DEFAULT 1,
@@ -122,21 +108,18 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- AI 생성/발행 비용을 회원별로 추적하기 위한 최소 로그 (관리자 화면에서 사용량 확인용)
 CREATE TABLE IF NOT EXISTS usage_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
-  type TEXT NOT NULL,   -- 'text' (글/키워드/상황 생성) | 'image' (라이프스타일 이미지 생성)
+  type TEXT NOT NULL,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- 회원가입 화면 등에 보여줄 결제 안내(계좌/오픈카톡/문구). 관리자가 admin 페이지에서 직접 수정.
 CREATE TABLE IF NOT EXISTS site_settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
 
--- 운영자 공용 API 설정. 일반 회원에게는 절대 노출하지 않고 관리자 화면에서만 관리.
 CREATE TABLE IF NOT EXISTS system_api_settings (
   key TEXT PRIMARY KEY,
   value TEXT
@@ -166,24 +149,35 @@ seedSiteSettingsIfEmpty();
 
 function getSiteSettings() {
   const rows = db.prepare('SELECT key, value FROM site_settings').all();
-  const result = { ...DEFAULT_SITE_SETTINGS };
-  for (const r of rows) result[r.key] = r.value;
+  const result = { ...DEFAULT_SITE_SETTINGS, has_pexels_api_key: false };
+  for (const r of rows) {
+    if (r.key === 'pexels_api_key') {
+      result.has_pexels_api_key = !!r.value;
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(DEFAULT_SITE_SETTINGS, r.key)) {
+      result[r.key] = r.value;
+    }
+  }
   return result;
 }
 
 function updateSiteSettings(fields) {
-  const allowed = Object.keys(DEFAULT_SITE_SETTINGS);
+  const allowed = [...Object.keys(DEFAULT_SITE_SETTINGS), 'pexels_api_key'];
   for (const [key, value] of Object.entries(fields)) {
     if (!allowed.includes(key)) continue;
+    if (key === 'pexels_api_key' && !value) continue;
     db.prepare(
       `INSERT INTO site_settings (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-    ).run(key, value);
+    ).run(key, value == null ? '' : String(value).trim());
   }
 }
 
+function getPexelsApiKey() {
+  return db.prepare(`SELECT value FROM site_settings WHERE key = 'pexels_api_key'`).get()?.value || '';
+}
 
-// ---- 운영자 공용 API 설정 ----
 const SYSTEM_API_SETTING_KEYS = [
   'threads_app_id',
   'threads_app_secret',
@@ -208,7 +202,6 @@ function updateSystemApiSettings(fields) {
   for (const key of SYSTEM_API_SETTING_KEYS) {
     if (!(key in fields)) continue;
     const value = fields[key];
-    // secret 입력란은 빈 값으로 보내면 기존 값을 유지한다.
     if (['threads_app_secret', 'openai_api_key', 'naver_client_secret', 'youtube_api_key'].includes(key) && !value) continue;
     db.prepare(
       `INSERT INTO system_api_settings (key, value) VALUES (?, ?)
@@ -239,7 +232,6 @@ function createInitialAdmin(email, passwordHash, name) {
   return info.lastInsertRowid;
 }
 
-// 최초 관리자 자동 생성/승격 — 회원가입 경로로는 admin이 될 수 없고, 오직 서버 환경변수로만 부트스트랩됨
 function bootstrapAdmin() {
   const email = process.env.ADMIN_EMAIL;
   const password = process.env.ADMIN_PASSWORD;
@@ -257,11 +249,9 @@ function bootstrapAdmin() {
        VALUES (?, ?, ?, 'admin', 'active', 'pro', NULL)`
     ).run(email, hashPassword(password), '관리자');
   }
-  // 회원 시스템 도입 전에 만들어진 계정들(user_id 없음)을 관리자에게 자동으로 붙여줌
   assignOrphanAccountsToAdmin();
 }
 
-// posts에 account_id 컬럼이 없던 예전 DB를 위한 마이그레이션
 const migrations = [
   `ALTER TABLE posts ADD COLUMN auto_comment_enabled INTEGER DEFAULT 1`,
   `ALTER TABLE posts ADD COLUMN comment_status TEXT DEFAULT 'none'`,
@@ -278,19 +268,15 @@ const migrations = [
   `ALTER TABLE accounts ADD COLUMN naver_client_id TEXT`,
   `ALTER TABLE accounts ADD COLUMN naver_client_secret TEXT`,
   `ALTER TABLE accounts ADD COLUMN user_id INTEGER`,
-  // 캐러셀(2장) 발행 지원: 라이프스타일 이미지(image_url) + 상세페이지 사진(extra_image_url)
   `ALTER TABLE posts ADD COLUMN extra_image_url TEXT`,
-  // 완전자동화(오토파일럿)가 관련 YouTube 콘텐츠를 소재로 참고할지 여부 — 기본 ON
   `ALTER TABLE accounts ADD COLUMN autopilot_youtube_source_enabled INTEGER DEFAULT 1`,
   `ALTER TABLE accounts ADD COLUMN autopilot_youtube_order TEXT DEFAULT 'relevance'`,
-  // 완전자동화가 수동으로 골라둔 영상 프레임(media_sources)을 게시 이미지로 재사용할지 여부 — 기본 OFF
   `ALTER TABLE accounts ADD COLUMN autopilot_frame_media_enabled INTEGER DEFAULT 0`,
 ];
 for (const sql of migrations) {
-  try { db.exec(sql); } catch (e) { /* 컬럼이 이미 있으면 무시 */ }
+  try { db.exec(sql); } catch (e) { /* 이미 있으면 무시 */ }
 }
 
-// ---- 예전 단일 계정(settings 테이블) 데이터를 계정 1개로 자동 이전 ----
 function migrateLegacySettingsToAccount() {
   const legacyRows = db.prepare('SELECT key, value FROM settings').all();
   if (!legacyRows.length) return;
@@ -302,7 +288,7 @@ function migrateLegacySettingsToAccount() {
   if (!hasThreadsData) return;
 
   const existingAccount = db.prepare('SELECT id FROM accounts LIMIT 1').get();
-  if (existingAccount) return; // 이미 계정이 있으면 중복 이전하지 않음
+  if (existingAccount) return;
 
   db.prepare(
     `INSERT INTO accounts (
@@ -327,12 +313,10 @@ function migrateLegacySettingsToAccount() {
   );
 
   const newAccountId = db.prepare('SELECT id FROM accounts ORDER BY id DESC LIMIT 1').get().id;
-  // 계정 없이 저장된 예전 글들을 새로 만든 계정으로 연결
   db.prepare('UPDATE posts SET account_id = ? WHERE account_id IS NULL').run(newAccountId);
 }
 migrateLegacySettingsToAccount();
 
-// ---- 계정 CRUD (회원별로 분리) ----
 function listAccounts(userId) {
   return db
     .prepare(
@@ -343,8 +327,6 @@ function listAccounts(userId) {
     .all(userId);
 }
 
-// 오토파일럿/예약발행 크론이 회원 구분 없이 전체 계정을 순회해야 할 때 쓰는 시스템 전용 함수.
-// API 라우트에서는 절대 쓰지 말 것 (회원별 데이터 분리를 우회하게 됨).
 function listAllAccountsForSystem() {
   return db.prepare(`SELECT id FROM accounts ORDER BY id ASC`).all();
 }
@@ -364,8 +346,6 @@ function createAccount(label, userId) {
   return info.lastInsertRowid;
 }
 
-// 회원 시스템 도입 전에 만들어진 계정(user_id가 비어있음)을 관리자 회원에게 자동으로 귀속시킴.
-// 이렇게 안 하면 회원 시스템 붙인 직후 기존에 쓰던 스레드 계정들이 아무 회원 것도 아니게 되어 사라져 보임.
 function assignOrphanAccountsToAdmin() {
   const admin = db.prepare(`SELECT id FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1`).get();
   if (!admin) return;
@@ -412,7 +392,6 @@ function deleteAccount(id) {
   db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
 }
 
-// ---- 회원(users) 관련 함수 ----
 function createUser(email, passwordHash, name) {
   const info = db
     .prepare(`INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)`)
@@ -438,8 +417,6 @@ function approveUser(id, approvedBy) {
   ).run(approvedBy, id);
 }
 
-// ---- 발행량/사용량 제한 (플랜 정책) ----
-// 관리자는 요금제 제약을 받지 않음 (서비스 운영/테스트 목적 계정이라 일반 회원과 다름)
 function canPublish(userId) {
   const user = getUserById(userId);
   if (!user) return false;
@@ -492,7 +469,6 @@ function setUserStatus(id, status) {
   db.prepare(`UPDATE users SET status = ? WHERE id = ?`).run(status, id);
 }
 
-// days만큼 이용기간을 늘림 (기존 만료일이 미래면 거기서부터, 지났거나 없으면 오늘부터 카운트)
 function extendUserExpiry(id, days) {
   const user = getUserById(id);
   if (!user) throw new Error('존재하지 않는 회원입니다');
@@ -505,8 +481,6 @@ function extendUserExpiry(id, days) {
   return newExpiry;
 }
 
-// req 객체가 없는 크론(scheduler.js)에서도 이미지 절대경로를 만들 수 있게 해주는 헬퍼.
-// 계정별 redirect_uri -> 서버 공용 설정 -> 환경변수 순으로 배포 주소를 추정한다.
 function getPublicBaseUrlForAccount(account) {
   const shared = getSystemApiSettings();
   const candidate =
@@ -523,9 +497,6 @@ function getPublicBaseUrlForAccount(account) {
   return `http://localhost:${process.env.PORT || 3000}`;
 }
 
-// ---- media_sources: "이 상품 키워드에는 이 영상/프레임이 어울린다" 최소 매핑 ----
-// 대규모 미디어 라이브러리가 아니라, 완전자동화가 나중에 비슷한 상품을 고를 때 수동으로
-// 골라둔 이미지 조합을 재사용할 수 있게 하는 최소한의 연결 정보만 저장한다.
 function normalizeKeyword(text) {
   return String(text || '')
     .toLowerCase()
@@ -534,7 +505,6 @@ function normalizeKeyword(text) {
     .trim();
 }
 
-// 상품명 두 개가 얼마나 겹치는지 — 2글자 이상 단어 기준 겹치는 단어 수 (단순 근사치)
 function keywordOverlapScore(a, b) {
   const wordsA = new Set(a.split(' ').filter((w) => w.length >= 2));
   const wordsB = new Set(b.split(' ').filter((w) => w.length >= 2));
@@ -543,7 +513,6 @@ function keywordOverlapScore(a, b) {
   return overlap;
 }
 
-// 같은 계정 + 같은 상품 키워드로 이미 저장된 게 있으면 갱신, 없으면 새로 저장 (계정당 키워드 1개만 유지)
 function saveMediaSource(accountId, { productName, frameJobId, imageUrl, extraImageUrl }) {
   const keyword = normalizeKeyword(productName);
   if (!keyword || !imageUrl) return null;
@@ -566,9 +535,6 @@ function saveMediaSource(accountId, { productName, frameJobId, imageUrl, extraIm
   return info.lastInsertRowid;
 }
 
-// productName과 가장 겹치는 media_sources 행을 찾는다. 겹치는 단어가 없으면 null.
-// 동점이면 최근에 덜 쓰인(last_used_at이 이르거나 없는) 쪽을 우선해서, 같은 이미지만 계속
-// 반복 사용되지 않도록 최소한의 다양성을 준다.
 function findMediaSourceForProduct(accountId, productName) {
   const target = normalizeKeyword(productName);
   if (!target) return null;
@@ -620,6 +586,7 @@ module.exports = {
   getTodayUsage,
   getSiteSettings,
   updateSiteSettings,
+  getPexelsApiKey,
   getSystemApiSettings,
   updateSystemApiSettings,
   hasAdmin,
