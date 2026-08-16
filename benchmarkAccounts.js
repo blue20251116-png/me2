@@ -44,23 +44,13 @@ function addBenchmarkAccount(value) {
 function addBenchmarkAccountsBulk(value) {
   const usernames = parseUsernames(value);
   if (!usernames.length) throw new Error('등록할 Threads 아이디가 없습니다.');
-
   const insert = db.prepare('INSERT OR IGNORE INTO threads_benchmark_accounts (username) VALUES (?)');
-  let added = 0;
-  let skipped = 0;
-
+  let added = 0, skipped = 0;
   for (const username of usernames) {
     const info = insert.run(username);
-    if (Number(info?.changes || 0) > 0) added++;
-    else skipped++;
+    if (Number(info?.changes || 0) > 0) added++; else skipped++;
   }
-
-  return {
-    added,
-    skipped,
-    total: usernames.length,
-    accounts: listBenchmarkAccounts()
-  };
+  return { added, skipped, total:usernames.length, accounts:listBenchmarkAccounts() };
 }
 function deleteBenchmarkAccount(id) { return db.prepare('DELETE FROM threads_benchmark_accounts WHERE id=?').run(Number(id)); }
 function markUsedPost(url) { if (url) db.prepare('INSERT OR IGNORE INTO threads_benchmark_used_posts (post_url) VALUES (?)').run(String(url)); }
@@ -111,15 +101,33 @@ async function collectProfilePostsWithContext(context, username, {limit=2}={}) {
         }
         return{images:images.slice(0,10),hasVideo:videos.length>0,videoCount:videos.length};
       };
+      const hasExternalLink=root=>{
+        if(!root)return false;
+        for(const a of root.querySelectorAll('a[href]')){
+          const raw=String(a.getAttribute('href')||'').trim();
+          if(!raw)continue;
+          try{
+            const u=new URL(raw,location.origin);
+            if(/^https?:$/i.test(u.protocol) && !/(^|\.)threads\.(com|net)$/i.test(u.hostname)) return true;
+          }catch{}
+        }
+        const text=clean(root.innerText||'');
+        return /(?:https?:\/\/|www\.)\S+/i.test(text) || /\b(?:link\.coupang\.com|naver\.me)\b/i.test(text);
+      };
       const out=[],seen=new Set();
+      const scanLimit=Math.max(limit*6,24);
       for(const a of document.querySelectorAll('a[href*="/post/"]')){
+        if(out.length>=limit)break;
         const href=canonical(a.href||''); if(!href||seen.has(href))continue;
+        seen.add(href);
         let p=''; try{p=new URL(href).pathname;}catch{} if(!/\/post\//i.test(p))continue;
         const root=findRoot(a,href); if(!root)continue;
         const text=clean(root.innerText||'').slice(0,1600); if(!text)continue;
-        const media=mediaFromRoot(root); seen.add(href);
+        if(hasExternalLink(root))continue;
+        const media=mediaFromRoot(root);
+        if(!media.hasVideo && media.images.length===0)continue;
         out.push({url:href,text,username,images:media.images,thumbnail:media.images[0]||'',imageCount:media.images.length,hasVideo:media.hasVideo,videoCount:media.videoCount});
-        if(out.length>=limit)break;
+        if(seen.size>=scanLimit&&out.length>=limit)break;
       }
       return out;
     }, {username,limit});
@@ -150,108 +158,45 @@ async function collectPostDetails(url, username) {
       const canonical=href=>{try{const u=new URL(href,location.origin);return`${u.origin}${u.pathname}`;}catch{return String(href||'').split(/[?#]/)[0];}};
       const rectOverlap=(a,b)=>{const x=Math.max(0,Math.min(a.right,b.right)-Math.max(a.left,b.left));const y=Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top));const inter=x*y;if(!inter)return 0;return inter/Math.max(1,Math.min(a.width*a.height,b.width*b.height));};
       const targetUrl=canonical(sourceUrl),targetUser=String(username||'').toLowerCase();
-
       function postRootFromLink(a, expectedUrl='') {
         let node=a.closest('article,[role="article"]')||a.parentElement,best=null;
         for(let i=0;i<12&&node;i++,node=node.parentElement){
-          const txt=clean(node.innerText);
-          if(txt.length<4)continue;
+          const txt=clean(node.innerText); if(txt.length<4)continue;
           const postLinks=[...node.querySelectorAll('a[href*="/post/"]')].map(x=>canonical(x.href||''));
           const uniq=[...new Set(postLinks)];
-          if(expectedUrl){
-            if(uniq.includes(expectedUrl))best=node;
-            if(uniq.length>1&&best)break;
-          } else {
-            if(uniq.length<=1)best=node;
-            if(uniq.length>1&&best)break;
-          }
+          if(expectedUrl){if(uniq.includes(expectedUrl))best=node;if(uniq.length>1&&best)break;}
+          else {if(uniq.length<=1)best=node;if(uniq.length>1&&best)break;}
         }
         return best;
       }
-
       const mainCandidates=[];
       for(const a of document.querySelectorAll('a[href*="/post/"]')){
         if(canonical(a.href||'')!==targetUrl)continue;
-        const root=postRootFromLink(a,targetUrl);
-        if(root&&!mainCandidates.includes(root))mainCandidates.push(root);
+        const root=postRootFromLink(a,targetUrl); if(root&&!mainCandidates.includes(root))mainCandidates.push(root);
       }
       const main=mainCandidates.sort((a,b)=>clean(b.innerText).length-clean(a.innerText).length)[0]||null;
       const sourceText=clean(main?.innerText||'').slice(0,5000);
-
-      const videos=[];
-      const videoRects=[];
-      if(main){
-        for(const v of main.querySelectorAll('video')){
-          const r=v.getBoundingClientRect(); if(r.width<180||r.height<180)continue;
-          videoRects.push(r);
-          const src=v.currentSrc||v.src||''; if(src&&!videos.includes(src))videos.push(src);
-        }
-      }
-
+      const videos=[],videoRects=[];
+      if(main){for(const v of main.querySelectorAll('video')){const r=v.getBoundingClientRect();if(r.width<180||r.height<180)continue;videoRects.push(r);const src=v.currentSrc||v.src||'';if(src&&!videos.includes(src))videos.push(src);}}
       const images=[];
-      if(main){
-        for(const img of main.querySelectorAll('img')){
-          const r=img.getBoundingClientRect(),src=img.currentSrc||img.src||'',alt=(img.alt||'').toLowerCase();
-          if(!src||r.width<180||r.height<180)continue;
-          if(/profile|프로필|avatar|사용자/.test(alt))continue;
-          if(videoRects.some(vr=>rectOverlap(r,vr)>=0.55))continue;
-          if(img.closest('video')||img.parentElement?.querySelector?.('video'))continue;
-          if(!images.includes(src))images.push(src);
-        }
-      }
-
-      const authorReplies=[];
-      const seenText=new Set();
-      const profileAnchors=[...document.querySelectorAll('a[href]')].filter(a=>{
-        const h=String(a.getAttribute('href')||'').toLowerCase().replace(/\/$/,'');
-        return h===`/@${targetUser}` || h.endsWith(`/@${targetUser}`);
-      });
-      for(const a of profileAnchors){
-        const root=postRootFromLink(a,'');
-        if(!root||root===main||main?.contains(root)||root.contains(main))continue;
-        let text=clean(root.innerText);
-        if(!text||text.length<8)continue;
-        text=text.replace(/^(?:@?[^ ]+\s+)?(?:방금|\d+\s*(?:분|시간|일))\s*/,'').trim();
-        if(text.length<8||seenText.has(text))continue;
-        seenText.add(text);
-        authorReplies.push(text.slice(0,3500));
-      }
-
-      for(const block of document.querySelectorAll('article,[role="article"]')){
-        if(block===main||main?.contains(block)||block.contains(main))continue;
-        let text=clean(block.innerText); if(!text||text.length<8)continue;
-        const links=[...block.querySelectorAll('a[href]')].map(a=>String(a.getAttribute('href')||'').toLowerCase());
-        const isAuthor=links.some(h=>h.includes('/@'+targetUser))||text.toLowerCase().startsWith(targetUser)||text.toLowerCase().includes('@'+targetUser);
-        if(isAuthor&&!seenText.has(text)){seenText.add(text);authorReplies.push(text.slice(0,3500));}
-      }
-
+      if(main){for(const img of main.querySelectorAll('img')){const r=img.getBoundingClientRect(),src=img.currentSrc||img.src||'',alt=(img.alt||'').toLowerCase();if(!src||r.width<180||r.height<180)continue;if(/profile|프로필|avatar|사용자/.test(alt))continue;if(videoRects.some(vr=>rectOverlap(r,vr)>=0.55))continue;if(img.closest('video')||img.parentElement?.querySelector?.('video'))continue;if(!images.includes(src))images.push(src);}}
+      const authorReplies=[],seenText=new Set();
+      const profileAnchors=[...document.querySelectorAll('a[href]')].filter(a=>{const h=String(a.getAttribute('href')||'').toLowerCase().replace(/\/$/,'');return h===`/@${targetUser}`||h.endsWith(`/@${targetUser}`);});
+      for(const a of profileAnchors){const root=postRootFromLink(a,'');if(!root||root===main||main?.contains(root)||root.contains(main))continue;let text=clean(root.innerText);if(!text||text.length<8)continue;text=text.replace(/^(?:@?[^ ]+\s+)?(?:방금|\d+\s*(?:분|시간|일))\s*/,'').trim();if(text.length<8||seenText.has(text))continue;seenText.add(text);authorReplies.push(text.slice(0,3500));}
+      for(const block of document.querySelectorAll('article,[role="article"]')){if(block===main||main?.contains(block)||block.contains(main))continue;let text=clean(block.innerText);if(!text||text.length<8)continue;const links=[...block.querySelectorAll('a[href]')].map(a=>String(a.getAttribute('href')||'').toLowerCase());const isAuthor=links.some(h=>h.includes('/@'+targetUser))||text.toLowerCase().startsWith(targetUser)||text.toLowerCase().includes('@'+targetUser);if(isAuthor&&!seenText.has(text)){seenText.add(text);authorReplies.push(text.slice(0,3500));}}
       const metaDescription=clean(document.querySelector('meta[property="og:description"]')?.content||document.querySelector('meta[name="description"]')?.content||'');
-      return{
-        sourceText,
-        authorReplies:authorReplies.slice(0,10),
-        images:images.slice(0,10),
-        videos:videos.slice(0,5),
-        hasVideo:videoRects.length>0,
-        exactUrl:canonical(location.href)===targetUrl,
-        metaDescription
-      };
+      return{sourceText,authorReplies:authorReplies.slice(0,10),images:images.slice(0,10),videos:videos.slice(0,5),hasVideo:videoRects.length>0,exactUrl:canonical(location.href)===targetUrl,metaDescription};
     },{username,sourceUrl:url});
-
     const sourceText=String(data.sourceText||data.metaDescription||'').trim();
+    if (!(data.images||[]).length && !(data.videos||[]).length && !data.hasVideo) {
+      throw new Error('이 소재는 원본 사진 또는 영상이 없어 사용할 수 없습니다.');
+    }
     console.log(`[Threads detail] @${username} source=${sourceText.length} replies=${(data.authorReplies||[]).length} images=${(data.images||[]).length} videos=${(data.videos||[]).length}`);
     return{sourceText,authorReplies:(data.authorReplies||[]).filter(Boolean),images:data.images||[],videos:data.videos||[],hasVideo:!!data.hasVideo,exactUrl:!!data.exactUrl};
-  } finally {
-    if(context)try{await context.close();}catch{}
-    if(browser)try{await browser.close();}catch{}
-  }
+  } finally {if(context)try{await context.close();}catch{}if(browser)try{await browser.close();}catch{}}
 }
 
-async function mapWithConcurrency(items,concurrency,worker){
-  const results=[];let cursor=0;
-  async function run(){while(true){const i=cursor++;if(i>=items.length)return;try{results[i]=await worker(items[i],i);}catch(err){results[i]={error:err};}}}
-  await Promise.all(Array.from({length:Math.min(concurrency,items.length)},run));
-  return results;
-}
+async function mapWithConcurrency(items,concurrency,worker){const results=[];let cursor=0;async function run(){while(true){const i=cursor++;if(i>=items.length)return;try{results[i]=await worker(items[i],i);}catch(err){results[i]={error:err};}}}await Promise.all(Array.from({length:Math.min(concurrency,items.length)},run));return results;}
 
 async function collectBenchmarkMaterials({limit=10}={}){
   const accounts=shuffle(listBenchmarkAccounts());
@@ -260,14 +205,11 @@ async function collectBenchmarkMaterials({limit=10}={}){
   let browser,context;
   try{
     ({browser,context}=await openBrowser());
-    const scanned=await mapWithConcurrency(sample,4,async account=>(await collectProfilePostsWithContext(context,account.username,{limit:2})).filter(x=>!isUsedPost(x.url)));
+    const scanned=await mapWithConcurrency(sample,4,async account=>(await collectProfilePostsWithContext(context,account.username,{limit:Math.max(4,limit)})).filter(x=>!isUsedPost(x.url)));
     const pools=scanned.filter(Array.isArray).filter(x=>x.length),all=[];let round=0;
-    while(all.length<limit&&pools.some(p=>p.length>round)){
-      for(const pool of shuffle(pools)){if(all.length>=limit)break;if(pool[round])all.push(pool[round]);}
-      round++;
-    }
+    while(all.length<limit&&pools.some(p=>p.length>round)){for(const pool of shuffle(pools)){if(all.length>=limit)break;if(pool[round])all.push(pool[round]);}round++;}
     return all.slice(0,limit);
-  } finally { if(context)try{await context.close();}catch{} if(browser)try{await browser.close();}catch{} }
+  } finally {if(context)try{await context.close();}catch{}if(browser)try{await browser.close();}catch{}}
 }
 
 module.exports={listBenchmarkAccounts,addBenchmarkAccount,addBenchmarkAccountsBulk,deleteBenchmarkAccount,markUsedPost,collectBenchmarkMaterials,collectPostDetails,collectProfilePosts};
