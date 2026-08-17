@@ -53,28 +53,24 @@ async function reserveApiSlot(account) {
   while (true) {
     const now = Date.now();
     const cutoff = now - RATE_WINDOW_MS;
+    db.prepare('DELETE FROM coupang_api_call_log WHERE called_at_ms<=?').run(cutoff - 5000);
+
+    const globalRows = db.prepare('SELECT called_at_ms FROM coupang_api_call_log WHERE called_at_ms>? ORDER BY called_at_ms ASC').all(cutoff);
+    const keyRows = db.prepare('SELECT called_at_ms FROM coupang_api_call_log WHERE access_key_hash=? AND called_at_ms>? ORDER BY called_at_ms ASC').all(keyHash, cutoff);
+
     let waitMs = 0;
+    if (globalRows.length >= GLOBAL_CALLS_PER_MINUTE) {
+      waitMs = Math.max(waitMs, Number(globalRows[0].called_at_ms) + RATE_WINDOW_MS - now + 75);
+    }
+    if (keyRows.length >= PER_KEY_CALLS_PER_MINUTE) {
+      waitMs = Math.max(waitMs, Number(keyRows[0].called_at_ms) + RATE_WINDOW_MS - now + 75);
+    }
 
-    const tx = db.transaction(() => {
-      db.prepare('DELETE FROM coupang_api_call_log WHERE called_at_ms<=?').run(cutoff - 5000);
-      const globalRows = db.prepare('SELECT called_at_ms FROM coupang_api_call_log WHERE called_at_ms>? ORDER BY called_at_ms ASC').all(cutoff);
-      const keyRows = db.prepare('SELECT called_at_ms FROM coupang_api_call_log WHERE access_key_hash=? AND called_at_ms>? ORDER BY called_at_ms ASC').all(keyHash, cutoff);
+    if (waitMs <= 0) {
+      db.prepare('INSERT INTO coupang_api_call_log(access_key_hash,called_at_ms) VALUES(?,?)').run(keyHash, now);
+      return;
+    }
 
-      if (globalRows.length >= GLOBAL_CALLS_PER_MINUTE) {
-        waitMs = Math.max(waitMs, Number(globalRows[0].called_at_ms) + RATE_WINDOW_MS - now + 75);
-      }
-      if (keyRows.length >= PER_KEY_CALLS_PER_MINUTE) {
-        waitMs = Math.max(waitMs, Number(keyRows[0].called_at_ms) + RATE_WINDOW_MS - now + 75);
-      }
-
-      if (waitMs <= 0) {
-        db.prepare('INSERT INTO coupang_api_call_log(access_key_hash,called_at_ms) VALUES(?,?)').run(keyHash, now);
-        return true;
-      }
-      return false;
-    });
-
-    if (tx()) return;
     const safeWait = Math.max(100, Math.min(waitMs, RATE_WINDOW_MS));
     console.log(`[Coupang][LOCAL THROTTLE] global<=${GLOBAL_CALLS_PER_MINUTE}/min key<=${PER_KEY_CALLS_PER_MINUTE}/min wait=${safeWait}ms`);
     await sleep(safeWait);
