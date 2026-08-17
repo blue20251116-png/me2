@@ -72,6 +72,17 @@ function isInvalidCarouselChildrenError(err){
   return Number(apiErr.error_subcode)===4279004||title.includes('invalid carousel children')||msg.includes('invalid carousel children')||msg.includes('children with ids');
 }
 
+function mediaProcessingError(message,details={}){
+  const err=new Error(message);
+  err.code='THREADS_MEDIA_PROCESSING_FAILED';
+  err.isThreadsMediaProcessingError=true;
+  Object.assign(err,details);
+  return err;
+}
+function isMediaProcessingError(err){
+  return !!(err?.isThreadsMediaProcessingError||err?.code==='THREADS_MEDIA_PROCESSING_FAILED'||/Threads 미디어 처리 실패|미디어 준비 시간 초과|미디어 컨테이너가 만료/i.test(String(err?.message||'')));
+}
+
 async function getContainerStatus(creationId,accessToken){
   try{
     const res=await axios.get(`${GRAPH_BASE}/${creationId}`,{
@@ -97,12 +108,12 @@ async function waitForContainerReady(creationId,accessToken,{maxTries=30,waitMs=
     console.log(`[Threads][${label}_STATUS] creationId=${creationId} status=${info.status||'-'} try=${i+1}/${maxTries}`);
 
     if(info.status==='FINISHED'||info.status==='PUBLISHED')return info;
-    if(info.status==='ERROR')throw new Error(`Threads 미디어 처리 실패${info.errorMessage?`: ${info.errorMessage}`:''}`);
-    if(info.status==='EXPIRED')throw new Error('Threads 미디어 컨테이너가 만료되었습니다');
+    if(info.status==='ERROR')throw mediaProcessingError(`Threads 미디어 처리 실패${info.errorMessage?`: ${info.errorMessage}`:''}`,{creationId,status:info.status,errorMessage:info.errorMessage||null,label});
+    if(info.status==='EXPIRED')throw mediaProcessingError('Threads 미디어 컨테이너가 만료되었습니다',{creationId,status:info.status,label});
 
     if(i<maxTries-1)await sleep(waitMs);
   }
-  throw new Error(`Threads 미디어 준비 시간 초과 (creationId=${creationId}, status=${lastStatus||'unknown'})`);
+  throw mediaProcessingError(`Threads 미디어 준비 시간 초과 (creationId=${creationId}, status=${lastStatus||'unknown'})`,{creationId,status:lastStatus||'UNKNOWN',label});
 }
 
 async function publishContainer(creationId,accessToken,maxTries=5,baseWaitMs=2000){
@@ -229,12 +240,19 @@ async function createCarouselParent(accountId,text,children,accessToken,{maxTrie
 async function publishMediaItemsPost(accountId,{text,mediaItems}){
   const items=normalizeMediaItems(mediaItems);
   if(!items.length)return publishPost(accountId,{text});
+
   if(items.length===1){
-    return publishPost(accountId,{
-      text,
-      imageUrl:items[0].type==='IMAGE'?items[0].url:null,
-      videoUrl:items[0].type==='VIDEO'?items[0].url:null
-    });
+    try{
+      return await publishPost(accountId,{
+        text,
+        imageUrl:items[0].type==='IMAGE'?items[0].url:null,
+        videoUrl:items[0].type==='VIDEO'?items[0].url:null
+      });
+    }catch(err){
+      if(!isMediaProcessingError(err))throw err;
+      console.warn(`[Threads][MEDIA_FALLBACK] 단일 ${items[0].type} 처리 실패 → TEXT 발행 url=${items[0].url} reason="${err.message}"`);
+      return publishPost(accountId,{text});
+    }
   }
 
   const account=getAccount(accountId);
@@ -250,21 +268,73 @@ async function publishMediaItemsPost(accountId,{text,mediaItems}){
   }
 
   console.log(`[Threads][CAROUSEL_WAIT] 자식 ${children.length}개 준비 상태 확인`);
-  await Promise.all(children.map(child=>waitForContainerReady(child.id,accessToken,{
-    maxTries:child.type==='VIDEO'?40:20,
-    waitMs:child.type==='VIDEO'?2000:1000,
-    label:`CAROUSEL_${child.type}`
-  })));
+  const readyChildren=[];
+  const failedChildren=[];
+  for(const child of children){
+    try{
+      await waitForContainerReady(child.id,accessToken,{
+        maxTries:child.type==='VIDEO'?40:20,
+        waitMs:child.type==='VIDEO'?2000:1000,
+        label:`CAROUSEL_${child.type}`
+      });
+      readyChildren.push(child);
+    }catch(err){
+      if(!isMediaProcessingError(err))throw err;
+      failedChildren.push({child,err});
+      console.warn(`[Threads][CAROUSEL_ITEM_SKIP] ${child.type} 처리 실패 → 제외 id=${child.id} url=${child.url} reason="${err.message}"`);
+    }
+  }
 
-  const creationId=await createCarouselParent(accountId,text,children,accessToken,{maxTries:5});
+  if(failedChildren.length){
+    console.warn(`[Threads][CAROUSEL_FALLBACK] 준비 성공=${readyChildren.length} 실패=${failedChildren.length}`);
+  }
 
-  await waitForContainerReady(creationId,accessToken,{
-    maxTries:30,
-    waitMs:2000,
-    label:'CAROUSEL_PARENT'
-  });
+  if(!readyChildren.length){
+    console.warn('[Threads][CAROUSEL_FALLBACK] 모든 미디어 처리 실패 → TEXT 발행');
+    return publishPost(accountId,{text});
+  }
 
-  return publishContainer(creationId,accessToken,10,3000);
+  if(readyChildren.length===1){
+    const survivor=readyChildren[0];
+    console.warn(`[Threads][CAROUSEL_FALLBACK] 미디어 1개만 정상 → 단일 ${survivor.type}로 재생성 후 발행`);
+    try{
+      return await publishPost(accountId,{
+        text,
+        imageUrl:survivor.type==='IMAGE'?survivor.url:null,
+        videoUrl:survivor.type==='VIDEO'?survivor.url:null
+      });
+    }catch(err){
+      if(!isMediaProcessingError(err))throw err;
+      console.warn(`[Threads][CAROUSEL_FALLBACK] 남은 ${survivor.type}도 처리 실패 → TEXT 발행 reason="${err.message}"`);
+      return publishPost(accountId,{text});
+    }
+  }
+
+  const creationId=await createCarouselParent(accountId,text,readyChildren,accessToken,{maxTries:5});
+
+  try{
+    await waitForContainerReady(creationId,accessToken,{
+      maxTries:30,
+      waitMs:2000,
+      label:'CAROUSEL_PARENT'
+    });
+    return publishContainer(creationId,accessToken,10,3000);
+  }catch(err){
+    if(!isMediaProcessingError(err))throw err;
+    console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 부모 처리 실패 → 첫 정상 미디어 1개로 발행 reason="${err.message}"`);
+    const survivor=readyChildren[0];
+    try{
+      return await publishPost(accountId,{
+        text,
+        imageUrl:survivor.type==='IMAGE'?survivor.url:null,
+        videoUrl:survivor.type==='VIDEO'?survivor.url:null
+      });
+    }catch(singleErr){
+      if(!isMediaProcessingError(singleErr))throw singleErr;
+      console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 단일 미디어도 실패 → TEXT 발행 reason="${singleErr.message}"`);
+      return publishPost(accountId,{text});
+    }
+  }
 }
 
 async function publishCarouselPost(accountId,{text,imageUrls}){
