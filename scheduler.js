@@ -37,6 +37,21 @@ function buildDisclosureText(account, link) {
   return String(link).trim();
 }
 
+function buildDisclosureOnly(account) {
+  const template = String(account.coupang_disclosure_template || '이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.\n\n{link}');
+  return template.replace('{link}', '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function composeNonRecipeAffiliatePost(account, generatedText, link) {
+  const disclosure = buildDisclosureOnly(account);
+  let body = String(generatedText || '').trim();
+  const safeLink = String(link || '').trim();
+  if (body.includes('{{COUPANG_LINK}}')) body = body.replace('{{COUPANG_LINK}}', safeLink);
+  else if (body.includes('✅ 핵심만')) body = body.replace('✅ 핵심만', `${safeLink}\n\n✅ 핵심만`);
+  else body = `${body}\n\n${safeLink}\n\n✅ 핵심만`;
+  return `${disclosure}\n\n${body}`.trim();
+}
+
 function trimToLimit(text, limit) {
   const normalized = String(text || '').trim();
   if (normalized.length <= limit) return normalized;
@@ -209,19 +224,29 @@ async function runAutopilotOnce(account) {
     throw err;
   }
 
-  // V3: 무조건 Threads 소재가 1순위다.
-  // Threads 소재 → 원문/작성자댓글 분석 → 핵심 상품/재료 추출 → 쿠팡 검색 → 소재 기반 글 → 댓글에 상품+제휴링크.
   const result = await buildThreadsFirstAutopilot(account.id, { target });
   const media = chooseProductMedia(account, result.product);
 
-  saveAutopilotPost({
-    accountId: account.id,
-    text: result.text,
-    link: result.product.url,
-    imageUrl: media.imageUrl,
-    extraImageUrl: media.extraImageUrl,
-    recipeCommentText: result.commentLead,
-  });
+  if (result.mode === 'recipe') {
+    saveAutopilotPost({
+      accountId: account.id,
+      text: result.text,
+      link: result.product.url,
+      imageUrl: media.imageUrl,
+      extraImageUrl: media.extraImageUrl,
+      recipeCommentText: result.commentLead,
+    });
+  } else {
+    const affiliateText = composeNonRecipeAffiliatePost(account, result.text, result.product.url);
+    saveAutopilotPost({
+      accountId: account.id,
+      text: affiliateText,
+      link: null,
+      imageUrl: media.imageUrl,
+      extraImageUrl: media.extraImageUrl,
+      recipeCommentText: null,
+    });
+  }
 
   const lastKeyword = result.productSearchTerm || result.secretTerm || result.topic;
   recordAutopilotLast(account.id, lastKeyword, target);
