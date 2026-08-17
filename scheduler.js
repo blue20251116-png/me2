@@ -8,8 +8,8 @@ const { generateCaption, suggestKeywordCandidates } = require('./aiCaption');
 const { generateAffiliateLead } = require('./aiSocial');
 const { rankKeywordsByTrend } = require('./naverTrends');
 const { findAutopilotYoutubeSource } = require('./youtubeSourcing');
-const { buildRecipeAutopilot } = require('./recipeAutomation');
 const { generateRecipe: generateContentOnlyRecipe } = require('./contentOnlyAutomation');
+const { buildAutopilotMaterialPost } = require('./autopilotMaterialEngine');
 
 try { db.exec(`ALTER TABLE posts ADD COLUMN recipe_comment_text TEXT`); } catch {}
 
@@ -157,7 +157,6 @@ function startInsightsJob() {
 
 function randomIntervalMinutes() { return 60 + Math.random() * 15; }
 const AUTOPILOT_TARGETS = ['전체', '20대 여자', '20대 남자', '30대 여자', '30대 남자', '40대 이상'];
-function chooseContentMode() { return Math.random() < 0.70 ? 'recipe' : 'product'; }
 function saveAutopilotPost({ accountId, text, link, imageUrl, extraImageUrl, recipeCommentText = null }) {
   db.prepare(`INSERT INTO posts (text,link,image_url,extra_image_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text) VALUES (?,?,?,?,?,1,'pending',?,?)`).run(text, link || null, imageUrl || null, extraImageUrl || null, new Date().toISOString(), accountId, recipeCommentText);
 }
@@ -212,6 +211,55 @@ async function pickRegularProduct(account, target) {
   return { picked, keyword, trendNote };
 }
 
+async function buildAutopilotText(account, picked, target) {
+  let youtubeSource = null;
+  if (account.autopilot_youtube_source_enabled) {
+    try {
+      youtubeSource = await findAutopilotYoutubeSource({
+        accountId: account.id,
+        productName: picked.name,
+        order: account.autopilot_youtube_order || 'relevance',
+      });
+    } catch (err) {
+      console.log(`[AutopilotV2][YouTube] 보조 소재 검색 실패: ${err.message}`);
+    }
+  }
+
+  try {
+    const result = await buildAutopilotMaterialPost(account.id, { product: picked, target, youtubeSource });
+    console.log(`[AutopilotV2][Material] product="${picked.name}" refs=${result.referenceCount} keyword="${result.sourceKeyword || '-'}" angle="${result.angle}"`);
+    return { text: result.text, sourceKeyword: result.sourceKeyword, referenceCount: result.referenceCount, materialMode: result.usedThreadsMaterial ? 'threads' : 'ai-fallback' };
+  } catch (err) {
+    console.log(`[AutopilotV2][Material] 소재 기반 생성 실패 → 기존 생성기로 폴백: ${err.message}`);
+    const variants = await generateCaption(account.id, { productName: picked.name, price: picked.price, youtubeSource });
+    const text = Array.isArray(variants) ? variants[Math.floor(Math.random() * variants.length)] : String(variants || '');
+    if (!text.trim()) throw new Error('완전자동 글 생성 결과가 비어 있습니다');
+    return { text, sourceKeyword: null, referenceCount: 0, materialMode: youtubeSource ? 'youtube-fallback' : 'legacy-fallback' };
+  }
+}
+
+function chooseProductMedia(account, picked) {
+  let imageUrl = picked.image || null;
+  let extraImageUrl = null;
+  let imageSourceLabel = picked.image ? '쿠팡 원본 상품컷 1장' : '없음';
+
+  if (account.autopilot_frame_media_enabled) {
+    try {
+      const media = findMediaSourceForProduct(account.id, picked.name);
+      if (media && mediaSourceFilesExist(media)) {
+        imageUrl = media.image_url;
+        extraImageUrl = media.extra_image_url || null;
+        markMediaSourceUsed(media.id);
+        imageSourceLabel = extraImageUrl ? '저장 프레임 2장' : '저장 프레임 1장';
+      }
+    } catch (err) {
+      console.log(`[Media] 저장 프레임 조회 실패 — 쿠팡 상품 이미지 유지: ${err.message}`);
+    }
+  }
+
+  return { imageUrl, extraImageUrl, imageSourceLabel };
+}
+
 async function runAutopilotOnce(account) {
   const target = AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
 
@@ -221,47 +269,30 @@ async function runAutopilotOnce(account) {
     return;
   }
 
-  let contentMode = chooseContentMode();
   const cooldown = coupangApi.getApiCooldown?.(account.id);
   if (cooldown) {
     const err = new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);
-    err.code = 'COUPANG_RATE_LIMIT'; err.isCoupangRateLimit = true; throw err;
+    err.code = 'COUPANG_RATE_LIMIT';
+    err.isCoupangRateLimit = true;
+    throw err;
   }
 
-  if (contentMode === 'recipe') {
-    try {
-      const recipeResult = await buildRecipeAutopilot({ account, target });
-      saveAutopilotPost({ accountId: account.id, text: recipeResult.text, link: recipeResult.link, imageUrl: recipeResult.imageUrl, extraImageUrl: recipeResult.extraImageUrl, recipeCommentText: recipeResult.recipeCommentText });
-      recordAutopilotLast(account.id, recipeResult.keyword, target);
-      console.log(`[자동발행 예약] account #${account.id} mode="recipe" target="${target}" keyword="${recipeResult.keyword}" (${recipeResult.trendNote}) product="${recipeResult.product.name}" image="${recipeResult.imageSourceLabel}"`);
-      return;
-    } catch (err) {
-      throwIfCoupangRateLimited(err);
-      console.log(`[Recipe] 레시피형 생성 실패 — 일반 상품형으로 폴백: ${err.response?.data?.error?.message || err.message}`);
-      contentMode = 'product';
-    }
-  }
-
+  // V2 핵심: 매 회차마다 반드시 상품을 먼저 고른 뒤, 그 상품을 기준으로 Threads 소재를 찾고 새 글을 만든다.
   const { picked, keyword, trendNote } = await pickRegularProduct(account, target);
-  let youtubeSource = null;
-  if (account.autopilot_youtube_source_enabled) youtubeSource = await findAutopilotYoutubeSource({ accountId: account.id, productName: picked.name, order: account.autopilot_youtube_order || 'relevance' });
-  const variants = await generateCaption(account.id, { productName: picked.name, price: picked.price, youtubeSource });
-  const text = Array.isArray(variants) ? variants[Math.floor(Math.random() * variants.length)] : String(variants || '');
-  let imageUrl = picked.image || null;
-  let extraImageUrl = null;
-  let imageSourceLabel = picked.image ? '원본 상품컷 1장' : '없음';
-  if (account.autopilot_frame_media_enabled) {
-    try {
-      const media = findMediaSourceForProduct(account.id, picked.name);
-      if (media && mediaSourceFilesExist(media)) {
-        imageUrl = media.image_url; extraImageUrl = media.extra_image_url || null; markMediaSourceUsed(media.id);
-        imageSourceLabel = extraImageUrl ? '저장 프레임 2장' : '저장 프레임 1장';
-      }
-    } catch (err) { console.log(`[Media] 저장 프레임 조회 실패 — 상품 이미지 유지: ${err.message}`); }
-  }
-  saveAutopilotPost({ accountId: account.id, text, link: picked.url, imageUrl, extraImageUrl });
-  recordAutopilotLast(account.id, keyword, target);
-  console.log(`[자동발행 예약] account #${account.id} mode="product" target="${target}" keyword="${keyword}" (${trendNote}) product="${picked.name}" image="${imageSourceLabel}"`);
+  const generated = await buildAutopilotText(account, picked, target);
+  const media = chooseProductMedia(account, picked);
+
+  saveAutopilotPost({
+    accountId: account.id,
+    text: generated.text,
+    link: picked.url,
+    imageUrl: media.imageUrl,
+    extraImageUrl: media.extraImageUrl,
+  });
+
+  const lastKeyword = generated.sourceKeyword || keyword || picked.name;
+  recordAutopilotLast(account.id, lastKeyword, target);
+  console.log(`[자동발행 예약][V2] account #${account.id} target="${target}" product="${picked.name}" productSource="${trendNote}" material="${generated.materialMode}" refs=${generated.referenceCount} keyword="${lastKeyword}" image="${media.imageSourceLabel}"`);
 }
 
 function startAutopilotJob() {
