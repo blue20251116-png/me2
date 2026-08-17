@@ -169,6 +169,27 @@ async function collectPostDetails(url, username) {
         }
         return best;
       }
+      function externalLinksFromRoot(root){
+        if(!root)return[];
+        const out=[];
+        for(const a of root.querySelectorAll('a[href]')){
+          const raw=String(a.href||a.getAttribute('href')||'').trim();
+          if(!raw)continue;
+          try{
+            const u=new URL(raw,location.origin);
+            if(!/^https?:$/i.test(u.protocol))continue;
+            if(/(^|\.)threads\.(com|net)$/i.test(u.hostname))continue;
+            const href=u.href;
+            if(!out.includes(href))out.push(href);
+          }catch{}
+        }
+        return out.slice(0,8);
+      }
+      function replyTextWithLinks(root,text){
+        const links=externalLinksFromRoot(root);
+        const base=clean(text).slice(0,3500);
+        return [base,...links].filter(Boolean).join('\n').slice(0,5000);
+      }
       const mainCandidates=[];
       for(const a of document.querySelectorAll('a[href*="/post/"]')){
         if(canonical(a.href||'')!==targetUrl)continue;
@@ -182,8 +203,30 @@ async function collectPostDetails(url, username) {
       if(main){for(const img of main.querySelectorAll('img')){const r=img.getBoundingClientRect(),src=img.currentSrc||img.src||'',alt=(img.alt||'').toLowerCase();if(!src||r.width<180||r.height<180)continue;if(/profile|프로필|avatar|사용자/.test(alt))continue;if(videoRects.some(vr=>rectOverlap(r,vr)>=0.55))continue;if(img.closest('video')||img.parentElement?.querySelector?.('video'))continue;if(!images.includes(src))images.push(src);}}
       const authorReplies=[],seenText=new Set();
       const profileAnchors=[...document.querySelectorAll('a[href]')].filter(a=>{const h=String(a.getAttribute('href')||'').toLowerCase().replace(/\/$/,'');return h===`/@${targetUser}`||h.endsWith(`/@${targetUser}`);});
-      for(const a of profileAnchors){const root=postRootFromLink(a,'');if(!root||root===main||main?.contains(root)||root.contains(main))continue;let text=clean(root.innerText);if(!text||text.length<8)continue;text=text.replace(/^(?:@?[^ ]+\s+)?(?:방금|\d+\s*(?:분|시간|일))\s*/,'').trim();if(text.length<8||seenText.has(text))continue;seenText.add(text);authorReplies.push(text.slice(0,3500));}
-      for(const block of document.querySelectorAll('article,[role="article"]')){if(block===main||main?.contains(block)||block.contains(main))continue;let text=clean(block.innerText);if(!text||text.length<8)continue;const links=[...block.querySelectorAll('a[href]')].map(a=>String(a.getAttribute('href')||'').toLowerCase());const isAuthor=links.some(h=>h.includes('/@'+targetUser))||text.toLowerCase().startsWith(targetUser)||text.toLowerCase().includes('@'+targetUser);if(isAuthor&&!seenText.has(text)){seenText.add(text);authorReplies.push(text.slice(0,3500));}}
+      for(const a of profileAnchors){
+        const root=postRootFromLink(a,'');
+        if(!root||root===main||main?.contains(root)||root.contains(main))continue;
+        let text=clean(root.innerText);
+        if(!text||text.length<8)continue;
+        text=text.replace(/^(?:@?[^ ]+\s+)?(?:방금|\d+\s*(?:분|시간|일))\s*/,'').trim();
+        if(text.length<8)continue;
+        const reply=replyTextWithLinks(root,text);
+        if(!reply||seenText.has(reply))continue;
+        seenText.add(reply);
+        authorReplies.push(reply);
+      }
+      for(const block of document.querySelectorAll('article,[role="article"]')){
+        if(block===main||main?.contains(block)||block.contains(main))continue;
+        let text=clean(block.innerText);
+        if(!text||text.length<8)continue;
+        const links=[...block.querySelectorAll('a[href]')].map(a=>String(a.getAttribute('href')||'').toLowerCase());
+        const isAuthor=links.some(h=>h.includes('/@'+targetUser))||text.toLowerCase().startsWith(targetUser)||text.toLowerCase().includes('@'+targetUser);
+        if(!isAuthor)continue;
+        const reply=replyTextWithLinks(block,text);
+        if(!reply||seenText.has(reply))continue;
+        seenText.add(reply);
+        authorReplies.push(reply);
+      }
       const metaDescription=clean(document.querySelector('meta[property="og:description"]')?.content||document.querySelector('meta[name="description"]')?.content||'');
       return{sourceText,authorReplies:authorReplies.slice(0,10),images:images.slice(0,10),videos:videos.slice(0,5),hasVideo:videoRects.length>0,exactUrl:canonical(location.href)===targetUrl,metaDescription};
     },{username,sourceUrl:url});
