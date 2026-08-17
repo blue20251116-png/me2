@@ -4,12 +4,9 @@ const fs = require('fs');
 const { db, listAllAccountsForSystem, getAccount, canPublish, findMediaSourceForProduct, markMediaSourceUsed } = require('./db');
 const { publishPost, publishCarouselPost, publishReply, getMediaInsights } = require('./threadsApi');
 const coupangApi = require('./coupangApi');
-const { generateCaption, suggestKeywordCandidates } = require('./aiCaption');
 const { generateAffiliateLead } = require('./aiSocial');
-const { rankKeywordsByTrend } = require('./naverTrends');
-const { findAutopilotYoutubeSource } = require('./youtubeSourcing');
 const { generateRecipe: generateContentOnlyRecipe } = require('./contentOnlyAutomation');
-const { buildAutopilotMaterialPost } = require('./autopilotMaterialEngine');
+const { buildThreadsFirstAutopilot } = require('./autopilotMaterialEngine');
 
 try { db.exec(`ALTER TABLE posts ADD COLUMN recipe_comment_text TEXT`); } catch {}
 
@@ -157,11 +154,14 @@ function startInsightsJob() {
 
 function randomIntervalMinutes() { return 60 + Math.random() * 15; }
 const AUTOPILOT_TARGETS = ['전체', '20대 여자', '20대 남자', '30대 여자', '30대 남자', '40대 이상'];
+
 function saveAutopilotPost({ accountId, text, link, imageUrl, extraImageUrl, recipeCommentText = null }) {
   db.prepare(`INSERT INTO posts (text,link,image_url,extra_image_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text) VALUES (?,?,?,?,?,1,'pending',?,?)`).run(text, link || null, imageUrl || null, extraImageUrl || null, new Date().toISOString(), accountId, recipeCommentText);
 }
-function recordAutopilotLast(accountId, keyword, target) { db.prepare(`UPDATE accounts SET autopilot_last_keyword=?, autopilot_last_target=? WHERE id=?`).run(keyword, target, accountId); }
-function throwIfCoupangRateLimited(err) { if (coupangApi.isRateLimitError?.(err)) throw err; }
+
+function recordAutopilotLast(accountId, keyword, target) {
+  db.prepare(`UPDATE accounts SET autopilot_last_keyword=?, autopilot_last_target=? WHERE id=?`).run(keyword, target, accountId);
+}
 
 async function runContentOnlyAutopilot(account, target) {
   const r = await generateContentOnlyRecipe(account.id, target);
@@ -170,82 +170,14 @@ async function runContentOnlyAutopilot(account, target) {
   console.log(`[자동발행 예약] account #${account.id} mode="recipe-no-commerce" target="${target}" keyword="${r.keyword}" (${r.trendNote}) image="${r.imageSourceLabel}"`);
 }
 
-async function pickRegularProduct(account, target) {
-  let picked, keyword, trendNote;
-  try {
-    const goldbox = await coupangApi.getGoldboxProducts(account.id, 30);
-    if (!goldbox.length) throw new Error('골드박스 상품 목록이 비어있습니다');
-    const pool = goldbox.slice(0, Math.min(15, goldbox.length));
-    picked = pool[Math.floor(Math.random() * pool.length)];
-    keyword = picked.name;
-    trendNote = `쿠팡 골드박스 특가${picked.discountRate ? ` (${picked.discountRate}% 할인)` : ''}`;
-  } catch (goldboxErr) {
-    throwIfCoupangRateLimited(goldboxErr);
-    console.error(`[골드박스 조회 실패, 카테고리 베스트 랭킹으로 폴백] account #${account.id}:`, goldboxErr.response?.data || goldboxErr.message);
-    try {
-      const categoryNames = Object.keys(coupangApi.BEST_CATEGORY_IDS);
-      const categoryName = categoryNames[Math.floor(Math.random() * categoryNames.length)];
-      const categoryId = coupangApi.BEST_CATEGORY_IDS[categoryName];
-      const bestList = await coupangApi.getBestCategoryProducts(account.id, categoryId, 20);
-      if (!bestList.length) throw new Error(`"${categoryName}" 베스트 상품 목록이 비어있습니다`);
-      const bestPool = bestList.slice(0, Math.min(10, bestList.length));
-      picked = bestPool[Math.floor(Math.random() * bestPool.length)];
-      keyword = categoryName;
-      trendNote = `쿠팡 베스트카테고리 랭킹${picked.rank ? ` (${picked.rank}위)` : ''}`;
-    } catch (bestErr) {
-      throwIfCoupangRateLimited(bestErr);
-      console.error(`[베스트카테고리 조회도 실패, AI 키워드 검색으로 폴백] account #${account.id}:`, bestErr.response?.data || bestErr.message);
-      const candidates = await suggestKeywordCandidates(account.id, target);
-      keyword = candidates[0];
-      trendNote = '트렌드 비교 없이 AI 1순위 선택';
-      try {
-        const ranked = await rankKeywordsByTrend(account.id, candidates);
-        if (ranked && ranked.length) { keyword = ranked[0].keyword; trendNote = `네이버 데이터랩 트렌드 1위 (평균 지수 ${ranked[0].avgRatio.toFixed(1)})`; }
-      } catch (err) { console.error(`[트렌드 비교 실패] account #${account.id}:`, err.response?.data || err.message); }
-      const products = await coupangApi.searchProducts(account.id, keyword, 8);
-      if (!products.length) throw new Error(`"${keyword}" 검색 결과가 없습니다`);
-      const pool = products.slice(0, Math.min(5, products.length));
-      picked = pool[Math.floor(Math.random() * pool.length)];
-    }
-  }
-  return { picked, keyword, trendNote };
-}
-
-async function buildAutopilotText(account, picked, target) {
-  let youtubeSource = null;
-  if (account.autopilot_youtube_source_enabled) {
-    try {
-      youtubeSource = await findAutopilotYoutubeSource({
-        accountId: account.id,
-        productName: picked.name,
-        order: account.autopilot_youtube_order || 'relevance',
-      });
-    } catch (err) {
-      console.log(`[AutopilotV2][YouTube] 보조 소재 검색 실패: ${err.message}`);
-    }
-  }
-
-  try {
-    const result = await buildAutopilotMaterialPost(account.id, { product: picked, target, youtubeSource });
-    console.log(`[AutopilotV2][Material] product="${picked.name}" refs=${result.referenceCount} keyword="${result.sourceKeyword || '-'}" angle="${result.angle}"`);
-    return { text: result.text, sourceKeyword: result.sourceKeyword, referenceCount: result.referenceCount, materialMode: result.usedThreadsMaterial ? 'threads' : 'ai-fallback' };
-  } catch (err) {
-    console.log(`[AutopilotV2][Material] 소재 기반 생성 실패 → 기존 생성기로 폴백: ${err.message}`);
-    const variants = await generateCaption(account.id, { productName: picked.name, price: picked.price, youtubeSource });
-    const text = Array.isArray(variants) ? variants[Math.floor(Math.random() * variants.length)] : String(variants || '');
-    if (!text.trim()) throw new Error('완전자동 글 생성 결과가 비어 있습니다');
-    return { text, sourceKeyword: null, referenceCount: 0, materialMode: youtubeSource ? 'youtube-fallback' : 'legacy-fallback' };
-  }
-}
-
-function chooseProductMedia(account, picked) {
-  let imageUrl = picked.image || null;
+function chooseProductMedia(account, product) {
+  let imageUrl = product?.image || null;
   let extraImageUrl = null;
-  let imageSourceLabel = picked.image ? '쿠팡 원본 상품컷 1장' : '없음';
+  let imageSourceLabel = product?.image ? '쿠팡 원본 상품컷 1장' : '없음';
 
-  if (account.autopilot_frame_media_enabled) {
+  if (account.autopilot_frame_media_enabled && product?.name) {
     try {
-      const media = findMediaSourceForProduct(account.id, picked.name);
+      const media = findMediaSourceForProduct(account.id, product.name);
       if (media && mediaSourceFilesExist(media)) {
         imageUrl = media.image_url;
         extraImageUrl = media.extra_image_url || null;
@@ -264,7 +196,7 @@ async function runAutopilotOnce(account) {
   const target = AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
 
   if (!hasCoupangKeys(account)) {
-    console.log(`[Autopilot][RECIPE ONLY] account=${account.id} 쿠팡 API 키 없음 → 레시피 모드`);
+    console.log(`[Autopilot][NO COUPANG] account=${account.id} 쿠팡 API 키 없음 → 순수 레시피 모드`);
     await runContentOnlyAutopilot(account, target);
     return;
   }
@@ -277,22 +209,23 @@ async function runAutopilotOnce(account) {
     throw err;
   }
 
-  // V2 핵심: 매 회차마다 반드시 상품을 먼저 고른 뒤, 그 상품을 기준으로 Threads 소재를 찾고 새 글을 만든다.
-  const { picked, keyword, trendNote } = await pickRegularProduct(account, target);
-  const generated = await buildAutopilotText(account, picked, target);
-  const media = chooseProductMedia(account, picked);
+  // V3: 무조건 Threads 소재가 1순위다.
+  // Threads 소재 → 원문/작성자댓글 분석 → 핵심 상품/재료 추출 → 쿠팡 검색 → 소재 기반 글 → 댓글에 상품+제휴링크.
+  const result = await buildThreadsFirstAutopilot(account.id, { target });
+  const media = chooseProductMedia(account, result.product);
 
   saveAutopilotPost({
     accountId: account.id,
-    text: generated.text,
-    link: picked.url,
+    text: result.text,
+    link: result.product.url,
     imageUrl: media.imageUrl,
     extraImageUrl: media.extraImageUrl,
+    recipeCommentText: result.commentLead,
   });
 
-  const lastKeyword = generated.sourceKeyword || keyword || picked.name;
+  const lastKeyword = result.productSearchTerm || result.secretTerm || result.topic;
   recordAutopilotLast(account.id, lastKeyword, target);
-  console.log(`[자동발행 예약][V2] account #${account.id} target="${target}" product="${picked.name}" productSource="${trendNote}" material="${generated.materialMode}" refs=${generated.referenceCount} keyword="${lastKeyword}" image="${media.imageSourceLabel}"`);
+  console.log(`[자동발행 예약][V3 THREADS-FIRST] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" search="${result.productSearchTerm}" source="${result.sourceUrl}" image="${media.imageSourceLabel}"`);
 }
 
 function startAutopilotJob() {
@@ -305,16 +238,23 @@ function startAutopilotJob() {
 
       if (hasCoupangKeys(account)) {
         const cooldown = coupangApi.getApiCooldown?.(account.id);
-        if (cooldown) { console.log(`[Coupang][AUTOPILOT SKIP] account=${account.id} cooldown_until=${cooldown.cooldown_until}`); continue; }
+        if (cooldown) {
+          console.log(`[Coupang][AUTOPILOT SKIP] account=${account.id} cooldown_until=${cooldown.cooldown_until}`);
+          continue;
+        }
       }
 
       const due = nextRunAt.get(account.id) || 0;
       if (now < due) continue;
       nextRunAt.set(account.id, now + randomIntervalMinutes() * 60 * 1000);
+
       try {
         await runAutopilotOnce(account);
       } catch (err) {
-        if (coupangApi.isRateLimitError?.(err)) { console.error(`[완전자동화 중단][Coupang rate limit] account #${account.id}: ${err.message}`); continue; }
+        if (coupangApi.isRateLimitError?.(err)) {
+          console.error(`[완전자동화 중단][Coupang rate limit] account #${account.id}: ${err.message}`);
+          continue;
+        }
         console.error(`[완전자동화 실패] account #${account.id}:`, err.response?.data || err.message);
       }
     }
