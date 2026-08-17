@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
-const { searchThreadsMaterials } = require('./threadsMaterialSearch');
+const { collectBenchmarkMaterials, collectPostDetails, markUsedPost } = require('./benchmarkAccounts');
+const coupangApi = require('./coupangApi');
 
 function getOpenAIKey(accountId) {
   const account = getAccount(accountId);
@@ -8,7 +9,7 @@ function getOpenAIKey(accountId) {
   return shared.openai_api_key || process.env.OPENAI_API_KEY || account?.openai_api_key || null;
 }
 
-async function callOpenAI(accountId, system, user, { maxTokens = 1200, temperature = 0.8 } = {}) {
+async function callOpenAI(accountId, system, user, { maxTokens = 1800, temperature = 0.55 } = {}) {
   const apiKey = getOpenAIKey(accountId);
   if (!apiKey) throw new Error('OpenAI API 키가 설정되지 않았습니다');
   const res = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -19,147 +20,209 @@ async function callOpenAI(accountId, system, user, { maxTokens = 1200, temperatu
     messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
   }, {
     headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-    timeout: 35000,
+    timeout: 45000,
   });
   const raw = res.data?.choices?.[0]?.message?.content;
   if (!raw) throw new Error('AI 결과가 비어 있습니다');
   return JSON.parse(raw);
 }
 
-function cleanProductName(name) {
-  return String(name || '')
-    .replace(/\[[^\]]*\]/g, ' ')
-    .replace(/\([^)]*\)/g, ' ')
-    .replace(/\b(?:로켓배송|로켓프레시|무료배송|쿠팡추천|정품)\b/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+function clean(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
+function normalized(value) { return clean(value).toLowerCase().replace(/[\s\-_/()[\]{}.,!?~'"“”‘’]/g, ''); }
+function hasExternalLink(text) { return /(?:https?:\/\/|www\.)\S+/i.test(String(text || '')) || /\b(?:link\.coupang\.com|naver\.me)\b/i.test(String(text || '')); }
 
-async function buildThreadsQueries(accountId, productName, target) {
-  const cleaned = cleanProductName(productName);
-  try {
-    const data = await callOpenAI(
-      accountId,
-      `너는 한국 Threads 소재 검색어 생성기다. 상품명을 보고 사람들이 실제로 Threads에서 쓸 법한 짧은 검색어를 만든다.
-규칙:
-- 브랜드/긴 옵션명은 제거하고 상품의 핵심 명사와 사용 상황 중심으로 만든다.
-- 검색어는 2~12자 정도의 자연스러운 한국어를 우선한다.
-- 상품명 그대로 1개, 생활상황/불편 1개, 발견형/꿀템형 1개를 만든다.
-- 서로 너무 비슷한 검색어는 금지한다.
-- JSON만 출력: {"queries":["검색어1","검색어2","검색어3"]}`,
-      `상품명: ${cleaned}\n타겟: ${target || '전체'}`,
-      { maxTokens: 250, temperature: 0.35 }
-    );
-    const queries = Array.isArray(data.queries) ? data.queries.map(x => String(x || '').trim()).filter(Boolean) : [];
-    const unique = [...new Set([cleaned, ...queries])].filter(Boolean);
-    return unique.slice(0, 3);
-  } catch (err) {
-    console.log(`[AutopilotV2][Query] AI 검색어 생성 실패: ${err.message}`);
-    return cleaned ? [cleaned] : [];
-  }
-}
-
-function scoreMaterial(item, productName) {
-  const text = String(item?.text || '');
+function materialScore(item) {
+  const text = clean(item?.text);
   let score = 0;
-  if (item?.hasVideo) score += 4;
-  if (Number(item?.imageCount || 0) > 0) score += 3;
-  if (text.length >= 35 && text.length <= 350) score += 4;
+  if (item?.hasVideo || Number(item?.videoCount || 0) > 0) score += 3;
+  if (Number(item?.imageCount || 0) > 0 || (Array.isArray(item?.images) && item.images.length)) score += 2;
+  if (text.length >= 40 && text.length <= 1000) score += 4;
   else if (text.length >= 20) score += 2;
-  const tokens = cleanProductName(productName).split(/\s+/).filter(x => x.length >= 2).slice(0, 5);
-  for (const token of tokens) if (text.includes(token)) score += 2;
-  if (/ㅋㅋ|ㅠㅠ|;;|ㄷㄷ|진짜|이거|왜 이제|사버|탐난|개꿀|미쳤/i.test(text)) score += 1;
-  if (/http|쿠팡파트너스|제휴|광고/i.test(text)) score -= 5;
-  return score;
+  if (/(레시피|소스|양념|재료|만드는|볶|굽|끓|에어프라이어|큰술|스푼|\bT\b)/i.test(text)) score += 5;
+  if (/(비밀|핵심|이거|댓글|진짜|ㅋㅋ|꿀템|사버|추천)/i.test(text)) score += 2;
+  if (hasExternalLink(text)) score -= 30;
+  return score + Math.random();
 }
 
-async function collectThreadsReferences(accountId, productName, target) {
-  const queries = await buildThreadsQueries(accountId, productName, target);
-  const all = [];
-  const seen = new Set();
-  const attempted = [];
+async function pickThreadsMaterial() {
+  const materials = await collectBenchmarkMaterials({ limit: 12 });
+  const usable = (materials || []).filter(x => x?.url && clean(x.text).length >= 12 && !hasExternalLink(x.text));
+  if (!usable.length) throw new Error('Threads에서 사용할 소재를 찾지 못했습니다');
+  usable.sort((a, b) => materialScore(b) - materialScore(a));
+  return usable[0];
+}
 
-  for (const query of queries.slice(0, 2)) {
+async function enrichThreadsMaterial(item) {
+  let sourceText = clean(item?.text);
+  let authorReplies = '';
+  let images = Array.isArray(item?.images) ? item.images.filter(Boolean) : [];
+  let videos = [];
+  if (item?.url && item?.username) {
     try {
-      attempted.push(query);
-      const result = await searchThreadsMaterials(query, { limit: 8, mode: 'product' });
-      for (const item of result.items || []) {
-        if (!item?.url || seen.has(item.url)) continue;
-        seen.add(item.url);
-        all.push({ ...item, searchKeyword: query, score: scoreMaterial(item, productName) });
-      }
-      if (all.length >= 8) break;
+      const d = await collectPostDetails(item.url, item.username);
+      if (clean(d?.sourceText).length >= 8) sourceText = clean(d.sourceText);
+      authorReplies = Array.isArray(d?.authorReplies) ? d.authorReplies.filter(Boolean).join('\n\n') : '';
+      if (Array.isArray(d?.images) && d.images.length) images = d.images.filter(Boolean);
+      if (Array.isArray(d?.videos)) videos = d.videos.filter(Boolean);
     } catch (err) {
-      console.log(`[AutopilotV2][Threads] 검색 실패 query="${query}": ${err.message}`);
+      console.log(`[AutopilotV3][Threads detail] 상세 수집 실패, 목록 소재 사용: ${err.message}`);
     }
   }
-
-  all.sort((a, b) => b.score - a.score);
-  return { queries, attempted, items: all.slice(0, 5) };
+  return { ...item, sourceText, authorReplies, images, videos };
 }
 
-function buildReferenceText(materials) {
-  if (!materials?.length) return '(Threads 참고 소재 없음)';
-  return materials.map((m, i) => {
-    const text = String(m.text || '').replace(/\s+/g, ' ').trim().slice(0, 700);
-    return `[참고 ${i + 1}] 검색어=${m.searchKeyword}\n${text}\nURL=${m.url}`;
-  }).join('\n\n');
+function grounded(term, evidence) {
+  const t = normalized(term), e = normalized(evidence);
+  if (!t || !e) return false;
+  if (e.includes(t)) return true;
+  const tokens = clean(term).split(/\s+/).map(normalized).filter(x => x.length >= 2);
+  return tokens.length > 0 && tokens.every(token => e.includes(token));
 }
 
-async function generateProductPost(accountId, { product, target, materials = [], youtubeSource = null }) {
-  const productName = cleanProductName(product?.name);
-  const price = product?.price ? `${product.price}원` : '가격 정보 없음';
-  const references = buildReferenceText(materials);
-  const youtubeInfo = youtubeSource
-    ? `YouTube 보조 소재: ${String(youtubeSource.title || youtubeSource.url || '').slice(0, 500)}`
-    : 'YouTube 보조 소재 없음';
-
+async function analyzeMaterial(accountId, material, target) {
+  const evidence = `${material.sourceText}\n${material.authorReplies}`;
   const data = await callOpenAI(
     accountId,
-    `너는 한국 Threads 쇼핑 콘텐츠 에디터다. 목표는 광고문이 아니라 실제 사람이 피드에 툭 올린 것 같은 짧은 글이다.
+    `너는 한국 Threads 소재를 쿠팡파트너스 상품과 연결하는 편집자다.
+가장 중요한 원칙은 "Threads 소재가 먼저"다. 쿠팡 상품에 맞춰 소재를 바꾸면 안 된다.
 
-핵심 원칙:
-- Threads 참고글은 소재의 결, 후킹 방식, 문장 호흡, 상황 설정만 참고한다.
-- 참고글의 문장이나 고유한 표현을 그대로 복사하지 않는다.
-- 참고글에 등장한 다른 제품의 사실/효능/가격/사용경험을 현재 상품에 옮겨 붙이지 않는다.
-- 현재 상품에 대해 확인 가능한 사실은 제공된 상품명과 가격뿐이다. 그 외 성능, 효과, 수치, 재질, 인증, 후기, 사용 경험은 만들어내지 않는다.
-- 실제로 구매/사용했다는 거짓 경험을 단정하지 않는다. '사봤는데', '써보니', '내가 샀다' 같은 표현은 상품 정보에 근거가 없으면 금지한다.
-- 대신 '이런 거 찾는 사람', '이거 보고 눈길 갔다', '이런 방식이면 편하겠다'처럼 자연스러운 발견형 문장을 쓴다.
-- 제품명을 첫 줄부터 광고처럼 박지 않는다. 상황/불편/반응을 먼저 두고 뒤에서 자연스럽게 드러낸다.
-- 존댓말보다 자연스러운 반말을 쓴다. 음슴체(~함/~임/~됨)는 금지한다.
-- 해시태그, 링크, 광고 고지문, '구매하세요', '추천드립니다' 같은 문구는 본문에 넣지 않는다.
-- ㅋㅋ, ;;, ... 같은 표현은 과하지 않게 한 번 정도만 쓸 수 있다.
-- 한 줄을 길게 쓰지 말고 4~8줄, 2~4문단 정도로 만든다.
-- 5개 버전은 서로 다른 각도여야 한다: 공감형 / 발견형 / 문제해결형 / 짧은반응형 / 생활상황형.
-- 본문 길이는 대체로 70~230자 사이로 만든다.
+원 게시물과 같은 작성자의 추가댓글을 사실 자료로 읽고 다음을 판단한다.
+- mode: recipe / product / lifestyle
+- topic: 소재 자체의 핵심 주제
+- secretTerm: 원문 또는 작성자댓글에 실제로 등장하는, 댓글에서 밝히면 자연스러운 핵심 상품/재료/소스/도구
+- searchTerms: 쿠팡에서 찾을 실제 상품/재료 검색어. 원문에 근거한 것만 허용한다.
+- 레시피에서 "비밀 소스", "이거 넣으면", "핵심은 댓글" 같은 구조가 있으면 그 소스/재료를 최우선 상품으로 잡는다.
+- 원문에 스리라차 소스가 실제로 있다면 스리라차 소스를 찾을 수 있다. 원문에 없는데 상식으로 스리라차를 만들어내면 안 된다.
+- 구매 연결할 구체적 항목이 없으면 searchTerms는 빈 배열로 둔다.
+- hideInBody는 레시피 핵심상품이면 true로 둔다.
 
-반드시 JSON만 출력한다.
-형식: {"items":[{"text":"...","angle":"공감형"}, ...]} 정확히 5개.` ,
-    `현재 상품명: ${productName}\n현재 가격: ${price}\n타겟: ${target || '전체'}\n\n${youtubeInfo}\n\n[Threads 참고 소재]\n${references}`,
-    { maxTokens: 1800, temperature: 0.9 }
+JSON만 출력:
+{"mode":"recipe|product|lifestyle","topic":"","secretTerm":"","hideInBody":true,"searchTerms":["",""],"facts":[""],"hookStyle":""}`,
+    `타겟: ${target || '전체'}\n\n[원 게시물]\n${material.sourceText.slice(0, 5000)}\n\n[작성자 추가댓글]\n${material.authorReplies.slice(0, 5000) || '(없음)'}`,
+    { maxTokens: 1000, temperature: 0.12 }
   );
 
-  const items = Array.isArray(data.items)
-    ? data.items.map(x => ({ text: String(x?.text || '').trim(), angle: String(x?.angle || '').trim() })).filter(x => x.text)
-    : [];
-  if (!items.length) throw new Error('완전자동 글 생성 결과가 비어 있습니다');
-  const picked = items[Math.floor(Math.random() * items.length)];
-  return { text: picked.text, angle: picked.angle || '자동', variants: items };
-}
-
-async function buildAutopilotMaterialPost(accountId, { product, target, youtubeSource = null }) {
-  const refs = await collectThreadsReferences(accountId, product?.name, target);
-  const generated = await generateProductPost(accountId, { product, target, materials: refs.items, youtubeSource });
-  const best = refs.items[0] || null;
+  const terms = [...new Set((Array.isArray(data.searchTerms) ? data.searchTerms : []).map(clean).filter(Boolean))]
+    .filter(term => grounded(term, evidence)).slice(0, 3);
+  const secret = clean(data.secretTerm);
   return {
-    text: generated.text,
-    angle: generated.angle,
-    referenceCount: refs.items.length,
-    sourceUrl: best?.url || null,
-    sourceKeyword: best?.searchKeyword || refs.attempted[0] || null,
-    searchQueries: refs.queries,
-    usedThreadsMaterial: refs.items.length > 0,
+    mode: ['recipe', 'product', 'lifestyle'].includes(data.mode) ? data.mode : 'lifestyle',
+    topic: clean(data.topic) || 'Threads 소재',
+    secretTerm: secret && grounded(secret, evidence) ? secret : '',
+    hideInBody: data.mode === 'recipe' ? true : data.hideInBody !== false,
+    searchTerms: terms,
+    facts: Array.isArray(data.facts) ? data.facts.map(clean).filter(Boolean).slice(0, 10) : [],
+    hookStyle: clean(data.hookStyle),
   };
 }
 
-module.exports = { buildAutopilotMaterialPost, buildThreadsQueries, collectThreadsReferences };
+async function findProduct(accountId, terms) {
+  for (const term of (terms || []).slice(0, 3)) {
+    const products = await coupangApi.searchProducts(accountId, term, 8);
+    if (!products.length) continue;
+    const tokens = clean(term).split(/\s+/).map(normalized).filter(x => x.length >= 2);
+    const exactish = products.find(p => {
+      const n = normalized(p.name);
+      return tokens.length > 0 && tokens.every(t => n.includes(t));
+    });
+    return { product: exactish || products[0], searchTerm: term };
+  }
+  return { product: null, searchTerm: null };
+}
+
+function secretVariants(secretTerm, productName) {
+  const out = [];
+  for (const value of [secretTerm, productName]) {
+    const v = clean(value);
+    if (v.length >= 2 && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+function scrubSecret(text, secretTerm, productName) {
+  let out = String(text || '').trim();
+  for (const term of secretVariants(secretTerm, productName)) {
+    out = out.split(term).join('비밀 재료');
+  }
+  return out;
+}
+
+async function generatePost(accountId, { material, analysis, product, target }) {
+  const productName = clean(product?.name);
+  const data = await callOpenAI(
+    accountId,
+    `너는 한국 Threads 글 편집자다. 반드시 제공된 Threads 소재를 중심으로 새 글을 쓴다.
+쿠팡 상품을 먼저 홍보하는 광고글로 바꾸면 안 된다.
+
+공통 규칙:
+- 원문의 문장을 복사하지 말고 소재/정보/전개만 참고해 새로 쓴다.
+- 원문과 작성자댓글에 없는 경험, 효능, 수치, 재료, 조리시간을 만들지 않는다.
+- 자연스러운 반말, 짧은 줄, 4~9줄. 음슴체 금지.
+- 링크/광고고지/가격은 본문에 넣지 않는다.
+
+레시피 규칙:
+- 원문의 레시피 정보에 근거해 본문을 만든다.
+- secretTerm과 현재 쿠팡 상품의 정체는 본문에서 절대 밝히지 않는다.
+- 예: 원문 핵심이 스리라차 소스라면 본문에는 "내 비밀소스", "이 소스" 정도로만 표현한다.
+- 댓글을 봐야 핵심 상품이 무엇인지 알 수 있는 구조로 끝낼 수 있다.
+
+제품/생활 소재 규칙:
+- 원문의 상황과 문제를 중심으로 쓰고 현재 쿠팡 상품은 해결책으로 자연스럽게 연결한다.
+- 상품에 대해 제공되지 않은 성능을 지어내지 않는다.
+
+댓글 lead는 짧게 작성한다.
+- 레시피면: 숨긴 핵심 재료/소스의 정체를 댓글에서 자연스럽게 공개한다.
+- 제품이면: 소재와 연결되는 상품임을 짧게 알려준다.
+- 링크와 광고고지문은 쓰지 않는다. 시스템이 뒤에 붙인다.
+
+JSON만 출력: {"text":"본문","commentLead":"댓글 앞문구"}`,
+    `타겟: ${target || '전체'}\n모드: ${analysis.mode}\n주제: ${analysis.topic}\n숨길 핵심어: ${analysis.secretTerm || '(없음)'}\n쿠팡 연결 상품: ${productName || '(없음)'}\n쿠팡 검색어: ${analysis.searchTerms.join(', ') || '(없음)'}\n\n[Threads 원문]\n${material.sourceText.slice(0, 5000)}\n\n[작성자 추가댓글]\n${material.authorReplies.slice(0, 5000) || '(없음)'}`,
+    { maxTokens: 1800, temperature: 0.65 }
+  );
+
+  let text = String(data.text || '').trim();
+  if (!text) throw new Error('Threads 소재 기반 본문 생성 결과가 비었습니다');
+  if (analysis.mode === 'recipe' && analysis.hideInBody) text = scrubSecret(text, analysis.secretTerm, productName);
+
+  let commentLead = String(data.commentLead || '').trim();
+  if (!commentLead && productName) {
+    commentLead = analysis.mode === 'recipe'
+      ? `내가 본문에서 말한 비밀 재료는 이거야 👇\n${productName}`
+      : `본문에 나온 제품은 이거야 👇\n${productName}`;
+  }
+  return { text, commentLead };
+}
+
+async function buildThreadsFirstAutopilot(accountId, { target }) {
+  const picked = await pickThreadsMaterial();
+  const material = await enrichThreadsMaterial(picked);
+  const analysis = await analyzeMaterial(accountId, material, target);
+  if (!analysis.searchTerms.length) {
+    markUsedPost(material.url);
+    throw new Error(`Threads 소재 "${analysis.topic}"에서 쿠팡으로 연결할 구체적 상품을 찾지 못했습니다`);
+  }
+
+  const found = await findProduct(accountId, analysis.searchTerms);
+  if (!found.product) {
+    markUsedPost(material.url);
+    throw new Error(`Threads 소재 기반 쿠팡 상품을 찾지 못했습니다: ${analysis.searchTerms.join(', ')}`);
+  }
+
+  const generated = await generatePost(accountId, { material, analysis, product: found.product, target });
+  markUsedPost(material.url);
+
+  return {
+    text: generated.text,
+    commentLead: generated.commentLead,
+    product: found.product,
+    productSearchTerm: found.searchTerm,
+    mode: analysis.mode,
+    topic: analysis.topic,
+    secretTerm: analysis.secretTerm,
+    sourceUrl: material.url,
+    sourceUsername: material.username || null,
+    referenceImage: material.images?.[0] || null,
+  };
+}
+
+module.exports = { buildThreadsFirstAutopilot };
