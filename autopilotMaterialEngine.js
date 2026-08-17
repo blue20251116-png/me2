@@ -78,7 +78,7 @@ function materialScore(i){
   return s+Math.random();
 }
 async function pickThreadsMaterials(){
-  const m=await collectBenchmarkMaterials({limit:36});
+  const m=await collectBenchmarkMaterials({limit:60});
   const filtered=(m||[]).filter(x=>x?.url&&clean(x.text).length>=12&&!hasExternalLink(x.text)&&!isEngagementBait(x.text));
   const u=dedupeMaterials(filtered);
   if(!u.length)throw new Error('Threads에서 사용할 소재를 찾지 못했습니다');
@@ -102,7 +102,7 @@ async function enrichThreadsMaterial(i){
 async function pickQualifiedThreadsMaterial(){
   const candidates=await pickThreadsMaterials();
   let lastError=null;
-  for(const candidate of candidates.slice(0,24)){
+  for(const candidate of candidates.slice(0,60)){
     try{
       const material=await enrichThreadsMaterial(candidate);
       console.log(`[AutopilotV3][Material] 채택 @${material.username||'-'} 작성자 쇼핑링크 확인 source=${material.url}`);
@@ -110,7 +110,6 @@ async function pickQualifiedThreadsMaterial(){
     }catch(e){
       lastError=e;
       console.log(`[AutopilotV3][Material] 제외 @${candidate.username||'-'} reason="${e.message}" source=${candidate.url}`);
-      markUsedPost(candidate.url);
     }
   }
   throw new Error(`조건에 맞는 소재를 찾지 못했습니다${lastError?`: ${lastError.message}`:''}`);
