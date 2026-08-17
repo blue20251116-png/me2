@@ -7,6 +7,9 @@ const PARTNERS_BASE = '/v2/providers/affiliate_open_api/apis/openapi';
 const SEARCH_CACHE_MS = 24 * 60 * 60 * 1000;
 const EMPTY_CACHE_MS = 60 * 60 * 1000;
 const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const GLOBAL_CALLS_PER_MINUTE = 10;
+const PER_KEY_CALLS_PER_MINUTE = 50;
+const RATE_WINDOW_MS = 60 * 1000;
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS coupang_api_cache (
@@ -23,11 +26,59 @@ CREATE TABLE IF NOT EXISTS coupang_api_state (
   cooldown_reason TEXT,
   updated_at TEXT DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS coupang_api_call_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  access_key_hash TEXT NOT NULL,
+  called_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_coupang_api_call_log_time ON coupang_api_call_log(called_at_ms);
+CREATE INDEX IF NOT EXISTS idx_coupang_api_call_log_key_time ON coupang_api_call_log(access_key_hash, called_at_ms);
 `);
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 function hasCredentials(accountOrId) {
   const account = typeof accountOrId === 'object' ? accountOrId : getAccount(accountOrId);
   return !!(account?.coupang_access_key && account?.coupang_secret_key);
+}
+
+function accessKeyHash(account) {
+  return crypto.createHash('sha256').update(String(account?.coupang_access_key || '')).digest('hex');
+}
+
+async function reserveApiSlot(account) {
+  if (!hasCredentials(account)) return;
+  const keyHash = accessKeyHash(account);
+
+  while (true) {
+    const now = Date.now();
+    const cutoff = now - RATE_WINDOW_MS;
+    let waitMs = 0;
+
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM coupang_api_call_log WHERE called_at_ms<=?').run(cutoff - 5000);
+      const globalRows = db.prepare('SELECT called_at_ms FROM coupang_api_call_log WHERE called_at_ms>? ORDER BY called_at_ms ASC').all(cutoff);
+      const keyRows = db.prepare('SELECT called_at_ms FROM coupang_api_call_log WHERE access_key_hash=? AND called_at_ms>? ORDER BY called_at_ms ASC').all(keyHash, cutoff);
+
+      if (globalRows.length >= GLOBAL_CALLS_PER_MINUTE) {
+        waitMs = Math.max(waitMs, Number(globalRows[0].called_at_ms) + RATE_WINDOW_MS - now + 75);
+      }
+      if (keyRows.length >= PER_KEY_CALLS_PER_MINUTE) {
+        waitMs = Math.max(waitMs, Number(keyRows[0].called_at_ms) + RATE_WINDOW_MS - now + 75);
+      }
+
+      if (waitMs <= 0) {
+        db.prepare('INSERT INTO coupang_api_call_log(access_key_hash,called_at_ms) VALUES(?,?)').run(keyHash, now);
+        return true;
+      }
+      return false;
+    });
+
+    if (tx()) return;
+    const safeWait = Math.max(100, Math.min(waitMs, RATE_WINDOW_MS));
+    console.log(`[Coupang][LOCAL THROTTLE] global<=${GLOBAL_CALLS_PER_MINUTE}/min key<=${PER_KEY_CALLS_PER_MINUTE}/min wait=${safeWait}ms`);
+    await sleep(safeWait);
+  }
 }
 
 function buildAuthHeader(account, method, pathWithQuery) {
@@ -159,6 +210,7 @@ async function signedGet(accountId, pathWithQuery, label) {
   const account = getAccount(accountId);
   if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
   if (!hasCredentials(account)) return null;
+  await reserveApiSlot(account);
   try {
     const res = await axios.get(`${DOMAIN}${pathWithQuery}`, {
       headers: { Authorization: buildAuthHeader(account, 'GET', pathWithQuery), 'Content-Type': 'application/json' },
@@ -184,9 +236,6 @@ async function searchProducts(accountId, keyword, limit = 10) {
   if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
   const cleanKeyword = String(keyword || '').trim();
   if (!cleanKeyword) throw new Error('쿠팡 상품 검색어가 비어 있습니다');
-
-  // API 키가 없는 회원도 서비스의 글쓰기/영상/Threads 기능을 그대로 쓸 수 있게 한다.
-  // 상품 검색만 빈 결과로 부드럽게 폴백한다.
   if (!hasCredentials(account)) {
     console.log(`[Coupang][OPTIONAL] account=${accountId} API 키 없음 — 상품검색 생략`);
     return [];
@@ -212,8 +261,6 @@ async function createDeeplink(accountId, urls) {
   const account = getAccount(accountId);
   if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
   const input = Array.isArray(urls) ? urls : [urls];
-
-  // API 키가 없으면 사용자가 넣은 원본 링크를 그대로 사용한다.
   if (!hasCredentials(account)) {
     return input.map((url) => ({ originalUrl: url, shortenUrl: url, landingUrl: url, passthrough: true }));
   }
@@ -221,6 +268,7 @@ async function createDeeplink(accountId, urls) {
   assertNotCoolingDown(accountId);
   const path = `${PARTNERS_BASE}/deeplink`;
   const body = { coupangUrls: input, ...(account.coupang_sub_id ? { subId: account.coupang_sub_id } : {}) };
+  await reserveApiSlot(account);
   try {
     const res = await axios.post(`${DOMAIN}${path}`, body, {
       headers: { Authorization: buildAuthHeader(account, 'POST', path), 'Content-Type': 'application/json' },
@@ -299,4 +347,6 @@ module.exports = {
   isRateLimitError,
   getApiCooldown,
   hasCredentials,
+  GLOBAL_CALLS_PER_MINUTE,
+  PER_KEY_CALLS_PER_MINUTE,
 };
