@@ -65,6 +65,13 @@ function isRetryablePublishError(err){
   return err.response?.status===404||apiErr.code===24||message.includes('requested resource does not exist')||message.includes('media not found')||message.includes('not ready')||message.includes('still processing')||message.includes('processing')||message.includes('please wait')||message.includes('try again');
 }
 
+function isTransientThreadsError(err){
+  const apiErr=err.response?.data?.error||{};
+  const status=Number(err.response?.status||0),code=Number(apiErr.code||0);
+  const message=String(apiErr.message||apiErr.error_user_msg||err.message||'').toLowerCase();
+  return apiErr.is_transient===true||status>=500||[1,2,4,17,32].includes(code)||message.includes('retry your request later')||message.includes('temporary')||message.includes('temporarily')||message.includes('try again');
+}
+
 function isInvalidCarouselChildrenError(err){
   const apiErr=err.response?.data?.error||{};
   const title=String(apiErr.error_user_title||'').toLowerCase();
@@ -85,19 +92,9 @@ function isMediaProcessingError(err){
 
 async function getContainerStatus(creationId,accessToken){
   try{
-    const res=await axios.get(`${GRAPH_BASE}/${creationId}`,{
-      params:{fields:'id,status,error_message',access_token:accessToken},
-      timeout:15000
-    });
-    return{
-      id:res.data?.id||creationId,
-      status:String(res.data?.status||'').toUpperCase(),
-      errorMessage:res.data?.error_message||null
-    };
-  }catch(err){
-    logThreadsError('MEDIA_STATUS',err,{creationId});
-    throw err;
-  }
+    const res=await axios.get(`${GRAPH_BASE}/${creationId}`,{params:{fields:'id,status,error_message',access_token:accessToken},timeout:15000});
+    return{id:res.data?.id||creationId,status:String(res.data?.status||'').toUpperCase(),errorMessage:res.data?.error_message||null};
+  }catch(err){logThreadsError('MEDIA_STATUS',err,{creationId});throw err;}
 }
 
 async function waitForContainerReady(creationId,accessToken,{maxTries=30,waitMs=2000,label='MEDIA'}={}){
@@ -106,11 +103,9 @@ async function waitForContainerReady(creationId,accessToken,{maxTries=30,waitMs=
     const info=await getContainerStatus(creationId,accessToken);
     lastStatus=info.status;
     console.log(`[Threads][${label}_STATUS] creationId=${creationId} status=${info.status||'-'} try=${i+1}/${maxTries}`);
-
     if(info.status==='FINISHED'||info.status==='PUBLISHED')return info;
     if(info.status==='ERROR')throw mediaProcessingError(`Threads 미디어 처리 실패${info.errorMessage?`: ${info.errorMessage}`:''}`,{creationId,status:info.status,errorMessage:info.errorMessage||null,label});
     if(info.status==='EXPIRED')throw mediaProcessingError('Threads 미디어 컨테이너가 만료되었습니다',{creationId,status:info.status,label});
-
     if(i<maxTries-1)await sleep(waitMs);
   }
   throw mediaProcessingError(`Threads 미디어 준비 시간 초과 (creationId=${creationId}, status=${lastStatus||'unknown'})`,{creationId,status:lastStatus||'UNKNOWN',label});
@@ -127,11 +122,9 @@ async function publishContainer(creationId,accessToken,maxTries=5,baseWaitMs=200
       console.log(`[Threads][PUBLISH] 성공 creationId=${creationId} mediaId=${mediaId}`);
       return mediaId;
     }catch(err){
-      lastError=err;
-      logThreadsError('PUBLISH',err,{creationId,try:`${i+1}/${maxTries}`});
+      lastError=err;logThreadsError('PUBLISH',err,{creationId,try:`${i+1}/${maxTries}`});
       if(!isRetryablePublishError(err)||i===maxTries-1)throw err;
-      const waitMs=Math.min(baseWaitMs+i*2000,12000);
-      await sleep(waitMs);
+      await sleep(Math.min(baseWaitMs+i*2000,12000));
     }
   }
   throw lastError;
@@ -139,100 +132,62 @@ async function publishContainer(creationId,accessToken,maxTries=5,baseWaitMs=200
 
 function normalizeMediaItems(items){
   const out=[];
-  for(const x of items||[]){
-    const type=String(x?.type||'').toUpperCase(),url=String(x?.url||'').trim();
-    if(!url||!['IMAGE','VIDEO'].includes(type))continue;
-    if(!out.some(v=>v.type===type&&v.url===url))out.push({type,url});
-    if(out.length>=10)break;
-  }
+  for(const x of items||[]){const type=String(x?.type||'').toUpperCase(),url=String(x?.url||'').trim();if(!url||!['IMAGE','VIDEO'].includes(type))continue;if(!out.some(v=>v.type===type&&v.url===url))out.push({type,url});if(out.length>=10)break;}
   return out;
 }
-
-function decodeMediaBundle(value){
-  const s=String(value||'');
-  if(!s.startsWith(MEDIA_BUNDLE_PREFIX))return null;
-  try{return normalizeMediaItems(JSON.parse(decodeURIComponent(s.slice(MEDIA_BUNDLE_PREFIX.length))));}catch{return null;}
-}
+function decodeMediaBundle(value){const s=String(value||'');if(!s.startsWith(MEDIA_BUNDLE_PREFIX))return null;try{return normalizeMediaItems(JSON.parse(decodeURIComponent(s.slice(MEDIA_BUNDLE_PREFIX.length))));}catch{return null;}}
 
 async function publishPost(accountId,{text,imageUrl,videoUrl}){
   const bundle=decodeMediaBundle(imageUrl);
   if(bundle?.length)return publishMediaItemsPost(accountId,{text,mediaItems:bundle});
-
   const account=getAccount(accountId);
   if(!account)throw new Error('존재하지 않는 계정입니다');
   if(!account.threads_access_token)throw new Error('스레드 Access Token이 없습니다. 계정을 다시 연결해주세요.');
   if(!account.threads_user_id)throw new Error('Threads User ID가 없습니다. 계정을 다시 연결해주세요.');
-
   const accessToken=account.threads_access_token,mediaType=videoUrl?'VIDEO':imageUrl?'IMAGE':'TEXT';
   console.log(`[Threads][CREATE] 시작 account=${accountId} userId=${account.threads_user_id} type=${mediaType}`);
-  const params={media_type:mediaType,text,access_token:accessToken};
-  if(imageUrl)params.image_url=imageUrl;
-  if(videoUrl)params.video_url=videoUrl;
-
+  const params={media_type:mediaType,text,access_token:accessToken};if(imageUrl)params.image_url=imageUrl;if(videoUrl)params.video_url=videoUrl;
   let creationId;
-  try{
-    const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params,timeout:30000});
-    creationId=createRes.data?.id;
-    if(!creationId)throw new Error('Threads 컨테이너 생성 응답에 id가 없습니다');
-    console.log(`[Threads][CREATE] 성공 account=${accountId} creationId=${creationId}`);
-  }catch(err){logThreadsError('CREATE',err,{accountId,userId:account.threads_user_id,mediaType});throw err;}
-
-  if(mediaType==='VIDEO'){
-    await waitForContainerReady(creationId,accessToken,{maxTries:40,waitMs:2000,label:'VIDEO'});
-    return publishContainer(creationId,accessToken,10,3000);
-  }
-  if(mediaType==='IMAGE'){
-    await waitForContainerReady(creationId,accessToken,{maxTries:15,waitMs:1000,label:'IMAGE'});
-  }
+  try{const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params,timeout:30000});creationId=createRes.data?.id;if(!creationId)throw new Error('Threads 컨테이너 생성 응답에 id가 없습니다');console.log(`[Threads][CREATE] 성공 account=${accountId} creationId=${creationId}`);}catch(err){logThreadsError('CREATE',err,{accountId,userId:account.threads_user_id,mediaType});throw err;}
+  if(mediaType==='VIDEO'){await waitForContainerReady(creationId,accessToken,{maxTries:40,waitMs:2000,label:'VIDEO'});return publishContainer(creationId,accessToken,10,3000);}
+  if(mediaType==='IMAGE')await waitForContainerReady(creationId,accessToken,{maxTries:15,waitMs:1000,label:'IMAGE'});
   return publishContainer(creationId,accessToken,5,2000);
 }
 
-async function createCarouselChildContainer(accountId,item,accessToken){
+async function createCarouselChildContainer(accountId,item,accessToken,{maxTries=3}={}){
   const type=item.type;
   const params={media_type:type,is_carousel_item:true,access_token:accessToken};
-  if(type==='VIDEO')params.video_url=item.url;
-  else params.image_url=item.url;
-
-  try{
-    const res=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params,timeout:30000});
-    const id=res.data?.id;
-    if(!id)throw new Error('캐러셀 자식 컨테이너 응답에 id가 없습니다');
-    console.log(`[Threads][CAROUSEL_CHILD] ${type} ${id}`);
-    return{id,type,url:item.url};
-  }catch(err){
-    logThreadsError('CAROUSEL_CHILD_CREATE',err,{accountId,type,url:item.url});
-    throw err;
+  if(type==='VIDEO')params.video_url=item.url;else params.image_url=item.url;
+  let lastError;
+  for(let i=0;i<maxTries;i++){
+    try{
+      const res=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params,timeout:30000});
+      const id=res.data?.id;
+      if(!id)throw new Error('캐러셀 자식 컨테이너 응답에 id가 없습니다');
+      console.log(`[Threads][CAROUSEL_CHILD] ${type} ${id} try=${i+1}/${maxTries}`);
+      return{id,type,url:item.url};
+    }catch(err){
+      lastError=err;
+      logThreadsError('CAROUSEL_CHILD_CREATE',err,{accountId,type,try:`${i+1}/${maxTries}`,url:item.url});
+      if(!isTransientThreadsError(err)||i===maxTries-1)break;
+      const waitMs=Math.min(1500+i*2000,6000);
+      console.warn(`[Threads][CAROUSEL_CHILD_RETRY] ${type} 일시 오류 → ${waitMs}ms 후 재시도`);
+      await sleep(waitMs);
+    }
   }
+  if(isTransientThreadsError(lastError))throw mediaProcessingError(`Threads 캐러셀 ${type} 생성 일시 실패`,{type,url:item.url,originalError:lastError});
+  throw lastError;
 }
 
 async function createCarouselParent(accountId,text,children,accessToken,{maxTries=5}={}){
-  let lastError;
-  const childIds=children.map(x=>x.id);
-
+  let lastError;const childIds=children.map(x=>x.id);
   for(let i=0;i<maxTries;i++){
     try{
       console.log(`[Threads][CAROUSEL_PARENT] 생성 시도 account=${accountId} try=${i+1}/${maxTries} children=${childIds.join(',')}`);
-      const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{
-        params:{media_type:'CAROUSEL',children:childIds.join(','),text,access_token:accessToken},
-        timeout:30000
-      });
-      const creationId=createRes.data?.id;
-      if(!creationId)throw new Error('캐러셀 부모 컨테이너 응답에 id가 없습니다');
-      console.log(`[Threads][CAROUSEL_PARENT] 생성 성공 creationId=${creationId}`);
-      return creationId;
-    }catch(err){
-      lastError=err;
-      logThreadsError('CAROUSEL_CREATE',err,{accountId,try:`${i+1}/${maxTries}`});
-      if(!isInvalidCarouselChildrenError(err)||i===maxTries-1)throw err;
-
-      console.log('[Threads][CAROUSEL_RETRY] 자식 상태를 다시 확인한 뒤 부모 생성을 재시도합니다');
-      await Promise.all(children.map(child=>waitForContainerReady(child.id,accessToken,{
-        maxTries:child.type==='VIDEO'?20:10,
-        waitMs:2000,
-        label:`CAROUSEL_${child.type}`
-      })));
-      await sleep(Math.min(2000+(i*2000),8000));
-    }
+      const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params:{media_type:'CAROUSEL',children:childIds.join(','),text,access_token:accessToken},timeout:30000});
+      const creationId=createRes.data?.id;if(!creationId)throw new Error('캐러셀 부모 컨테이너 응답에 id가 없습니다');
+      console.log(`[Threads][CAROUSEL_PARENT] 생성 성공 creationId=${creationId}`);return creationId;
+    }catch(err){lastError=err;logThreadsError('CAROUSEL_CREATE',err,{accountId,try:`${i+1}/${maxTries}`});if(!isInvalidCarouselChildrenError(err)||i===maxTries-1)throw err;console.log('[Threads][CAROUSEL_RETRY] 자식 상태를 다시 확인한 뒤 부모 생성을 재시도합니다');await Promise.all(children.map(child=>waitForContainerReady(child.id,accessToken,{maxTries:child.type==='VIDEO'?20:10,waitMs:2000,label:`CAROUSEL_${child.type}`})));await sleep(Math.min(2000+(i*2000),8000));}
   }
   throw lastError;
 }
@@ -240,141 +195,60 @@ async function createCarouselParent(accountId,text,children,accessToken,{maxTrie
 async function publishMediaItemsPost(accountId,{text,mediaItems}){
   const items=normalizeMediaItems(mediaItems);
   if(!items.length)return publishPost(accountId,{text});
-
   if(items.length===1){
-    try{
-      return await publishPost(accountId,{
-        text,
-        imageUrl:items[0].type==='IMAGE'?items[0].url:null,
-        videoUrl:items[0].type==='VIDEO'?items[0].url:null
-      });
-    }catch(err){
-      if(!isMediaProcessingError(err))throw err;
-      console.warn(`[Threads][MEDIA_FALLBACK] 단일 ${items[0].type} 처리 실패 → TEXT 발행 url=${items[0].url} reason="${err.message}"`);
-      return publishPost(accountId,{text});
-    }
+    try{return await publishPost(accountId,{text,imageUrl:items[0].type==='IMAGE'?items[0].url:null,videoUrl:items[0].type==='VIDEO'?items[0].url:null});}
+    catch(err){if(!isMediaProcessingError(err)&&!isTransientThreadsError(err))throw err;console.warn(`[Threads][MEDIA_FALLBACK] 단일 ${items[0].type} 실패 → TEXT 발행 url=${items[0].url} reason="${err.message}"`);return publishPost(accountId,{text});}
   }
-
-  const account=getAccount(accountId);
-  if(!account?.threads_access_token)throw new Error('스레드 Access Token이 없습니다. 계정을 다시 연결해주세요.');
+  const account=getAccount(accountId);if(!account?.threads_access_token)throw new Error('스레드 Access Token이 없습니다. 계정을 다시 연결해주세요.');
   const accessToken=account.threads_access_token;
   console.log(`[Threads][CAROUSEL_CREATE] 시작 account=${accountId} items=${items.length}`);
 
-  const children=[];
+  const children=[];const createFailed=[];
   for(const item of items){
-    const child=await createCarouselChildContainer(accountId,item,accessToken);
-    children.push(child);
+    try{
+      const child=await createCarouselChildContainer(accountId,item,accessToken,{maxTries:3});
+      children.push(child);
+    }catch(err){
+      if(!isMediaProcessingError(err)&&!isTransientThreadsError(err))throw err;
+      createFailed.push({item,err});
+      console.warn(`[Threads][CAROUSEL_ITEM_CREATE_SKIP] ${item.type} 생성 실패 → 제외 url=${item.url} reason="${err.message}"`);
+    }
     await sleep(item.type==='VIDEO'?800:300);
   }
 
+  if(createFailed.length)console.warn(`[Threads][CAROUSEL_CREATE_FALLBACK] 생성 성공=${children.length} 실패=${createFailed.length}`);
+  if(!children.length){console.warn('[Threads][CAROUSEL_FALLBACK] 자식 미디어 생성 전부 실패 → TEXT 발행');return publishPost(accountId,{text});}
+
   console.log(`[Threads][CAROUSEL_WAIT] 자식 ${children.length}개 준비 상태 확인`);
-  const readyChildren=[];
-  const failedChildren=[];
+  const readyChildren=[];const failedChildren=[];
   for(const child of children){
-    try{
-      await waitForContainerReady(child.id,accessToken,{
-        maxTries:child.type==='VIDEO'?40:20,
-        waitMs:child.type==='VIDEO'?2000:1000,
-        label:`CAROUSEL_${child.type}`
-      });
-      readyChildren.push(child);
-    }catch(err){
-      if(!isMediaProcessingError(err))throw err;
-      failedChildren.push({child,err});
-      console.warn(`[Threads][CAROUSEL_ITEM_SKIP] ${child.type} 처리 실패 → 제외 id=${child.id} url=${child.url} reason="${err.message}"`);
-    }
+    try{await waitForContainerReady(child.id,accessToken,{maxTries:child.type==='VIDEO'?40:20,waitMs:child.type==='VIDEO'?2000:1000,label:`CAROUSEL_${child.type}`});readyChildren.push(child);}
+    catch(err){if(!isMediaProcessingError(err))throw err;failedChildren.push({child,err});console.warn(`[Threads][CAROUSEL_ITEM_SKIP] ${child.type} 처리 실패 → 제외 id=${child.id} url=${child.url} reason="${err.message}"`);}
   }
-
-  if(failedChildren.length){
-    console.warn(`[Threads][CAROUSEL_FALLBACK] 준비 성공=${readyChildren.length} 실패=${failedChildren.length}`);
-  }
-
-  if(!readyChildren.length){
-    console.warn('[Threads][CAROUSEL_FALLBACK] 모든 미디어 처리 실패 → TEXT 발행');
-    return publishPost(accountId,{text});
-  }
-
+  if(failedChildren.length)console.warn(`[Threads][CAROUSEL_FALLBACK] 준비 성공=${readyChildren.length} 실패=${failedChildren.length}`);
+  if(!readyChildren.length){console.warn('[Threads][CAROUSEL_FALLBACK] 모든 미디어 처리 실패 → TEXT 발행');return publishPost(accountId,{text});}
   if(readyChildren.length===1){
-    const survivor=readyChildren[0];
-    console.warn(`[Threads][CAROUSEL_FALLBACK] 미디어 1개만 정상 → 단일 ${survivor.type}로 재생성 후 발행`);
-    try{
-      return await publishPost(accountId,{
-        text,
-        imageUrl:survivor.type==='IMAGE'?survivor.url:null,
-        videoUrl:survivor.type==='VIDEO'?survivor.url:null
-      });
-    }catch(err){
-      if(!isMediaProcessingError(err))throw err;
-      console.warn(`[Threads][CAROUSEL_FALLBACK] 남은 ${survivor.type}도 처리 실패 → TEXT 발행 reason="${err.message}"`);
-      return publishPost(accountId,{text});
-    }
+    const survivor=readyChildren[0];console.warn(`[Threads][CAROUSEL_FALLBACK] 미디어 1개만 정상 → 단일 ${survivor.type}로 재생성 후 발행`);
+    try{return await publishPost(accountId,{text,imageUrl:survivor.type==='IMAGE'?survivor.url:null,videoUrl:survivor.type==='VIDEO'?survivor.url:null});}
+    catch(err){if(!isMediaProcessingError(err)&&!isTransientThreadsError(err))throw err;console.warn(`[Threads][CAROUSEL_FALLBACK] 남은 ${survivor.type}도 실패 → TEXT 발행 reason="${err.message}"`);return publishPost(accountId,{text});}
   }
-
   const creationId=await createCarouselParent(accountId,text,readyChildren,accessToken,{maxTries:5});
-
-  try{
-    await waitForContainerReady(creationId,accessToken,{
-      maxTries:30,
-      waitMs:2000,
-      label:'CAROUSEL_PARENT'
-    });
-    return publishContainer(creationId,accessToken,10,3000);
-  }catch(err){
-    if(!isMediaProcessingError(err))throw err;
-    console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 부모 처리 실패 → 첫 정상 미디어 1개로 발행 reason="${err.message}"`);
-    const survivor=readyChildren[0];
-    try{
-      return await publishPost(accountId,{
-        text,
-        imageUrl:survivor.type==='IMAGE'?survivor.url:null,
-        videoUrl:survivor.type==='VIDEO'?survivor.url:null
-      });
-    }catch(singleErr){
-      if(!isMediaProcessingError(singleErr))throw singleErr;
-      console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 단일 미디어도 실패 → TEXT 발행 reason="${singleErr.message}"`);
-      return publishPost(accountId,{text});
-    }
-  }
+  try{await waitForContainerReady(creationId,accessToken,{maxTries:30,waitMs:2000,label:'CAROUSEL_PARENT'});return publishContainer(creationId,accessToken,10,3000);}
+  catch(err){if(!isMediaProcessingError(err))throw err;console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 부모 처리 실패 → 첫 정상 미디어 1개로 발행 reason="${err.message}"`);const survivor=readyChildren[0];try{return await publishPost(accountId,{text,imageUrl:survivor.type==='IMAGE'?survivor.url:null,videoUrl:survivor.type==='VIDEO'?survivor.url:null});}catch(singleErr){if(!isMediaProcessingError(singleErr)&&!isTransientThreadsError(singleErr))throw singleErr;console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 단일 미디어도 실패 → TEXT 발행 reason="${singleErr.message}"`);return publishPost(accountId,{text});}}
 }
 
-async function publishCarouselPost(accountId,{text,imageUrls}){
-  return publishMediaItemsPost(accountId,{text,mediaItems:(imageUrls||[]).filter(Boolean).map(url=>({type:'IMAGE',url}))});
-}
+async function publishCarouselPost(accountId,{text,imageUrls}){return publishMediaItemsPost(accountId,{text,mediaItems:(imageUrls||[]).filter(Boolean).map(url=>({type:'IMAGE',url}))});}
 
 async function publishReply(accountId,parentMediaId,text){
-  const account=getAccount(accountId);
-  if(!account)throw new Error('존재하지 않는 계정입니다');
-  if(!account.threads_access_token)throw new Error('스레드 Access Token이 없습니다');
-  const accessToken=account.threads_access_token;
+  const account=getAccount(accountId);if(!account)throw new Error('존재하지 않는 계정입니다');if(!account.threads_access_token)throw new Error('스레드 Access Token이 없습니다');const accessToken=account.threads_access_token;
   let creationId;
-  try{
-    const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params:{media_type:'TEXT',text,reply_to_id:parentMediaId,access_token:accessToken},timeout:20000});
-    creationId=createRes.data?.id;
-    if(!creationId)throw new Error('Threads 댓글 컨테이너 생성 응답에 id가 없습니다');
-  }catch(err){logThreadsError('REPLY_CREATE',err,{accountId,parentMediaId});throw err;}
+  try{const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params:{media_type:'TEXT',text,reply_to_id:parentMediaId,access_token:accessToken},timeout:20000});creationId=createRes.data?.id;if(!creationId)throw new Error('Threads 댓글 컨테이너 생성 응답에 id가 없습니다');}catch(err){logThreadsError('REPLY_CREATE',err,{accountId,parentMediaId});throw err;}
   return publishContainer(creationId,accessToken,5,2000);
 }
 
 async function getMediaInsights(accountId,mediaId){
-  const account=getAccount(accountId);
-  if(!account||!account.threads_access_token)throw new Error('스레드 Access Token이 없습니다');
-  try{
-    const res=await axios.get(`${GRAPH_BASE}/${mediaId}/insights`,{params:{metric:'views,likes,replies,reposts,quotes',access_token:account.threads_access_token},timeout:20000});
-    const data={};
-    for(const item of res.data?.data||[])data[item.name]=item.values?.[0]?.value??item.total_value?.value??0;
-    return data;
-  }catch(err){logThreadsError('INSIGHTS',err,{accountId,mediaId});throw err;}
+  const account=getAccount(accountId);if(!account||!account.threads_access_token)throw new Error('스레드 Access Token이 없습니다');
+  try{const res=await axios.get(`${GRAPH_BASE}/${mediaId}/insights`,{params:{metric:'views,likes,replies,reposts,quotes',access_token:account.threads_access_token},timeout:20000});const data={};for(const item of res.data?.data||[])data[item.name]=item.values?.[0]?.value??item.total_value?.value??0;return data;}catch(err){logThreadsError('INSIGHTS',err,{accountId,mediaId});throw err;}
 }
 
-module.exports={
-  getAuthUrl,
-  exchangeCodeForToken,
-  exchangeForLongLivedToken,
-  refreshLongLivedToken,
-  fetchProfile,
-  publishPost,
-  publishCarouselPost,
-  publishMediaItemsPost,
-  publishReply,
-  getMediaInsights
-};
+module.exports={getAuthUrl,exchangeCodeForToken,exchangeForLongLivedToken,refreshLongLivedToken,fetchProfile,publishPost,publishCarouselPost,publishMediaItemsPost,publishReply,getMediaInsights};
