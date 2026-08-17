@@ -21,7 +21,13 @@ async function callOpenAI(accountId,system,user,{maxTokens=1800,temperature=.55}
 function clean(v){return String(v||'').replace(/\s+/g,' ').trim();}
 function normalized(v){return clean(v).toLowerCase().replace(/[\s\-_/()[\]{}.,!?~'"“”‘’]/g,'');}
 function hasExternalLink(t){return/(?:https?:\/\/|www\.)\S+/i.test(String(t||''))||/\b(?:link\.coupang\.com|naver\.me)\b/i.test(String(t||''));}
-function hasCoupangLink(t){return/(?:https?:\/\/)?(?:link\.)?coupang\.com\//i.test(String(t||''))||/link\.coupang\.com/i.test(String(t||''));}
+function hasAffiliateLink(t){
+  const s=String(t||'');
+  return /(?:https?:\/\/)?(?:link\.)?coupang\.com\//i.test(s)
+    || /link\.coupang\.com/i.test(s)
+    || /(?:https?:\/\/)?(?:naver\.me|shopping\.naver\.com|smartstore\.naver\.com|brand\.naver\.com)\//i.test(s)
+    || /네이버\s*(?:쇼핑)?\s*(?:커넥트|링크)/i.test(s);
+}
 function isEngagementBait(text){
   const t=clean(text);if(!t)return false;
   const hard=[/스하(?:뤼|리|루)?/i,/반하(?:뤼|리|루)?/i,/맞팔/i,/선팔/i,/팔로우\s*(?:3종|세트|가자|하면|해주|부탁|환영|갈게|갑니다)/i,/하트[^\n]{0,30}팔로우/i,/팔로우[^\n]{0,30}하트/i,/리포스트[^\n]{0,30}팔로우/i,/팔로우[^\n]{0,30}리포스트/i,/스레드\s*(?:이제|막)?\s*시작한\s*사람/i,/\d{2,6}\s*명까지\s*포기\s*못/i,/같이\s*성장하(?:자|쟈)/i,/바로\s*팔로우\s*(?:갈게|갑니다|감)/i,/팔로우하면\s*(?:바로|무조건)?\s*팔로우/i];
@@ -29,6 +35,23 @@ function isEngagementBait(text){
   let hits=0;
   for(const r of[/팔로우/i,/리포스트/i,/하트/i,/성장/i,/맞팔/i,/선팔/i])if(r.test(t))hits++;
   return hits>=3;
+}
+function materialFingerprint(item){
+  const t=normalized(item?.text||'').replace(/\d+/g,'#');
+  return t.slice(0,260);
+}
+function dedupeMaterials(items){
+  const seenUrl=new Set(),seenText=new Set(),out=[];
+  for(const item of items||[]){
+    const url=String(item?.url||'').split(/[?#]/)[0];
+    const fp=materialFingerprint(item);
+    if(!url||seenUrl.has(url))continue;
+    if(fp.length>=20&&seenText.has(fp))continue;
+    seenUrl.add(url);
+    if(fp.length>=20)seenText.add(fp);
+    out.push(item);
+  }
+  return out;
 }
 function materialScore(i){
   const t=clean(i?.text);if(isEngagementBait(t))return-1000;
@@ -42,10 +65,13 @@ function materialScore(i){
   return s+Math.random();
 }
 async function pickThreadsMaterials(){
-  const m=await collectBenchmarkMaterials({limit:18});
-  const u=(m||[]).filter(x=>x?.url&&clean(x.text).length>=12&&!hasExternalLink(x.text)&&!isEngagementBait(x.text));
+  // 기존 18개보다 넓게 수집해서 반복 노출을 줄인다.
+  const m=await collectBenchmarkMaterials({limit:36});
+  const filtered=(m||[]).filter(x=>x?.url&&clean(x.text).length>=12&&!hasExternalLink(x.text)&&!isEngagementBait(x.text));
+  const u=dedupeMaterials(filtered);
   if(!u.length)throw new Error('Threads에서 사용할 소재를 찾지 못했습니다');
   u.sort((a,b)=>materialScore(b)-materialScore(a));
+  console.log(`[AutopilotV3][Material] 수집=${m?.length||0} 필터후=${filtered.length} 중복제거후=${u.length}`);
   return u;
 }
 async function enrichThreadsMaterial(i){
@@ -58,16 +84,17 @@ async function enrichThreadsMaterial(i){
     if(Array.isArray(d?.videos))videos=d.videos.filter(Boolean);
   }
   if(isEngagementBait(sourceText)||isEngagementBait(authorReplies))throw new Error('팔로우/맞팔/리포스트 유도형 소재');
-  if(!hasCoupangLink(authorReplies))throw new Error('작성자 댓글에 쿠팡 링크가 없는 소재');
+  if(!hasAffiliateLink(authorReplies))throw new Error('작성자 댓글에 쿠팡/네이버 쇼핑 링크가 없는 소재');
   return{...i,sourceText,authorReplies,images,videos};
 }
 async function pickQualifiedThreadsMaterial(){
   const candidates=await pickThreadsMaterials();
   let lastError=null;
-  for(const candidate of candidates.slice(0,10)){
+  // 기존 10개만 확인하던 범위를 넓혀 반복 소재 선택을 줄인다.
+  for(const candidate of candidates.slice(0,24)){
     try{
       const material=await enrichThreadsMaterial(candidate);
-      console.log(`[AutopilotV3][Material] 채택 @${material.username||'-'} 작성자 쿠팡링크 확인 source=${material.url}`);
+      console.log(`[AutopilotV3][Material] 채택 @${material.username||'-'} 작성자 쇼핑링크 확인 source=${material.url}`);
       return material;
     }catch(e){
       lastError=e;
