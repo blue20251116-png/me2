@@ -125,7 +125,6 @@ async function collectProfilePostsWithContext(context, username, {limit=2}={}) {
         const text=clean(root.innerText||'').slice(0,1600); if(!text)continue;
         if(hasExternalLink(root))continue;
         const media=mediaFromRoot(root);
-        if(!media.hasVideo && media.images.length===0)continue;
         out.push({url:href,text,username,images:media.images,thumbnail:media.images[0]||'',imageCount:media.images.length,hasVideo:media.hasVideo,videoCount:media.videoCount});
         if(seen.size>=scanLimit&&out.length>=limit)break;
       }
@@ -231,9 +230,7 @@ async function collectPostDetails(url, username) {
       return{sourceText,authorReplies:authorReplies.slice(0,10),images:images.slice(0,10),videos:videos.slice(0,5),hasVideo:videoRects.length>0,exactUrl:canonical(location.href)===targetUrl,metaDescription};
     },{username,sourceUrl:url});
     const sourceText=String(data.sourceText||data.metaDescription||'').trim();
-    if (!(data.images||[]).length && !(data.videos||[]).length && !data.hasVideo) {
-      throw new Error('이 소재는 원본 사진 또는 영상이 없어 사용할 수 없습니다.');
-    }
+    if(!sourceText)throw new Error('Threads 원문 텍스트를 읽지 못했습니다.');
     console.log(`[Threads detail] @${username} source=${sourceText.length} replies=${(data.authorReplies||[]).length} images=${(data.images||[]).length} videos=${(data.videos||[]).length}`);
     return{sourceText,authorReplies:(data.authorReplies||[]).filter(Boolean),images:data.images||[],videos:data.videos||[],hasVideo:!!data.hasVideo,exactUrl:!!data.exactUrl};
   } finally {if(context)try{await context.close();}catch{}if(browser)try{await browser.close();}catch{}}
