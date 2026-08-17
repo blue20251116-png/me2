@@ -26,28 +26,29 @@ function scrubSecret(text,secretTerm,productName){let out=String(text||'').trim(
 async function generatePost(accountId,{material,analysis,product,target}){const productName=clean(product?.name);const data=await callOpenAI(accountId,`너는 한국 Threads 글 편집자다. 반드시 제공된 Threads 소재를 중심으로 새 글을 쓴다. 쿠팡 상품을 먼저 홍보하는 광고글로 바꾸면 안 된다.
 공통: 원문 문장 복사 금지. 원문/작성자댓글에 없는 경험·효능·수치·재료·조리시간을 창작하지 않는다. 자연스러운 반말과 짧은 줄을 사용하고 음슴체는 금지한다.
 
-[레시피 모드 필수 포맷]
-후킹 1~2줄
+[레시피 모드]
+본문 text는 레시피 전체를 적는 곳이 아니다. 실제 Threads에 올릴 짧은 후킹 글만 쓴다.
+- 3~7줄 정도
+- 맛/상황/요리의 핵심 장면 위주
+- 재료 목록과 만드는 법을 본문에 길게 적지 않는다.
+- 핵심 소스/재료의 정확한 이름은 본문에서 절대 밝히지 않는다.
+- 끝은 자연스럽게 '재료랑 만드는 법은 댓글에 적어둘게', '레시피는 댓글에 남겨둘게'처럼 유도한다.
 
+레시피의 commentLead에는 반드시 아래 내용을 모두 넣는다.
 🥘 재료
-- 원문/작성자댓글에서 확인되는 재료들을 목록으로 작성
-- secretTerm 또는 쿠팡으로 연결할 핵심 재료/소스는 정확한 이름을 쓰지 말고 '비밀 소스' 또는 '비밀 재료'로 표시
+- 원문/작성자댓글에서 확인되는 재료를 빠짐없이 정리
+- 양/계량은 원문에 실제로 있을 때만 사용
+- 쿠팡으로 연결할 핵심 재료/소스는 여기에서 정확한 이름으로 공개
 
 🍳 만드는 법
-1. 원문에서 확인되는 첫 번째 조리 단계
-2. 원문에서 확인되는 다음 조리 단계
-3. 필요한 만큼 순서대로 계속
+1. 원문/작성자댓글에서 확인되는 조리 순서를 실제 따라할 수 있게 정리
+2. 없는 단계, 시간, 온도, 재료는 상식으로 보충하지 않는다.
 
-짧은 마무리
-비밀 소스(또는 비밀 재료)는 댓글에 남겨둘게
+🔥 핵심 재료
+- 본문에서 숨긴 핵심 재료/소스의 정확한 상품 종류를 짧게 공개
+- 링크와 광고고지문은 쓰지 않는다. 시스템이 commentLead 뒤에 쿠팡 고지와 링크를 붙인다.
 
-레시피 규칙:
-- 재료 목록과 만드는 법은 반드시 둘 다 있어야 한다. 하나라도 빠지면 안 된다.
-- 재료의 양, 온도, 시간은 원문/작성자댓글에 실제로 있을 때만 적는다.
-- 원문에 없는 재료나 조리 단계를 상식으로 임의 추가하지 않는다.
-- 핵심 쿠팡 상품의 정확한 이름은 본문에서 절대 공개하지 않는다.
-- 레시피 본문에는 링크와 광고고지를 넣지 않는다.
-- commentLead에는 숨긴 비밀 재료의 정체를 공개하는 짧은 문구만 생성한다.
+즉 레시피는 본문=후킹, 댓글=재료+만드는 법+핵심재료 공개 구조다.
 
 [일반상품/생활 고정 포맷]
 후킹 한두 줄
@@ -62,6 +63,6 @@ async function generatePost(accountId,{material,analysis,product,target}){const 
 짧은 마무리 한 줄
 
 일반상품 규칙: 광고고지는 시스템이 맨 위에 붙인다. {{COUPANG_LINK}}는 반드시 '✅ 핵심만' 바로 위에 둔다. '내가 본 건','내가 산 건','써봤는데','사용해보니','직접 써보니까' 등 확인되지 않은 경험 표현 금지. 제품/생활은 commentLead를 빈 문자열로 출력한다.
-JSON만 출력: {"text":"본문","commentLead":""}`,`타겟: ${target||'전체'}\n모드: ${analysis.mode}\n주제: ${analysis.topic}\n숨길 핵심어: ${analysis.secretTerm||'(없음)'}\n쿠팡 연결 상품: ${productName||'(없음)'}\n[Threads 원문]\n${material.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0,5000)||'(없음)'}`,{maxTokens:2000,temperature:0.6});let text=String(data.text||'').trim();if(!text)throw new Error('Threads 소재 기반 본문 생성 결과가 비었습니다');if(analysis.mode==='recipe'){text=scrubSecret(text,analysis.secretTerm,productName);if(!/🥘\s*재료/.test(text)||!/🍳\s*만드는 법/.test(text))throw new Error('레시피 생성 결과에 재료 또는 만드는 법이 누락되었습니다');}if(analysis.mode!=='recipe'&&!text.includes('{{COUPANG_LINK}}')){const marker='✅ 핵심만';text=text.includes(marker)?text.replace(marker,`{{COUPANG_LINK}}\n\n${marker}`):`${text}\n\n{{COUPANG_LINK}}\n\n✅ 핵심만`;}let commentLead='';if(analysis.mode==='recipe')commentLead=String(data.commentLead||'').trim()||`본문에서 말한 비밀 재료는 이거야 👇\n${productName}`;return{text,commentLead};}
+JSON만 출력: {"text":"본문","commentLead":"댓글"}`,`타겟: ${target||'전체'}\n모드: ${analysis.mode}\n주제: ${analysis.topic}\n숨길 핵심어: ${analysis.secretTerm||'(없음)'}\n쿠팡 연결 상품: ${productName||'(없음)'}\n[Threads 원문]\n${material.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0,5000)||'(없음)'}`,{maxTokens:2600,temperature:0.6});let text=String(data.text||'').trim();if(!text)throw new Error('Threads 소재 기반 본문 생성 결과가 비었습니다');let commentLead=String(data.commentLead||'').trim();if(analysis.mode==='recipe'){text=scrubSecret(text,analysis.secretTerm,productName);if(/🥘\s*재료|🍳\s*만드는 법/.test(text))throw new Error('레시피 본문에 재료/만드는 법이 들어갔습니다');if(!/🥘\s*재료/.test(commentLead)||!/🍳\s*만드는 법/.test(commentLead))throw new Error('레시피 댓글에 재료 또는 만드는 법이 누락되었습니다');if(!commentLead.includes(productName)&&analysis.secretTerm&&!commentLead.includes(analysis.secretTerm))commentLead+=`\n\n🔥 핵심 재료\n${productName}`;}if(analysis.mode!=='recipe'&&!text.includes('{{COUPANG_LINK}}')){const marker='✅ 핵심만';text=text.includes(marker)?text.replace(marker,`{{COUPANG_LINK}}\n\n${marker}`):`${text}\n\n{{COUPANG_LINK}}\n\n✅ 핵심만`;}if(analysis.mode!=='recipe')commentLead='';return{text,commentLead};}
 async function buildThreadsFirstAutopilot(accountId,{target}){const picked=await pickThreadsMaterial();const material=await enrichThreadsMaterial(picked);const analysis=await analyzeMaterial(accountId,material,target);if(!analysis.searchTerms.length){markUsedPost(material.url);throw new Error(`Threads 소재 "${analysis.topic}"에서 쿠팡으로 연결할 구체적 상품을 찾지 못했습니다`);}const found=await findProduct(accountId,analysis.searchTerms);if(!found.product){markUsedPost(material.url);throw new Error(`Threads 소재 기반 쿠팡 상품을 찾지 못했습니다: ${analysis.searchTerms.join(', ')}`);}const generated=await generatePost(accountId,{material,analysis,product:found.product,target});markUsedPost(material.url);return{text:generated.text,commentLead:generated.commentLead,product:found.product,productSearchTerm:found.searchTerm,mode:analysis.mode,topic:analysis.topic,secretTerm:analysis.secretTerm,sourceUrl:material.url,sourceUsername:material.username||null,referenceImage:material.images?.[0]||null};}
 module.exports={buildThreadsFirstAutopilot};
