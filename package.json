@@ -4,7 +4,7 @@
   "description": "스레드(Threads) 예약 발행 + 조회수 대시보드",
   "main": "bootstrap.js",
   "scripts": {
-    "start": "node -r ./persistentSessionPatch.js -r ./runtimeFixPatch.js -r ./schedulerPolicyPatch.js -r ./coupangLinkPatch.js -r ./threadsVideoPatch.js -r ./strictThreadsMediaPatch.js -r ./autopilotNoLinkFilterPatch.js -r ./recipeQualityPatch.js -r ./originalSellerProductPatch.js -r ./strongStyleSecretAffiliatePatch.js -r ./threadsTopicTagPatch.js -r ./delayedCommentPatch.js bootstrap.js"
+    "start": "node -r ./persistentSessionPatch.js -r ./runtimeFixPatch.js -r ./schedulerPolicyPatch.js -r ./coupangLinkPatch.js -r ./threadsVideoPatch.js -r ./threadsPublicSourcePatch.js -r ./strictThreadsMediaPatch.js -r ./autopilotNoLinkFilterPatch.js -r ./recipeQualityPatch.js -r ./originalSellerProductPatch.js -r ./strongStyleSecretAffiliatePatch.js -r ./threadsTopicTagPatch.js -r ./delayedCommentPatch.js bootstrap.js"
   },
   "keywords": [],
   "author": "",
