@@ -14,7 +14,8 @@ function uniq(a){ return [...new Set((a || []).filter(Boolean))]; }
 function isShopLink(v){ return /(?:link\.)?coupang\.com|naver\.me|shopping\.naver\.com|smartstore\.naver\.com|brand\.naver\.com/i.test(String(v || '')); }
 function extractUrls(text){
   const s=String(text||'').replace(/\\u0026/gi,'&').replace(/\\u003d/gi,'=').replace(/\\u002f/gi,'/').replace(/\\\//g,'/').replace(/&amp;/gi,'&');
-  return uniq([...(s.match(/https?:\/\/[^\s"'<>\\)\]}]+/gi)||[])].filter(isShopLink);
+  const matches = s.match(/https?:\/\/[^\s"'<>\\)\]}]+/gi) || [];
+  return uniq(matches).filter(isShopLink);
 }
 function shortcodeFromUrl(url){
   try { const p=new URL(url).pathname.split('/').filter(Boolean); const i=p.indexOf('post'); return i>=0?p[i+1]||'':''; }
@@ -86,7 +87,7 @@ async function fetchExactPublicPost(username,sourceUrl){
     if(affiliateLinks.length&&!replies.some(x=>isShopLink(x)))replies.push(`[작성자/게시물 쇼핑링크]\n${affiliateLinks.join('\n')}`);
     console.log(`[Threads][PUBLIC API] @${username} exact=yes replies=${replies.length} affiliateLinks=${affiliateLinks.length} images=${media.images.length} videos=${media.videos.length}`);
     if(affiliateLinks.length)console.log(`[Threads affiliate][API] @${username} count=${affiliateLinks.length} first=${affiliateLinks[0]}`);
-    return {sourceText:clean(post.text),authorReplies:replies,affiliateLinks,images:media.images,videos:media.videos,hasVideo:media.hasVideo||!!post.has_replies&&false,exactUrl:true};
+    return {sourceText:clean(post.text),authorReplies:replies,affiliateLinks,images:media.images,videos:media.videos,hasVideo:media.hasVideo,exactUrl:true};
   } catch(e){
     const api=e.response?.data?.error;
     console.log(`[Threads][PUBLIC API] @${username} unavailable code=${api?.code||'-'} message=${api?.message||e.message}`);
@@ -97,7 +98,6 @@ async function fetchExactPublicPost(username,sourceUrl){
 benchmark.collectPostDetails = async function publicApiFirstDetails(url,username){
   const api=await fetchExactPublicPost(username,url);
   if(api && api.sourceText && (api.affiliateLinks.length || api.images.length || api.videos.length)){
-    // 링크까지 API로 확보되면 브라우저 댓글 DOM에 의존하지 않는다.
     if(api.affiliateLinks.length && (api.images.length||api.videos.length)) return api;
   }
   let browser=null;
