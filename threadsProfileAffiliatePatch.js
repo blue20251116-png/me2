@@ -8,12 +8,17 @@ Module._extensions['.js']=function profileAffiliateLoader(mod,filename){
   if(!patched && path.basename(filename)==='benchmarkAccounts.js'){
     let src=fs.readFileSync(filename,'utf8');
 
-    // 1) 프로필 소재 카드에서 보이는 쇼핑 href도 보존한다.
+    // Threads/Instagram 외부링크는 l.threads.net / l.instagram.com redirect로 감싸지는 경우가 많다.
+    // u/url/target/q 쿼리값을 풀어서 실제 link.coupang.com 주소를 복원한다.
+    const oldExt="const ext=h=>{try{const u=new URL(h,location.origin),host=u.hostname.toLowerCase();if(host.includes('threads.com')||host.includes('threads.net')||host.includes('instagram.com'))return'';return u.href;}catch{return'';}};";
+    const newExt="const ext=h=>{try{let u=new URL(h,location.origin);const host=u.hostname.toLowerCase();if(/^(?:l\\.)?(?:threads\\.net|threads\\.com|instagram\\.com)$/i.test(host)||host==='l.instagram.com'){for(const key of ['u','url','target','q']){const raw=u.searchParams.get(key);if(!raw)continue;try{let decoded=raw;for(let i=0;i<3;i++){const next=decodeURIComponent(decoded);if(next===decoded)break;decoded=next;}const inner=new URL(decoded,location.origin);u=inner;break;}catch{}}}const finalHost=u.hostname.toLowerCase();if(finalHost.includes('threads.com')||finalHost.includes('threads.net')||finalHost.includes('instagram.com'))return'';return u.href;}catch{return'';}};";
+    if(src.includes(oldExt)) src=src.replace(oldExt,newExt);
+
+    // 프로필 카드의 링크도 redirect를 풀어 실제 쇼핑 href를 저장한다.
     const oldPush="out.push({url:href,text,username,images:[...new Set(images)].slice(0,10),thumbnail:images[0]||'',imageCount:images.length,hasVideo:videos.length>0,videoCount:videos.length});";
-    const newPush="const affiliateLinks=[...new Set([...root.querySelectorAll('a[href]')].map(x=>x.href||x.getAttribute('href')||'').filter(h=>/(?:link\\.)?coupang\\.com|naver\\.me|shopping\\.naver\\.com|smartstore\\.naver\\.com|brand\\.naver\\.com/i.test(String(h||''))))];out.push({url:href,text,username,images:[...new Set(images)].slice(0,10),thumbnail:images[0]||'',imageCount:images.length,hasVideo:videos.length>0,videoCount:videos.length,affiliateLinks});";
+    const newPush="const unwrapShop=h=>{try{let u=new URL(h,location.origin);if(/(?:^|\\.)threads\\.(?:com|net)$|(?:^|\\.)instagram\\.com$/i.test(u.hostname)){for(const k of ['u','url','target','q']){const v=u.searchParams.get(k);if(!v)continue;try{let d=v;for(let i=0;i<3;i++){const n=decodeURIComponent(d);if(n===d)break;d=n;}u=new URL(d,location.origin);break;}catch{}}}return u.href;}catch{return String(h||'');}};const affiliateLinks=[...new Set([...root.querySelectorAll('a[href]')].map(x=>unwrapShop(x.href||x.getAttribute('href')||'')).filter(h=>/(?:link\\.)?coupang\\.com|naver\\.me|shopping\\.naver\\.com|smartstore\\.naver\\.com|brand\\.naver\\.com/i.test(String(h||''))))];out.push({url:href,text,username,images:[...new Set(images)].slice(0,10),thumbnail:images[0]||'',imageCount:images.length,hasVideo:videos.length>0,videoCount:videos.length,affiliateLinks});";
     if(src.includes(oldPush)) src=src.replace(oldPush,newPush);
 
-    // 2) Threads 답글은 lazy-load라서 댓글/답글 버튼을 여러 방식으로 눌러 펼친다.
     const oldExpand=/async function expandReplies\(page\)\{.*?\}\n\nlet detailQueue=/s;
     const newExpand=`async function expandReplies(page){
   for(let round=0;round<12;round++){
@@ -39,11 +44,9 @@ Module._extensions['.js']=function profileAffiliateLoader(mod,filename){
 let detailQueue=`;
     if(oldExpand.test(src)) src=src.replace(oldExpand,newExpand);
 
-    // 3) 가장 중요한 부분: 원글 작성자 댓글의 DOM root를 직접 찾고 그 안의 실제 href를 수집한다.
     const marker="const authorReplies=[],affiliateLinks=[],seen=new Set();";
     if(src.includes(marker)){
       const inject=`const authorReplies=[],affiliateLinks=[],seen=new Set();
- // 작성자 댓글 전용 수집: profile anchor에서 reply/article root를 위로 추적한다.
  for(const profileAnchor of document.querySelectorAll('a[href]')){
    if(!isOwnProfileLink(profileAnchor))continue;
    let node=profileAnchor.closest('article,[role="article"]')||profileAnchor.parentElement;
@@ -69,14 +72,12 @@ let detailQueue=`;
       src=src.replace(marker,inject);
     }
 
-    // 4) 상세 페이지 전체 HTML/network에서 발견된 링크는 작성자 링크 보조증거로 넣되,
-    // 실제 authorReplies가 있으면 그것을 우선한다.
     const oldLog="if(affiliateLinks.length)console.log(`[Threads affiliate] @${username} 쇼핑링크 감지 count=${affiliateLinks.length} first=${affiliateLinks[0]}`);";
     const newLog="if(affiliateLinks.length)console.log(`[Threads affiliate] @${username} 쇼핑링크 감지 count=${affiliateLinks.length} authorReplies=${authorReplies.length} first=${affiliateLinks[0]}`);";
     if(src.includes(oldLog))src=src.replace(oldLog,newLog);
 
     patched=true;
-    console.log('[Threads][PROFILE LINK PATCH V2] 작성자 답글 펼치기 + 작성자 댓글 실제 쇼핑 href 직접수집 활성화');
+    console.log('[Threads][PROFILE LINK PATCH V3] redirect 해제 + 작성자 댓글 실제 쇼핑 href 수집 활성화');
     mod._compile(src,filename);return;
   }
   return realLoader(mod,filename);
