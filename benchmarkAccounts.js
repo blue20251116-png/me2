@@ -46,13 +46,25 @@ async function collectPostDetails(url,username){let browser,context;try{({browse
  const aff=authorReplies.join('\n').match(/https?:\/\/[^\s)\]}>,]+/gi)||[];
  return{sourceText,metaDescription:metas[0]||'',authorReplies:authorReplies.slice(0,15),images:images.slice(0,10),videos:videos.slice(0,5),hasVideo:videos.length>0,exactUrl:canonical(location.href)===target,affiliateLinkCount:aff.filter(x=>/coupang|naver/i.test(x)).length};},{username,sourceUrl:url});
  let sourceText=String(data.sourceText||data.metaDescription||'').trim();
- if(!sourceText){
-   // 상세 페이지 DOM이 깨져도 프로필 수집 때 이미 확보한 본문을 재사용한다.
-   try{const profile=await collectProfilePostsWithContext(context,username,{limit:12});const hit=profile.find(x=>String(x.url||'').split(/[?#]/)[0]===String(url||'').split(/[?#]/)[0]);sourceText=String(hit?.text||'').trim();if(sourceText)console.log(`[Threads detail fallback] @${username} 프로필 본문 재사용 source=${sourceText.length}`);}catch{}
+ let images=Array.isArray(data.images)?data.images.filter(Boolean):[];
+ let videos=Array.isArray(data.videos)?data.videos.filter(Boolean):[];
+ // 상세 DOM이 깨지는 경우에도 반드시 같은 post URL의 프로필 카드만 재사용한다.
+ if(!sourceText || (!images.length && !videos.length)){
+   try{
+     const profile=await collectProfilePostsWithContext(context,username,{limit:16});
+     const wanted=String(url||'').split(/[?#]/)[0].replace(/\/media$/,'');
+     const hit=profile.find(x=>String(x.url||'').split(/[?#]/)[0].replace(/\/media$/,'')===wanted);
+     if(hit){
+       if(!sourceText){sourceText=String(hit.text||'').trim();if(sourceText)console.log(`[Threads detail fallback] @${username} 프로필 본문 재사용 source=${sourceText.length}`);}
+       if(!images.length&&Array.isArray(hit.images)&&hit.images.length){images=[...new Set(hit.images.filter(Boolean))].slice(0,10);console.log(`[Threads media fallback] @${username} 동일 post 프로필 이미지 재사용 images=${images.length} source=${url}`);}
+       // 프로필 카드에서 video src가 없더라도 hasVideo 신호는 보존한다. 실제 영상 URL은 threadsVideoPatch/importer가 동일 post URL에서 재추출한다.
+       if(!videos.length&&hit.hasVideo)console.log(`[Threads media fallback] @${username} 동일 post 영상 존재 신호 확인 source=${url}`);
+     }
+   }catch(err){console.log(`[Threads detail fallback] @${username} 실패: ${err.message}`);}
  }
  if(!sourceText)throw new Error('Threads 원문 텍스트를 읽지 못했습니다.');
- console.log(`[Threads detail] @${username} source=${sourceText.length} replies=${(data.authorReplies||[]).length} affiliateLinks=${data.affiliateLinkCount||0} images=${(data.images||[]).length} videos=${(data.videos||[]).length}`);
- return{sourceText,authorReplies:(data.authorReplies||[]).filter(Boolean),images:data.images||[],videos:data.videos||[],hasVideo:!!data.hasVideo,exactUrl:!!data.exactUrl};
+ console.log(`[Threads detail] @${username} source=${sourceText.length} replies=${(data.authorReplies||[]).length} affiliateLinks=${data.affiliateLinkCount||0} images=${images.length} videos=${videos.length}`);
+ return{sourceText,authorReplies:(data.authorReplies||[]).filter(Boolean),images,videos,hasVideo:videos.length>0||!!data.hasVideo,exactUrl:!!data.exactUrl};
  }finally{if(context)try{await context.close();}catch{}if(browser)try{await browser.close();}catch{}}}
 async function mapWithConcurrency(items,concurrency,worker){const results=[];let cursor=0;async function run(){while(true){const i=cursor++;if(i>=items.length)return;try{results[i]=await worker(items[i],i);}catch(err){results[i]={error:err};}}}await Promise.all(Array.from({length:Math.min(concurrency,items.length)},run));return results;}
 async function collectBenchmarkMaterials({limit=10}={}){const accounts=shuffle(listBenchmarkAccounts());if(!accounts.length)throw new Error('관리자 페이지에서 소재 참고 계정을 먼저 등록해주세요.');const sample=accounts.slice(0,Math.min(accounts.length,12));let browser,context;try{({browser,context}=await openBrowser());const perAccount=Math.max(8,Math.ceil(limit/Math.max(1,sample.length))+4);const scanned=await mapWithConcurrency(sample,4,async account=>(await collectProfilePostsWithContext(context,account.username,{limit:perAccount})).filter(x=>!isUsedPost(x.url)));const pools=scanned.filter(Array.isArray).filter(x=>x.length),all=[];let round=0;while(all.length<limit&&pools.some(p=>p.length>round)){for(const pool of shuffle(pools)){if(all.length>=limit)break;if(pool[round])all.push(pool[round]);}round++;}console.log(`[Threads benchmark] accounts=${sample.length} pools=${pools.length} collected=${all.length} requested=${limit}`);return all.slice(0,limit);}finally{if(context)try{await context.close();}catch{}if(browser)try{await browser.close();}catch{}}}
