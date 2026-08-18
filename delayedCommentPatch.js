@@ -24,12 +24,6 @@ BEGIN
 END;
 `);
 
-function isAdminAccount(accountId){
-  try{
-    const r=db.prepare(`SELECT u.role FROM accounts a LEFT JOIN users u ON u.id=a.user_id WHERE a.id=?`).get(Number(accountId));
-    return String(r?.role||'').toLowerCase()==='admin';
-  }catch{return false;}
-}
 function isCoupangLink(link){return /(^|\.)coupang\.com|link\.coupang\.com/i.test(String(link||''));}
 function disclosure(account,link){
   if(!isCoupangLink(link))return'';
@@ -71,7 +65,6 @@ function schedulePostComment(postId,postedAt){
 }
 
 threadsApi.publishReply=async function delayedPublishReply(accountId,parentMediaId,text){
-  if(isAdminAccount(accountId))return originalPublishReply(accountId,parentMediaId,text);
   const post=db.prepare(`SELECT id,posted_at,comment_status FROM posts WHERE account_id=? AND threads_media_id=? ORDER BY id DESC LIMIT 1`).get(Number(accountId),String(parentMediaId));
   if(!post)return originalPublishReply(accountId,parentMediaId,text);
   schedulePostComment(post.id,post.posted_at);
@@ -109,4 +102,4 @@ async function processScheduledComments(){
 }
 
 cron.schedule('* * * * *',()=>processScheduledComments().catch(e=>console.error('[댓글 지연 스케줄러]',e.message)));
-console.log('[댓글 DELAY PATCH] 일반회원 본문 5분 후 댓글 + 등록 검증 활성화 · 관리자 즉시댓글 유지');
+console.log('[댓글 DELAY PATCH] 모든 계정 본문 5분 후 댓글 + 등록 검증 활성화');
