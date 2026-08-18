@@ -10,6 +10,42 @@ function isHttpVideoUrl(value) {
   return false;
 }
 
+function canonical(raw) {
+  try {
+    const u = new URL(String(raw || '').trim());
+    u.pathname = u.pathname.replace(/\/media\/?$/i, '').replace(/\/+$/, '');
+    u.search = '';
+    u.hash = '';
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return String(raw || '').split(/[?#]/)[0].replace(/\/media\/?$/i, '');
+  }
+}
+
+async function fallbackFromProfile(url, username) {
+  try {
+    const posts = await benchmark.collectProfilePosts(username, { limit: 30 });
+    const target = canonical(url);
+    const hit = (posts || []).find(p => canonical(p?.url) === target);
+    if (!hit) return null;
+    const sourceText = String(hit.text || '').replace(/\s+/g, ' ').trim();
+    const images = Array.isArray(hit.images) ? hit.images.filter(Boolean) : [];
+    const hasVideo = !!hit.hasVideo || Number(hit.videoCount || 0) > 0;
+    console.log(`[Threads][EARLY TEXT FALLBACK] @${username || '-'} source=${sourceText.length} images=${images.length} hasVideo=${hasVideo ? 'yes' : 'no'}`);
+    return {
+      sourceText,
+      authorReplies: [],
+      images,
+      videos: [],
+      hasVideo,
+      exactUrl: true,
+    };
+  } catch (err) {
+    console.warn(`[Threads][EARLY TEXT FALLBACK] 실패 @${username || '-'} reason="${err.message}"`);
+    return null;
+  }
+}
+
 async function extractPlayableVideoUrls(postUrl) {
   const playwright = require('playwright');
   let browser;
@@ -42,7 +78,7 @@ async function extractPlayableVideoUrls(postUrl) {
       } catch {}
     });
 
-    await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 16000 });
+    await page.goto(canonical(postUrl), { waitUntil: 'domcontentloaded', timeout: 16000 });
     await page.waitForTimeout(2200);
 
     try {
@@ -93,7 +129,17 @@ async function extractPlayableVideoUrls(postUrl) {
 }
 
 benchmark.collectPostDetails = async function patchedCollectPostDetails(url, username) {
-  const details = await originalCollectPostDetails(url, username);
+  let details;
+  try {
+    details = await originalCollectPostDetails(url, username);
+  } catch (err) {
+    const msg = String(err?.message || '');
+    if (!/Threads 원문 텍스트를 읽지 못했습니다/i.test(msg)) throw err;
+    console.warn(`[Threads][EARLY TEXT FALLBACK] 원문 직접 추출 실패 → 프로필 fallback @${username || '-'} source=${url}`);
+    details = await fallbackFromProfile(url, username);
+    if (!details || !String(details.sourceText || '').trim()) throw err;
+  }
+
   const existing = Array.isArray(details?.videos)
     ? details.videos.filter(isHttpVideoUrl)
     : [];
@@ -113,4 +159,4 @@ benchmark.collectPostDetails = async function patchedCollectPostDetails(url, use
   };
 };
 
-console.log('[Threads][VIDEO PATCH] 영상 src/source/og:video/network URL 추출 활성화');
+console.log('[Threads][VIDEO PATCH] 영상 추출 + 원문 early fallback 활성화');
