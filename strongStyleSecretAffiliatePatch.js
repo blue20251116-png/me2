@@ -47,11 +47,7 @@ function productMatchesCandidate(productName, term, requireSauce){
   const name=normalize(productName);
   if(!name)return false;
   if(requireSauce&&!isSauceLike(productName)&&!aliasTerms(term).some(a=>name.includes(normalize(a))))return false;
-
-  // 가장 안전한 조건: 실제 비밀재료명 또는 허용 동의어가 상품명에 들어가야 한다.
   if(aliasTerms(term).some(a=>{const n=normalize(a);return n.length>=2&&name.includes(n);})){return true;}
-
-  // 복합 검색어라면 '소스/파우더' 같은 일반단어가 아니라 핵심 토큰 전체가 일치해야 한다.
   const tokens=meaningfulTokens(term);
   if(!tokens.length)return false;
   return tokens.every(t=>name.includes(t));
@@ -63,8 +59,6 @@ async function findSecretAffiliateProduct(accountId, result){
   const push = v => { const t = clean(v); if (t && !isGenericSecret(t) && !candidates.includes(t)) candidates.push(t); };
   push(result?.secretTerm);
   push(result?.visionTarget?.promotedIngredient);
-
-  // 음식명 + '소스'를 임의 생성하지 않는다. 원문에 실제 등장한 비밀재료만 허용한다.
   for (const term of candidates.slice(0, 3)) {
     try {
       const products = await coupangApi.searchProducts(accountId, term, 10);
@@ -93,13 +87,18 @@ engine.buildThreadsFirstAutopilot = async function strongStyleSecretAffiliateBui
   result.commentLead = stripTerminalPeriods(result.commentLead);
 
   if (result.mode === 'recipe') {
+    // 원 Threads 작성자가 직접 남긴 쿠팡 링크에서 '선택한 상품'을 확정했다면
+    // AI 검색 결과보다 그 상품을 최우선으로 사용한다.
+    if(result.originalSellerProduct?.url){
+      console.log(`[AutopilotV3][SECRET AFFILIATE] 원작성자 선택상품 우선 → 추가 검색 생략 product="${clean(result.product?.name)}"`);
+      return result;
+    }
     const replacement = await findSecretAffiliateProduct(accountId, result);
     if (replacement?.product) {
       result.product = replacement.product;
       result.productSearchTerm = replacement.searchTerm;
       result.secretTerm = replacement.searchTerm;
     } else {
-      // 엉뚱한 쿠팡 상품을 붙이는 것보다 해당 자동발행을 중단한다.
       const e=new Error(`비밀재료 쿠팡 상품 정확매칭 실패: ${clean(result.secretTerm||result.visionTarget?.promotedIngredient||result.topic)}`);
       e.code='SECRET_AFFILIATE_MISMATCH';
       console.warn(`[AutopilotV3][SECRET AFFILIATE] 정확매칭 실패 → 잘못된 링크 발행 차단 topic="${clean(result.topic)}"`);
@@ -109,4 +108,4 @@ engine.buildThreadsFirstAutopilot = async function strongStyleSecretAffiliateBui
   return result;
 };
 
-console.log('[Autopilot][STRONG STYLE+SECRET AFFILIATE] 종결 마침표 제거 + 비밀재료 정확매칭 + 오매칭 발행차단 활성화');
+console.log('[Autopilot][STRONG STYLE+SECRET AFFILIATE] 원작성자 선택상품 최우선 + 정확매칭 fallback + 오매칭 차단');
