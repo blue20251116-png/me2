@@ -8,6 +8,7 @@ const MAX_BYTES = 200 * 1024 * 1024;
 const PAGE_TIMEOUT_MS = 20000;
 const VIDEO_TIMEOUT_MS = 120000;
 const BROWSER_TIMEOUT_MS = 30000;
+let directCooldownUntil = 0;
 
 function validateThreadsUrl(raw) {
   let u;
@@ -23,12 +24,14 @@ function validateThreadsUrl(raw) {
     host === 'threads.net' || host.endsWith('.threads.net');
   if (!allowed) throw new Error('Threads 공개 게시물 URL만 사용할 수 있습니다.');
   if (!/\/post\//i.test(u.pathname)) throw new Error('Threads 게시물 주소(/post/...)를 입력해주세요.');
-
-  // /post/xxx/media 형태는 같은 게시물의 미디어 뷰이므로 canonical 게시물 URL로 통일한다.
   u.pathname = u.pathname.replace(/\/media\/?$/i, '').replace(/\/+$/, '');
   u.search = '';
   u.hash = '';
   return u.toString();
+}
+
+function mediaViewUrl(sourceUrl) {
+  return `${String(sourceUrl || '').replace(/\/+$/, '')}/media`;
 }
 
 function decodeEscapedUrl(value) {
@@ -71,7 +74,6 @@ function pushCandidate(out, raw) {
 function extractCandidates(html) {
   const $ = cheerio.load(html);
   const videos = [];
-
   const metaSelectors = [
     'meta[property="og:video"]',
     'meta[property="og:video:url"]',
@@ -86,6 +88,8 @@ function extractCandidates(html) {
     /"playable_url"\s*:\s*"([^"]+)"/gi,
     /"playable_url_quality_hd"\s*:\s*"([^"]+)"/gi,
     /"browser_native_hd_url"\s*:\s*"([^"]+)"/gi,
+    /"progressive_url"\s*:\s*"([^"]+)"/gi,
+    /"url"\s*:\s*"(https?:\\?\/\\?\/[^"<>]+?(?:\.mp4|video)[^"<>]*)"/gi,
     /"src"\s*:\s*"(https?:\\?\/\\?\/[^"<>]+?\.mp4[^"<>]*)"/gi,
     /(https?:\\?\/\\?\/[^"'<>\s]+?\.mp4[^"'<>\s]*)/gi,
   ];
@@ -99,7 +103,6 @@ function extractCandidates(html) {
     $('meta[name="twitter:image"]').attr('content') || ''
   );
   const title = $('meta[property="og:title"]').attr('content') || $('title').text() || '';
-
   return { videos, poster, title: String(title).trim() };
 }
 
@@ -128,6 +131,8 @@ async function extractCandidatesWithBrowser(sourceUrl) {
 
   const videos = [];
   let browser;
+  let poster = '';
+  let title = '';
   try {
     browser = await playwright.chromium.launch({
       headless: true,
@@ -138,110 +143,134 @@ async function extractCandidatesWithBrowser(sourceUrl) {
       locale: 'ko-KR',
       viewport: { width: 1280, height: 1600 },
       userAgent,
-      extraHTTPHeaders: {
-        'accept-language': 'ko-KR,ko;q=0.9,en;q=0.8',
-      },
+      extraHTTPHeaders: { 'accept-language': 'ko-KR,ko;q=0.9,en;q=0.8' },
     });
-    const page = await context.newPage();
-    page.setDefaultTimeout(BROWSER_TIMEOUT_MS);
 
     const inspectUrl = raw => {
       if (!raw) return;
       const s = String(raw);
-      if (/\.mp4(?:\?|$)/i.test(s) || /video/i.test(s) || /bytestart|byteend/i.test(s)) pushCandidate(videos, s);
+      if (/\.mp4(?:\?|$)/i.test(s) || /video/i.test(s) || /bytestart|byteend|range=/i.test(s)) pushCandidate(videos, s);
     };
 
-    page.on('request', request => inspectUrl(request.url()));
-    page.on('response', async response => {
-      const url = response.url();
-      inspectUrl(url);
+    const scanPage = async targetUrl => {
+      const page = await context.newPage();
+      page.setDefaultTimeout(BROWSER_TIMEOUT_MS);
+      page.on('request', request => inspectUrl(request.url()));
+      page.on('response', async response => {
+        const responseUrl = response.url();
+        inspectUrl(responseUrl);
+        try {
+          const headers = await response.allHeaders().catch(() => ({}));
+          const type = String(headers['content-type'] || '').toLowerCase();
+          if (type.startsWith('video/') || type.includes('application/octet-stream')) pushCandidate(videos, responseUrl);
+        } catch {}
+      });
+
       try {
-        const headers = await response.allHeaders().catch(() => ({}));
-        const type = String(headers['content-type'] || '').toLowerCase();
-        if (type.startsWith('video/') || type.includes('application/octet-stream')) pushCandidate(videos, url);
-      } catch {}
-    });
-
-    await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT_MS });
-    await page.waitForTimeout(3500);
-
-    // Threads가 뷰포트 진입 후 영상을 로드하는 경우를 위해 미디어 영역까지 스크롤한다.
-    try {
-      const video = page.locator('video').first();
-      if (await video.count()) await video.scrollIntoViewIfNeeded();
-    } catch {}
-
-    // 실제 video 요소가 만들어졌다면 재생을 시도해 CDN range 요청을 발생시킨다.
-    try {
-      await page.locator('video').first().evaluate(video => {
-        video.muted = true;
-        video.autoplay = true;
-        video.playsInline = true;
-        const p = video.play();
-        if (p && typeof p.catch === 'function') p.catch(() => {});
-      });
-    } catch {}
-
-    // 재생 버튼 오버레이 때문에 video.play()가 막히는 페이지도 있어 버튼 클릭을 한 번 시도한다.
-    try {
-      const playButton = page.getByRole('button', { name: /play|재생/i }).first();
-      if (await playButton.count()) await playButton.click({ timeout: 2000 }).catch(() => {});
-    } catch {}
-
-    await page.waitForTimeout(5000);
-
-    // DOM 속성, 메타 태그, Performance API에 남은 영상 URL도 추가 수집한다.
-    try {
-      const domUrls = await page.evaluate(() => {
-        const out = [];
-        const add = value => {
-          const s = String(value || '').trim();
-          if (s && !out.includes(s)) out.push(s);
-        };
-        document.querySelectorAll('video').forEach(video => {
-          add(video.currentSrc);
-          add(video.src);
-          add(video.getAttribute('src'));
-          for (const key of ['data-src', 'data-video-url', 'data-url']) add(video.getAttribute(key));
-          video.querySelectorAll('source[src]').forEach(source => add(source.src || source.getAttribute('src')));
-        });
-        document.querySelectorAll('source[src]').forEach(source => add(source.src || source.getAttribute('src')));
-        for (const selector of [
-          'meta[property="og:video"]',
-          'meta[property="og:video:url"]',
-          'meta[property="og:video:secure_url"]',
-          'meta[name="twitter:player:stream"]',
-        ]) add(document.querySelector(selector)?.content);
-        for (const entry of performance.getEntriesByType('resource')) {
-          if (entry && entry.name) add(entry.name);
+        const response = await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT_MS });
+        await page.waitForTimeout(2600);
+        for (let i = 0; i < 3; i++) {
+          await page.mouse.wheel(0, 650);
+          await page.waitForTimeout(250);
         }
-        return out;
-      });
-      for (const raw of domUrls) inspectUrl(raw);
-    } catch {}
 
-    let poster = '';
-    let title = '';
-    try {
-      const meta = await page.evaluate(() => ({
-        poster: document.querySelector('meta[property="og:image"]')?.content || document.querySelector('video')?.poster || '',
-        title: document.querySelector('meta[property="og:title"]')?.content || document.title || '',
-      }));
-      poster = meta.poster || '';
-      title = meta.title || '';
-    } catch {}
+        try {
+          const video = page.locator('video').first();
+          if (await video.count()) {
+            await video.scrollIntoViewIfNeeded().catch(() => {});
+            await video.click({ force: true, timeout: 1500 }).catch(() => {});
+          }
+        } catch {}
 
-    // CDN은 브라우저 세션 쿠키/Referer가 없으면 403 또는 HTML을 반환하는 경우가 있어
-    // 동일 브라우저의 쿠키를 다운로드 요청에 전달한다.
+        try {
+          await page.evaluate(() => {
+            for (const v of document.querySelectorAll('video')) {
+              try {
+                v.muted = true;
+                v.autoplay = true;
+                v.playsInline = true;
+                v.controls = true;
+                v.load?.();
+                const p = v.play();
+                if (p && typeof p.catch === 'function') p.catch(() => {});
+              } catch {}
+            }
+          });
+        } catch {}
+
+        try {
+          const playButtons = page.getByRole('button', { name: /play|재생/i });
+          const n = Math.min(await playButtons.count(), 3);
+          for (let i = 0; i < n; i++) await playButtons.nth(i).click({ force: true, timeout: 1200 }).catch(() => {});
+        } catch {}
+
+        await page.waitForTimeout(4200);
+
+        try {
+          const html = await page.content();
+          const embedded = extractCandidates(html);
+          for (const u of embedded.videos) pushCandidate(videos, u);
+          if (!poster) poster = embedded.poster || '';
+          if (!title) title = embedded.title || '';
+        } catch {}
+
+        try {
+          const domUrls = await page.evaluate(() => {
+            const out = [];
+            const add = value => {
+              const s = String(value || '').trim();
+              if (s && !out.includes(s)) out.push(s);
+            };
+            document.querySelectorAll('video').forEach(video => {
+              add(video.currentSrc);
+              add(video.src);
+              add(video.getAttribute('src'));
+              for (const key of ['data-src', 'data-video-url', 'data-url', 'data-playable-url']) add(video.getAttribute(key));
+              video.querySelectorAll('source[src]').forEach(source => add(source.src || source.getAttribute('src')));
+            });
+            document.querySelectorAll('source[src]').forEach(source => add(source.src || source.getAttribute('src')));
+            for (const selector of [
+              'meta[property="og:video"]',
+              'meta[property="og:video:url"]',
+              'meta[property="og:video:secure_url"]',
+              'meta[name="twitter:player:stream"]',
+            ]) add(document.querySelector(selector)?.content);
+            try { for (const entry of performance.getEntriesByType('resource')) add(entry?.name); } catch {}
+            return out;
+          });
+          for (const raw of domUrls) inspectUrl(raw);
+        } catch {}
+
+        if (!poster || !title) {
+          try {
+            const meta = await page.evaluate(() => ({
+              poster: document.querySelector('meta[property="og:image"]')?.content || document.querySelector('video')?.poster || '',
+              title: document.querySelector('meta[property="og:title"]')?.content || document.title || '',
+            }));
+            if (!poster) poster = meta.poster || '';
+            if (!title) title = meta.title || '';
+          } catch {}
+        }
+
+        const domVideoCount = await page.locator('video').count().catch(() => 0);
+        console.log(`[Threads import][BROWSER_SCAN] status=${response?.status?.() ?? '-'} url=${targetUrl} domVideos=${domVideoCount} candidates=${videos.length}`);
+      } finally {
+        try { await page.close(); } catch {}
+      }
+    };
+
+    // 일반 post 뷰에서 CDN URL이 노출되지 않는 게시물이 있어 /media 뷰까지 반드시 재시도한다.
+    await scanPage(sourceUrl);
+    if (!videos.length) await scanPage(mediaViewUrl(sourceUrl));
+
     let cookieHeader = '';
     try {
       const cookies = await context.cookies();
       cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
     } catch {}
-
     const requestHeaders = {
       'user-agent': userAgent,
-      referer: sourceUrl,
+      referer: mediaViewUrl(sourceUrl),
       'accept-language': 'ko-KR,ko;q=0.9,en;q=0.8',
     };
     if (cookieHeader) requestHeaders.cookie = cookieHeader;
@@ -249,11 +278,9 @@ async function extractCandidatesWithBrowser(sourceUrl) {
     await context.close();
     return { videos, poster, title, requestHeaders, unavailable: false };
   } catch (err) {
-    return { videos, poster: '', title: '', requestHeaders: {}, unavailable: false, error: err };
+    return { videos, poster, title, requestHeaders: {}, unavailable: false, error: err };
   } finally {
-    if (browser) {
-      try { await browser.close(); } catch {}
-    }
+    if (browser) try { await browser.close(); } catch {}
   }
 }
 
@@ -263,7 +290,6 @@ async function downloadCandidate(videoUrl, outputDir, requestHeaders = {}) {
   const filepath = path.join(outputDir, filename);
   const writer = fs.createWriteStream(filepath, { flags: 'wx' });
   let bytes = 0;
-
   try {
     const response = await axios.get(videoUrl, {
       timeout: VIDEO_TIMEOUT_MS,
@@ -284,13 +310,11 @@ async function downloadCandidate(videoUrl, outputDir, requestHeaders = {}) {
       response.data.destroy();
       throw new Error(`영상 파일이 아닌 응답을 받았습니다 (${type}).`);
     }
-
     const declared = Number(response.headers['content-length'] || 0);
     if (declared > MAX_BYTES) {
       response.data.destroy();
       throw new Error('영상이 200MB를 초과합니다.');
     }
-
     await new Promise((resolve, reject) => {
       response.data.on('data', chunk => {
         bytes += chunk.length;
@@ -301,7 +325,6 @@ async function downloadCandidate(videoUrl, outputDir, requestHeaders = {}) {
       writer.on('finish', resolve);
       response.data.pipe(writer);
     });
-
     if (bytes < 1024) throw new Error('가져온 영상 파일이 비정상적으로 작습니다.');
     return { filename, filepath, size: bytes };
   } catch (err) {
@@ -329,33 +352,29 @@ async function importThreadsVideo({ url, outputDir }) {
   const sourceUrl = validateThreadsUrl(url);
   let direct = { videos: [], poster: '', title: '' };
 
-  try {
-    const html = await fetchPostPage(sourceUrl);
-    direct = extractCandidates(html);
-  } catch (err) {
-    if (err.response?.status === 401 || err.response?.status === 403) {
-      // 브라우저 fallback을 계속 시도한다.
-      direct = { videos: [], poster: '', title: '' };
-    } else {
-      console.warn('[Threads import] direct HTML fetch failed:', err.message);
+  if (Date.now() >= directCooldownUntil) {
+    try {
+      const html = await fetchPostPage(sourceUrl);
+      direct = extractCandidates(html);
+    } catch (err) {
+      if (err.response?.status === 429) {
+        directCooldownUntil = Date.now() + 10 * 60 * 1000;
+        console.warn('[Threads import] direct HTML 429 → 10분 cooldown, Chromium fallback 사용');
+      } else if (err.response?.status !== 401 && err.response?.status !== 403) {
+        console.warn('[Threads import] direct HTML fetch failed:', err.message);
+      }
     }
+  } else {
+    console.log('[Threads import] direct HTML cooldown 중 → Chromium 우선');
   }
 
   if (direct.videos.length) {
     const saved = await tryDownloadCandidates(direct.videos, outputDir, { referer: sourceUrl });
     if (saved.file) {
-      return {
-        ...saved.file,
-        sourceUrl,
-        mediaUrl: saved.mediaUrl,
-        poster: direct.poster,
-        title: direct.title,
-        extractionMethod: 'html',
-      };
+      return { ...saved.file, sourceUrl, mediaUrl: saved.mediaUrl, poster: direct.poster, title: direct.title, extractionMethod: 'html' };
     }
   }
 
-  // HTML에서 영상 주소가 안 보이거나 직접 다운로드가 실패하면 실제 Chromium 세션을 사용한다.
   const browserFound = await extractCandidatesWithBrowser(sourceUrl);
   if (browserFound.videos.length) {
     const saved = await tryDownloadCandidates(browserFound.videos, outputDir, browserFound.requestHeaders || { referer: sourceUrl });
@@ -372,19 +391,9 @@ async function importThreadsVideo({ url, outputDir }) {
     throw new Error(`브라우저에서 영상 주소는 찾았지만 파일 저장에 실패했습니다${saved.lastError ? `: ${saved.lastError.message}` : ''}`);
   }
 
-  if (browserFound.unavailable) {
-    throw new Error('HTML에서 영상을 찾지 못했고 서버에 Chromium 추출기가 설치되어 있지 않습니다. 최신 배포인지 확인해주세요.');
-  }
-  if (browserFound.error) {
-    throw new Error(`Threads 브라우저 추출에도 실패했습니다: ${browserFound.error.message}`);
-  }
-
-  throw new Error('Threads 페이지에서 영상 게시물은 확인했지만 재생 가능한 영상 주소를 찾지 못했습니다. 로그인 제한 또는 Meta CDN 차단 가능성이 있습니다.');
+  if (browserFound.unavailable) throw new Error('HTML에서 영상을 찾지 못했고 서버에 Chromium 추출기가 설치되어 있지 않습니다. 최신 배포인지 확인해주세요.');
+  if (browserFound.error) throw new Error(`Threads 브라우저 추출에도 실패했습니다: ${browserFound.error.message}`);
+  throw new Error('Threads 페이지에서 영상 게시물은 확인했지만 재생 가능한 영상 주소를 찾지 못했습니다. 일반 post 뷰와 /media 뷰를 모두 확인했습니다.');
 }
 
-module.exports = {
-  validateThreadsUrl,
-  extractCandidates,
-  extractCandidatesWithBrowser,
-  importThreadsVideo,
-};
+module.exports = { validateThreadsUrl, extractCandidates, extractCandidatesWithBrowser, importThreadsVideo };
