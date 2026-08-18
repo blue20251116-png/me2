@@ -1,4 +1,5 @@
 const coupangApi = require('./coupangApi');
+require('./threadsVideoPatch');
 
 const originalSearchProducts = coupangApi.searchProducts.bind(coupangApi);
 
