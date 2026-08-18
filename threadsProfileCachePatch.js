@@ -1,16 +1,17 @@
 const benchmark = require('./benchmarkAccounts');
 
-// Threads 프로필 수집 단계에서 이미 확보한 본문/사진을 URL별로 잠시 보관한다.
-// 상세 post를 다시 여는 요청을 줄여 Railway IP의 429를 피하는 것이 목적이다.
+// 프로필 수집 결과의 본문만 캐시한다.
+// 미디어는 프로필 카드에서 쿠팡/외부 링크 프리뷰와 구분하기 어려우므로
+// 실제 post importer/상세 수집기가 다시 확인하게 한다.
 const CACHE_TTL = 10 * 60 * 1000;
 const postCache = new Map();
 
 function keyOf(url) {
   try {
     const u = new URL(String(url || ''));
-    return `${u.origin}${u.pathname}`.replace(/\/$/, '');
+    return `${u.origin}${u.pathname}`.replace(/\/media$/i, '').replace(/\/$/, '');
   } catch {
-    return String(url || '').split(/[?#]/)[0].replace(/\/$/, '');
+    return String(url || '').split(/[?#]/)[0].replace(/\/media$/i, '').replace(/\/$/, '');
   }
 }
 
@@ -29,9 +30,9 @@ function saveMaterial(item) {
     savedAt: Date.now(),
     username: item.username || '',
     sourceText: text,
-    images: Array.isArray(item.images) ? item.images.filter(Boolean) : [],
-    videos: Array.isArray(item.videos) ? item.videos.filter(Boolean) : [],
-    hasVideo: !!item.hasVideo,
+    // 중요: 프로필 카드의 images/videos는 링크 프리뷰가 섞일 수 있으므로 캐시하지 않는다.
+    profileImageCount: Array.isArray(item.images) ? item.images.filter(Boolean).length : 0,
+    profileHasVideo: !!item.hasVideo,
   });
 }
 
@@ -40,7 +41,7 @@ benchmark.collectBenchmarkMaterials = async function patchedCollectBenchmarkMate
   cleanCache();
   const materials = await originalCollectBenchmarkMaterials(options);
   for (const item of materials || []) saveMaterial(item);
-  console.log(`[Threads][PROFILE CACHE] cached=${(materials || []).length} ttl=${CACHE_TTL / 60000}m`);
+  console.log(`[Threads][PROFILE TEXT CACHE] cached=${(materials || []).length} ttl=${CACHE_TTL / 60000}m mediaTrusted=no`);
   return materials;
 };
 
@@ -49,29 +50,49 @@ benchmark.collectPostDetails = async function patchedCollectPostDetails(url, use
   cleanCache();
   const cached = postCache.get(keyOf(url));
 
-  // 프로필 화면에서 원문이 이미 확보된 경우 상세 HTML을 다시 요청하지 않는다.
-  // 댓글/제휴링크가 없어도 이후 Autopilot 상품검색 fallback이 처리한다.
-  if (cached?.sourceText) {
-    console.log(`[Threads][PROFILE CACHE HIT] @${username || cached.username || '-'} source=${cached.sourceText.length} images=${cached.images.length} hasVideo=${cached.hasVideo ? 'yes' : 'no'} detailRequest=skipped`);
+  // 본문은 캐시를 쓸 수 있지만, 미디어는 실제 post에서 검증해야 한다.
+  // 먼저 기존 상세 수집기를 호출한다. 성공하면 원본 미디어/댓글/제휴링크를 그대로 사용한다.
+  try {
+    const details = await originalCollectPostDetails(url, username);
+    if (details?.sourceText) return details;
+  } catch (err) {
+    const msg = String(err?.message || err || '');
+    if (!cached?.sourceText) {
+      console.warn(`[Threads][DETAIL FALLBACK] @${username || '-'} detail failed reason="${msg}" cache=no`);
+      throw err;
+    }
+    // 429 등으로 상세 본문만 실패한 경우 텍스트 캐시로 살린다.
+    // images/videos는 빈 배열로 반환하여 뒤쪽 browser/video importer가 실제 post 미디어를 복구하게 한다.
+    console.warn(`[Threads][PROFILE TEXT CACHE FALLBACK] @${username || cached.username || '-'} detail failed reason="${msg}" source=${cached.sourceText.length} profileImagesIgnored=${cached.profileImageCount || 0} mediaRecovery=required`);
     return {
       sourceText: cached.sourceText,
       authorReplies: [],
-      images: cached.images,
-      videos: cached.videos,
-      hasVideo: cached.hasVideo,
+      affiliateLinks: [],
+      images: [],
+      videos: [],
+      hasVideo: !!cached.profileHasVideo,
       exactUrl: true,
       fromProfileCache: true,
+      mediaNeedsRecovery: true,
     };
   }
 
-  // 캐시에 없는 직접 URL만 기존 상세 수집기를 사용한다.
-  try {
-    return await originalCollectPostDetails(url, username);
-  } catch (err) {
-    const msg = String(err?.message || err || '');
-    console.warn(`[Threads][DETAIL FALLBACK] @${username || '-'} detail failed reason="${msg}"`);
-    throw err;
+  if (cached?.sourceText) {
+    console.log(`[Threads][PROFILE TEXT CACHE FALLBACK] @${username || cached.username || '-'} source=${cached.sourceText.length} profileImagesIgnored=${cached.profileImageCount || 0} mediaRecovery=required`);
+    return {
+      sourceText: cached.sourceText,
+      authorReplies: [],
+      affiliateLinks: [],
+      images: [],
+      videos: [],
+      hasVideo: !!cached.profileHasVideo,
+      exactUrl: true,
+      fromProfileCache: true,
+      mediaNeedsRecovery: true,
+    };
   }
+
+  throw new Error('Threads 원문 텍스트를 읽지 못했습니다.');
 };
 
-console.log('[Threads][PROFILE CACHE PATCH] 프로필에서 확보한 원문/사진 재사용 · 상세 재요청 최소화 · 429 완화');
+console.log('[Threads][PROFILE TEXT CACHE PATCH V2] 본문 캐시 유지 · 프로필/쿠팡 링크 프리뷰 미디어 미신뢰 · 실제 post 미디어 복구 강제');
