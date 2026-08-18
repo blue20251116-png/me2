@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios');
 const { db, listAllAccountsForSystem, getAccount, canPublish, logUsage, findMediaSourceForProduct, markMediaSourceUsed } = require('./db');
 const { publishPost, publishCarouselPost, publishReply, getMediaInsights } = require('./threadsApi');
 const coupangApi = require('./coupangApi');
@@ -43,20 +44,107 @@ function getPublicBaseUrl(){const explicit=String(process.env.PUBLIC_BASE_URL||p
 function publicUploadUrl(filename){const base=getPublicBaseUrl();if(!base)throw new Error('공개 서비스 주소를 확인할 수 없습니다. PUBLIC_BASE_URL 또는 RAILWAY_PUBLIC_DOMAIN이 필요합니다.');return `${base}/uploads/${encodeURIComponent(filename)}`;}
 function localPathFromUploadUrl(url){if(!url)return null;const marker='/uploads/';const idx=url.indexOf(marker);if(idx===-1)return null;return path.join(uploadsDir,decodeURIComponent(url.slice(idx+marker.length)));}
 function mediaSourceFilesExist(media){const p=localPathFromUploadUrl(media.image_url);if(!p||!fs.existsSync(p))return false;if(media.extra_image_url){const e=localPathFromUploadUrl(media.extra_image_url);if(!e||!fs.existsSync(e))return false;}return true;}
+
+function imageExtension(contentType,url){
+  const type=String(contentType||'').toLowerCase();
+  if(type.includes('png'))return'.png';
+  if(type.includes('webp'))return'.webp';
+  if(type.includes('gif'))return'.gif';
+  if(type.includes('jpeg')||type.includes('jpg'))return'.jpg';
+  try{const ext=path.extname(new URL(url).pathname).toLowerCase();if(['.jpg','.jpeg','.png','.webp','.gif'].includes(ext))return ext==='.jpeg'?'.jpg':ext;}catch{}
+  return'.jpg';
+}
+async function cacheRemoteImage(url){
+  const raw=String(url||'').trim();
+  if(!raw)return null;
+  const local=localPathFromUploadUrl(raw);
+  if(local&&fs.existsSync(local))return raw;
+  const response=await axios.get(raw,{
+    timeout:30000,
+    maxRedirects:5,
+    responseType:'arraybuffer',
+    maxContentLength:20*1024*1024,
+    maxBodyLength:20*1024*1024,
+    headers:{
+      'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
+      'referer':'https://www.threads.com/',
+      'accept':'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+    },
+    validateStatus:s=>s>=200&&s<400
+  });
+  const type=String(response.headers?.['content-type']||'').toLowerCase();
+  if(type&&!type.startsWith('image/'))throw new Error(`이미지가 아닌 응답 (${type})`);
+  const data=Buffer.from(response.data||[]);
+  if(data.length<256)throw new Error('이미지 파일이 비정상적으로 작습니다');
+  if(data.length>20*1024*1024)throw new Error('이미지가 20MB를 초과합니다');
+  const filename=`threads-img-${Date.now()}-${Math.random().toString(36).slice(2,8)}${imageExtension(type,raw)}`;
+  fs.writeFileSync(path.join(uploadsDir,filename),data);
+  const cached=publicUploadUrl(filename);
+  console.log(`[Autopilot][IMAGE CACHE] 성공 bytes=${data.length} sourceHost=${(()=>{try{return new URL(raw).hostname;}catch{return'-';}})()} file=${filename}`);
+  return cached;
+}
+async function cacheRemoteImages(urls,{limit=9}={}){
+  const out=[];
+  for(const raw of (urls||[]).filter(Boolean).slice(0,limit)){
+    try{
+      const cached=await cacheRemoteImage(raw);
+      if(cached&&!out.includes(cached))out.push(cached);
+    }catch(err){
+      console.warn(`[Autopilot][IMAGE CACHE] 실패 → 해당 이미지만 제외 source=${String(raw).slice(0,180)} reason="${err.message}"`);
+    }
+  }
+  return out;
+}
+
 async function buildCommentText(account,post){if(hasCoupangKeys(account)&&post.recipe_comment_text&&!post.link)throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');if(!post.link)return compactRecipePrefix(post.recipe_comment_text||'',490);return buildDoubleLinkComment(account,post.recipe_comment_text||'',post.link,490);}
 function nextCommentRetryIso(retryCount){const delayMinutes=Math.min(10,Math.max(1,retryCount)*2);return new Date(Date.now()+delayMinutes*60*1000).toISOString();}
 async function postAffiliateComment(account,post,parentMediaId,{isRetry=false}={}){if(!post.auto_comment_enabled)return false;if(!post.link&&!post.recipe_comment_text)return false;try{const commentText=await buildCommentText(account,post);if(!commentText)return false;if(commentText.length>490)throw new Error(`댓글 최종 길이 검증 실패: ${commentText.length}자`);console.log(`[댓글 길이] account #${account.id} post #${post.id}: ${commentText.length}자/490 link=${post.link?'yes':'no'} retry=${isRetry?'yes':'no'}`);const commentMediaId=await publishReply(account.id,parentMediaId,commentText);db.prepare(`UPDATE posts SET comment_status='posted', comment_media_id=?, comment_posted_at=?, comment_error_message=NULL, comment_retry_count=0, comment_next_retry_at=NULL WHERE id=?`).run(commentMediaId,new Date().toISOString(),post.id);console.log(`[댓글 등록 완료] account #${account.id} post #${post.id} -> comment ${commentMediaId}`);return true;}catch(err){const msg=err.response?.data?.error?.message||err.message;const retryCount=Number(post.comment_retry_count||0)+1;const nextRetry=retryCount<3?nextCommentRetryIso(retryCount):null;db.prepare(`UPDATE posts SET comment_status='failed', comment_error_message=?, comment_retry_count=?, comment_next_retry_at=? WHERE id=?`).run(msg,retryCount,nextRetry,post.id);console.error(`[댓글 등록 실패] account #${account.id} post #${post.id}: ${msg} retry=${retryCount}/3 next=${nextRetry||'stop'}`);return false;}}
 async function retryFailedComments(account,now){const failed=db.prepare(`SELECT * FROM posts WHERE account_id=? AND status='posted' AND auto_comment_enabled=1 AND comment_status='failed' AND comment_media_id IS NULL AND threads_media_id IS NOT NULL AND COALESCE(comment_retry_count,0)<3 AND (comment_next_retry_at IS NULL OR comment_next_retry_at<=?) ORDER BY posted_at ASC LIMIT 3`).all(account.id,now);for(const post of failed){console.log(`[댓글 재시도] account #${account.id} post #${post.id} retry=${Number(post.comment_retry_count||0)+1}/3`);await postAffiliateComment(account,post,post.threads_media_id,{isRetry:true});await new Promise(r=>setTimeout(r,1500));}}
-function startPublishJob(){cron.schedule('* * * * *',async()=>{const now=new Date().toISOString();for(const s of listAllAccountsForSystem()){const account=getAccount(s.id);await retryFailedComments(account,now);const due=db.prepare(`SELECT * FROM posts WHERE account_id=? AND status='pending' AND scheduled_at<=? ORDER BY scheduled_at ASC`).all(account.id,now);for(const post of due){if(account.user_id&&!canPublish(account.user_id)){db.prepare(`UPDATE posts SET status='failed', error_message=? WHERE id=?`).run('오늘 발행 가능 횟수를 다 썼습니다 (요금제 하루 한도 초과)',post.id);continue;}try{let mediaId;if(post.video_url){mediaId=await publishPost(account.id,{text:post.text,imageUrl:null,videoUrl:post.video_url});}else if(post.image_url&&post.extra_image_url){mediaId=await publishCarouselPost(account.id,{text:post.text,imageUrls:[post.image_url,post.extra_image_url]});}else{mediaId=await publishPost(account.id,{text:post.text,imageUrl:post.image_url,videoUrl:null});}if(!mediaId)throw new Error('Threads 발행 결과 mediaId가 없습니다');const postedAt=new Date().toISOString();db.prepare(`UPDATE posts SET status='posted', threads_media_id=?, posted_at=?, error_message=NULL WHERE id=?`).run(mediaId,postedAt,post.id);if(account.user_id){logUsage(account.user_id,'publish');console.log(`[발행 횟수 차감] user #${account.user_id} post #${post.id} - Threads 발행 성공 확인 후 1회 차감`);}db.prepare(`INSERT INTO insights (post_id,views,likes,replies,reposts,quotes) VALUES (?,0,0,0,0,0) ON CONFLICT(post_id) DO NOTHING`).run(post.id);await new Promise(r=>setTimeout(r,3000));const freshPost=db.prepare(`SELECT * FROM posts WHERE id=?`).get(post.id)||post;await postAffiliateComment(account,freshPost,mediaId);}catch(err){const apiErr=err.response?.data?.error;const msg=apiErr?`${apiErr.message} (type: ${apiErr.type||'-'}, code: ${apiErr.code||'-'}${apiErr.error_subcode?', subcode: '+apiErr.error_subcode:''})`:err.message;db.prepare(`UPDATE posts SET status='failed', error_message=? WHERE id=?`).run(msg,post.id);console.error(`[발행 실패][횟수 차감 없음] account #${account.id} post #${post.id}:`,msg);}}}});}
+function mediaErrorLooksRecoverable(err){
+  const apiErr=err?.response?.data?.error||{};
+  const status=Number(err?.response?.status||0);
+  const msg=String(apiErr.error_user_msg||apiErr.message||err?.message||'').toLowerCase();
+  if(apiErr.is_transient===true||status>=500)return true;
+  if(!status||![400,404,408,409,429].includes(status))return false;
+  return /(media|image|video|carousel|container|processing|download|resource does not exist|not ready|expired|cdn)/i.test(msg);
+}
+async function publishScheduledPost(account,post){
+  try{
+    if(post.video_url)return await publishPost(account.id,{text:post.text,imageUrl:null,videoUrl:post.video_url});
+    if(post.image_url&&post.extra_image_url)return await publishCarouselPost(account.id,{text:post.text,imageUrls:[post.image_url,post.extra_image_url]});
+    return await publishPost(account.id,{text:post.text,imageUrl:post.image_url,videoUrl:null});
+  }catch(err){
+    const hadMedia=!!(post.video_url||post.image_url||post.extra_image_url);
+    if(!hadMedia||!mediaErrorLooksRecoverable(err))throw err;
+    const reason=err.response?.data?.error?.message||err.message;
+    console.warn(`[Threads][POST_MEDIA_FALLBACK] post #${post.id} 미디어 발행 실패 → TEXT 재시도 reason="${reason}"`);
+    return publishPost(account.id,{text:post.text,imageUrl:null,videoUrl:null});
+  }
+}
+function startPublishJob(){cron.schedule('* * * * *',async()=>{const now=new Date().toISOString();for(const s of listAllAccountsForSystem()){const account=getAccount(s.id);await retryFailedComments(account,now);const due=db.prepare(`SELECT * FROM posts WHERE account_id=? AND status='pending' AND scheduled_at<=? ORDER BY scheduled_at ASC`).all(account.id,now);for(const post of due){if(account.user_id&&!canPublish(account.user_id)){db.prepare(`UPDATE posts SET status='failed', error_message=? WHERE id=?`).run('오늘 발행 가능 횟수를 다 썼습니다 (요금제 하루 한도 초과)',post.id);continue;}try{const mediaId=await publishScheduledPost(account,post);if(!mediaId)throw new Error('Threads 발행 결과 mediaId가 없습니다');const postedAt=new Date().toISOString();db.prepare(`UPDATE posts SET status='posted', threads_media_id=?, posted_at=?, error_message=NULL WHERE id=?`).run(mediaId,postedAt,post.id);if(account.user_id){logUsage(account.user_id,'publish');console.log(`[발행 횟수 차감] user #${account.user_id} post #${post.id} - Threads 발행 성공 확인 후 1회 차감`);}db.prepare(`INSERT INTO insights (post_id,views,likes,replies,reposts,quotes) VALUES (?,0,0,0,0,0) ON CONFLICT(post_id) DO NOTHING`).run(post.id);await new Promise(r=>setTimeout(r,3000));const freshPost=db.prepare(`SELECT * FROM posts WHERE id=?`).get(post.id)||post;await postAffiliateComment(account,freshPost,mediaId);}catch(err){const apiErr=err.response?.data?.error;const msg=apiErr?`${apiErr.message} (type: ${apiErr.type||'-'}, code: ${apiErr.code||'-'}${apiErr.error_subcode?', subcode: '+apiErr.error_subcode:''})`:err.message;db.prepare(`UPDATE posts SET status='failed', error_message=? WHERE id=?`).run(msg,post.id);console.error(`[발행 실패][횟수 차감 없음] account #${account.id} post #${post.id}:`,msg);}}}});}
 function startInsightsJob(){cron.schedule('*/10 * * * *',async()=>{const start=new Date();start.setHours(0,0,0,0);for(const s of listAllAccountsForSystem()){const posts=db.prepare(`SELECT * FROM posts WHERE account_id=? AND status='posted' AND posted_at>=? AND threads_media_id IS NOT NULL`).all(s.id,start.toISOString());for(const p of posts){try{const stats=await getMediaInsights(s.id,p.threads_media_id);db.prepare(`INSERT INTO insights (post_id,views,likes,replies,reposts,quotes,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(post_id) DO UPDATE SET views=excluded.views,likes=excluded.likes,replies=excluded.replies,reposts=excluded.reposts,quotes=excluded.quotes,updated_at=excluded.updated_at`).run(p.id,stats.views||0,stats.likes||0,stats.replies||0,stats.reposts||0,stats.quotes||0,new Date().toISOString());}catch(e){console.error(`[인사이트 갱신 실패] account #${s.id}:`,e.message);}}}});}
 function randomIntervalMinutes(){return 60+Math.random()*15;}const AUTOPILOT_TARGETS=['전체','20대 여자','20대 남자','30대 여자','30대 남자','40대 이상'];
 function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=null,recipeCommentText=null}){const formattedText=formatThreadsBody(text);db.prepare(`INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL)`).run(formattedText,link||null,imageUrl||null,extraImageUrl||null,videoUrl||null,new Date().toISOString(),accountId,recipeCommentText);}
 function recordAutopilotLast(accountId,keyword,target){db.prepare(`UPDATE accounts SET autopilot_last_keyword=?, autopilot_last_target=? WHERE id=?`).run(keyword,target,accountId);}
 async function runContentOnlyAutopilot(account,target){const r=await generateContentOnlyRecipe(account.id,target);saveAutopilotPost({accountId:account.id,text:r.text,link:null,imageUrl:r.imageUrl,extraImageUrl:r.extraImageUrl,videoUrl:null,recipeCommentText:r.recipeCommentText});recordAutopilotLast(account.id,r.keyword,target);}
-function chooseImageFallback(result){const images=Array.isArray(result?.sourceImages)?result.sourceImages.filter(Boolean):[];if(images.length>=2)return{videoUrl:null,imageUrl:images[0],extraImageUrl:images[1],imageSourceLabel:'Threads 소재 원본 이미지 2장'};if(images.length===1)return{videoUrl:null,imageUrl:images[0],extraImageUrl:null,imageSourceLabel:'Threads 소재 원본 이미지 1장'};return{videoUrl:null,imageUrl:result?.product?.image||null,extraImageUrl:null,imageSourceLabel:result?.product?.image?'Threads 미디어 없음 → 쿠팡 상품 이미지 1장':'미디어 없음'};}
+async function chooseImageFallback(result,localizedImages=null){
+  const images=Array.isArray(localizedImages)?localizedImages:await cacheRemoteImages(Array.isArray(result?.sourceImages)?result.sourceImages:[],{limit:2});
+  if(images.length>=2)return{videoUrl:null,imageUrl:images[0],extraImageUrl:images[1],imageSourceLabel:'Threads 소재 원본 이미지 2장(로컬 캐시)'};
+  if(images.length===1)return{videoUrl:null,imageUrl:images[0],extraImageUrl:null,imageSourceLabel:'Threads 소재 원본 이미지 1장(로컬 캐시)'};
+  const productImage=String(result?.product?.image||'').trim();
+  if(productImage){
+    try{
+      const cached=await cacheRemoteImage(productImage);
+      if(cached)return{videoUrl:null,imageUrl:cached,extraImageUrl:null,imageSourceLabel:'Threads 미디어 없음 → 쿠팡 상품 이미지 1장(로컬 캐시)'};
+    }catch(err){console.warn(`[Autopilot][PRODUCT IMAGE CACHE] 실패 → TEXT 발행 준비 reason="${err.message}"`);}
+  }
+  return{videoUrl:null,imageUrl:null,extraImageUrl:null,imageSourceLabel:'미디어 없음 → TEXT'};
+}
 async function chooseSourceMedia(result){
   const videos=Array.isArray(result?.sourceVideos)?result.sourceVideos.filter(Boolean):[];
-  const images=Array.isArray(result?.sourceImages)?result.sourceImages.filter(Boolean):[];
+  const sourceImages=Array.isArray(result?.sourceImages)?result.sourceImages.filter(Boolean):[];
+  const images=await cacheRemoteImages(sourceImages,{limit:9});
+  if(sourceImages.length)console.log(`[Autopilot][IMAGE CACHE] 원본=${sourceImages.length} 로컬성공=${images.length}`);
   if(videos.length&&result?.sourceUrl){
     try{
       console.log(`[Autopilot][VIDEO IMPORT] 소재찾기 importer 사용 시작 source=${result.sourceUrl}`);
@@ -64,17 +152,17 @@ async function chooseSourceMedia(result){
       const videoUrl=publicUploadUrl(imported.filename);
       const items=[{type:'VIDEO',url:videoUrl},...images.slice(0,9).map(url=>({type:'IMAGE',url}))];
       const bundle=encodeMediaBundle(items);
-      console.log(`[Autopilot][VIDEO IMPORT] 성공 file=${imported.filename} size=${imported.size} method=${imported.extractionMethod} images=${images.length} bundleItems=${items.length}`);
-      if(bundle&&items.length>1)return{videoUrl:null,imageUrl:bundle,extraImageUrl:null,imageSourceLabel:`Threads 소재 원본 영상 1개 + 이미지 ${Math.min(images.length,9)}개`};
+      console.log(`[Autopilot][VIDEO IMPORT] 성공 file=${imported.filename} size=${imported.size} method=${imported.extractionMethod} sourceImages=${sourceImages.length} cachedImages=${images.length} bundleItems=${items.length}`);
+      if(bundle&&items.length>1)return{videoUrl:null,imageUrl:bundle,extraImageUrl:null,imageSourceLabel:`Threads 소재 원본 영상 1개 + 로컬 이미지 ${Math.min(images.length,9)}개`};
       return{videoUrl,imageUrl:null,extraImageUrl:null,imageSourceLabel:'Threads 소재 원본 영상 다운로드 1개'};
     }catch(err){
-      console.warn(`[Autopilot][VIDEO IMPORT] 실패 → 이미지 fallback source=${result.sourceUrl} reason="${err.message}"`);
+      console.warn(`[Autopilot][VIDEO IMPORT] 실패 → 로컬 이미지 fallback source=${result.sourceUrl} reason="${err.message}"`);
     }
   }
-  return chooseImageFallback(result);
+  return chooseImageFallback(result,images);
 }
 function classifyCoupangUrl(raw){try{const u=new URL(String(raw||'').trim());const host=u.hostname.toLowerCase();const alreadyAffiliate=host==='link.coupang.com'||host.endsWith('.link.coupang.com')||/lptag|subid|aff/i.test(u.search);const plainCoupang=host==='coupang.com'||host==='www.coupang.com'||host.endsWith('.coupang.com');return{valid:/^https?:$/i.test(u.protocol),alreadyAffiliate,plainCoupang,host};}catch{return{valid:false,alreadyAffiliate:false,plainCoupang:false,host:''};}}
 async function makeAffiliateLink(account,result){const raw=String(result?.product?.url||'').trim();if(!raw)throw new Error('쿠팡 상품 URL이 비어 있어 자동발행을 중단했습니다');const info=classifyCoupangUrl(raw);if(!info.valid||!info.plainCoupang)throw new Error(`쿠팡 상품 URL 형식이 올바르지 않습니다: ${raw.slice(0,120)}`);if(info.alreadyAffiliate){console.log(`[Coupang][LINK] 이미 파트너스 링크라 딥링크 변환 생략 host=${info.host}`);return raw;}try{const links=await coupangApi.createDeeplink(account.id,[raw]);const first=Array.isArray(links)?links[0]:null;const affiliate=String(first?.shortenUrl||first?.landingUrl||first?.originalUrl||'').trim();if(!affiliate)throw new Error('쿠팡 파트너스 링크 생성 결과가 비어 있습니다');console.log(`[Coupang][LINK] 일반 상품 URL → 딥링크 변환 성공`);return affiliate;}catch(err){const msg=String(err?.message||err?.response?.data?.rMessage||'');if(/url convert failed/i.test(msg)){console.warn(`[Coupang][LINK] 딥링크 재변환 거부 → 검색 API productUrl 그대로 사용`);return raw;}throw err;}}
-async function runAutopilotOnce(account){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=await chooseSourceMedia(result);saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V15 MATERIAL-MIXED-MEDIA] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
+async function runAutopilotOnce(account){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=await chooseSourceMedia(result);saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V16 MEDIA-CACHED] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
 function startAutopilotJob(){const nextRunAt=new Map();cron.schedule('* * * * *',async()=>{const now=Date.now();for(const s of listAllAccountsForSystem()){const account=getAccount(s.id);if(!account.autopilot_enabled){nextRunAt.delete(account.id);continue;}if(hasCoupangKeys(account)){const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown)continue;}const due=nextRunAt.get(account.id)||0;if(now<due)continue;nextRunAt.set(account.id,now+randomIntervalMinutes()*60*1000);try{await runAutopilotOnce(account);}catch(err){if(coupangApi.isRateLimitError?.(err)){console.error(`[완전자동화 중단][Coupang rate limit] account #${account.id}: ${err.message}`);continue;}console.error(`[완전자동화 실패] account #${account.id}:`,err.response?.data||err.message);}}});}
 module.exports={startPublishJob,startInsightsJob,startAutopilotJob};
