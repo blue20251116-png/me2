@@ -4,7 +4,7 @@
   "description": "스레드(Threads) 예약 발행 + 조회수 대시보드",
   "main": "bootstrap.js",
   "scripts": {
-    "start": "node -r ./coupangLinkPatch.js bootstrap.js"
+    "start": "node -r ./coupangLinkPatch.js -r ./threadsVideoPatch.js -r ./autopilotNoLinkFilterPatch.js bootstrap.js"
   },
   "keywords": [],
   "author": "",
