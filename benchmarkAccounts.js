@@ -302,25 +302,33 @@ async function collectPostDetails(url, username) {
   }
 }
 
-async function collectBenchmarkMaterials({limit=20}={}) {
+async function mapWithConcurrency(items,concurrency,worker){
+  const results=[];let cursor=0;
+  async function run(){while(true){const i=cursor++;if(i>=items.length)return;try{results[i]=await worker(items[i],i);}catch(err){results[i]={error:err};}}}
+  await Promise.all(Array.from({length:Math.min(concurrency,items.length)},run));
+  return results;
+}
+
+async function collectBenchmarkMaterials({limit=10}={}){
   const accounts=shuffle(listBenchmarkAccounts());
-  if(!accounts.length)throw new Error('벤치마킹 계정을 먼저 등록해주세요.');
+  if(!accounts.length)throw new Error('관리자 페이지에서 소재 참고 계정을 먼저 등록해주세요.');
+  const sample=accounts.slice(0,Math.min(accounts.length,12));
   let browser,context;
-  try {
+  try{
     ({browser,context}=await openBrowser());
-    const all=[];
-    const per=Math.max(2,Math.ceil(limit/Math.max(1,accounts.length)));
-    for(const a of accounts){
-      try{
-        const posts=await collectProfilePostsWithContext(context,a.username,{limit:per});
-        for(const p of posts){if(!isUsedPost(p.url))all.push(p);}
-      }catch(e){console.warn(`[Threads benchmark] @${a.username} 수집 실패: ${e.message}`);}
+    const perAccount=Math.max(8,Math.ceil(limit/Math.max(1,sample.length))+4);
+    const scanned=await mapWithConcurrency(sample,4,async account=>(await collectProfilePostsWithContext(context,account.username,{limit:perAccount})).filter(x=>!isUsedPost(x.url)));
+    const pools=scanned.filter(Array.isArray).filter(x=>x.length),all=[];let round=0;
+    while(all.length<limit&&pools.some(p=>p.length>round)){
+      for(const pool of shuffle(pools)){if(all.length>=limit)break;if(pool[round])all.push(pool[round]);}
+      round++;
     }
-    return shuffle(all).slice(0,limit);
+    console.log(`[Threads benchmark] accounts=${sample.length} pools=${pools.length} collected=${all.length} requested=${limit}`);
+    return all.slice(0,limit);
   } finally {
     if(context)try{await context.close();}catch{}
     if(browser)try{await browser.close();}catch{}
   }
 }
 
-module.exports={normalizeUsername,parseUsernames,listBenchmarkAccounts,addBenchmarkAccount,addBenchmarkAccountsBulk,deleteBenchmarkAccount,markUsedPost,isUsedPost,collectProfilePosts,collectPostDetails,collectBenchmarkMaterials};
+module.exports={listBenchmarkAccounts,addBenchmarkAccount,addBenchmarkAccountsBulk,deleteBenchmarkAccount,markUsedPost,collectBenchmarkMaterials,collectPostDetails,collectProfilePosts};
