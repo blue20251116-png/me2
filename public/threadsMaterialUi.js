@@ -73,7 +73,7 @@
       // 사진 게시물에는 영상 import를 아예 호출하지 않는다.
       // 영상이 있다고 이미 판별된 소재만 별도로 원본 영상 파일을 확보한다.
       const videoPromise=item.hasVideo
-        ? fetchWithTimeout('/api/threads/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:item.url})},24000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'영상 가져오기 실패');return d;})
+        ? fetchWithTimeout('/api/threads/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:item.url})},90000).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'영상 가져오기 실패');return d;})
         : Promise.resolve(null);
 
       setMsg(item.hasVideo?'2/3 글 작성과 원본 영상 준비 중…':'2/3 글 작성 중…');
