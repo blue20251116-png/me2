@@ -12,6 +12,19 @@ try { db.exec(`ALTER TABLE posts ADD COLUMN recipe_comment_text TEXT`); } catch 
 try { db.exec(`ALTER TABLE posts ADD COLUMN comment_retry_count INTEGER DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE posts ADD COLUMN comment_next_retry_at TEXT`); } catch {}
 
+const MEDIA_BUNDLE_PREFIX='__THREADS_MEDIA_BUNDLE__';
+function encodeMediaBundle(items){
+  const normalized=[];
+  for(const item of items||[]){
+    const type=String(item?.type||'').toUpperCase();
+    const url=String(item?.url||'').trim();
+    if(!url||!['IMAGE','VIDEO'].includes(type))continue;
+    if(!normalized.some(x=>x.type===type&&x.url===url))normalized.push({type,url});
+    if(normalized.length>=10)break;
+  }
+  return normalized.length?`${MEDIA_BUNDLE_PREFIX}${encodeURIComponent(JSON.stringify(normalized))}`:null;
+}
+
 function hasCoupangKeys(a){return !!(String(a?.coupang_access_key||'').trim()&&String(a?.coupang_secret_key||'').trim());}
 function isCoupangLink(link){return /(^|\.)coupang\.com|link\.coupang\.com/i.test(String(link||''));}
 const DEFAULT_COUPANG_DISCLOSURE='이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.';
@@ -41,9 +54,27 @@ function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=
 function recordAutopilotLast(accountId,keyword,target){db.prepare(`UPDATE accounts SET autopilot_last_keyword=?, autopilot_last_target=? WHERE id=?`).run(keyword,target,accountId);}
 async function runContentOnlyAutopilot(account,target){const r=await generateContentOnlyRecipe(account.id,target);saveAutopilotPost({accountId:account.id,text:r.text,link:null,imageUrl:r.imageUrl,extraImageUrl:r.extraImageUrl,videoUrl:null,recipeCommentText:r.recipeCommentText});recordAutopilotLast(account.id,r.keyword,target);}
 function chooseImageFallback(result){const images=Array.isArray(result?.sourceImages)?result.sourceImages.filter(Boolean):[];if(images.length>=2)return{videoUrl:null,imageUrl:images[0],extraImageUrl:images[1],imageSourceLabel:'Threads 소재 원본 이미지 2장'};if(images.length===1)return{videoUrl:null,imageUrl:images[0],extraImageUrl:null,imageSourceLabel:'Threads 소재 원본 이미지 1장'};return{videoUrl:null,imageUrl:result?.product?.image||null,extraImageUrl:null,imageSourceLabel:result?.product?.image?'Threads 미디어 없음 → 쿠팡 상품 이미지 1장':'미디어 없음'};}
-async function chooseSourceMedia(result){const videos=Array.isArray(result?.sourceVideos)?result.sourceVideos.filter(Boolean):[];if(videos.length&&result?.sourceUrl){try{console.log(`[Autopilot][VIDEO IMPORT] 소재찾기 importer 사용 시작 source=${result.sourceUrl}`);const imported=await importThreadsVideo({url:result.sourceUrl,outputDir:uploadsDir});const videoUrl=publicUploadUrl(imported.filename);console.log(`[Autopilot][VIDEO IMPORT] 성공 file=${imported.filename} size=${imported.size} method=${imported.extractionMethod} public=${videoUrl}`);return{videoUrl,imageUrl:null,extraImageUrl:null,imageSourceLabel:'Threads 소재 원본 영상 다운로드 1개'};}catch(err){console.warn(`[Autopilot][VIDEO IMPORT] 실패 → 이미지 fallback source=${result.sourceUrl} reason="${err.message}"`);}}return chooseImageFallback(result);}
+async function chooseSourceMedia(result){
+  const videos=Array.isArray(result?.sourceVideos)?result.sourceVideos.filter(Boolean):[];
+  const images=Array.isArray(result?.sourceImages)?result.sourceImages.filter(Boolean):[];
+  if(videos.length&&result?.sourceUrl){
+    try{
+      console.log(`[Autopilot][VIDEO IMPORT] 소재찾기 importer 사용 시작 source=${result.sourceUrl}`);
+      const imported=await importThreadsVideo({url:result.sourceUrl,outputDir:uploadsDir});
+      const videoUrl=publicUploadUrl(imported.filename);
+      const items=[{type:'VIDEO',url:videoUrl},...images.slice(0,9).map(url=>({type:'IMAGE',url}))];
+      const bundle=encodeMediaBundle(items);
+      console.log(`[Autopilot][VIDEO IMPORT] 성공 file=${imported.filename} size=${imported.size} method=${imported.extractionMethod} images=${images.length} bundleItems=${items.length}`);
+      if(bundle&&items.length>1)return{videoUrl:null,imageUrl:bundle,extraImageUrl:null,imageSourceLabel:`Threads 소재 원본 영상 1개 + 이미지 ${Math.min(images.length,9)}개`};
+      return{videoUrl,imageUrl:null,extraImageUrl:null,imageSourceLabel:'Threads 소재 원본 영상 다운로드 1개'};
+    }catch(err){
+      console.warn(`[Autopilot][VIDEO IMPORT] 실패 → 이미지 fallback source=${result.sourceUrl} reason="${err.message}"`);
+    }
+  }
+  return chooseImageFallback(result);
+}
 function classifyCoupangUrl(raw){try{const u=new URL(String(raw||'').trim());const host=u.hostname.toLowerCase();const alreadyAffiliate=host==='link.coupang.com'||host.endsWith('.link.coupang.com')||/lptag|subid|aff/i.test(u.search);const plainCoupang=host==='coupang.com'||host==='www.coupang.com'||host.endsWith('.coupang.com');return{valid:/^https?:$/i.test(u.protocol),alreadyAffiliate,plainCoupang,host};}catch{return{valid:false,alreadyAffiliate:false,plainCoupang:false,host:''};}}
 async function makeAffiliateLink(account,result){const raw=String(result?.product?.url||'').trim();if(!raw)throw new Error('쿠팡 상품 URL이 비어 있어 자동발행을 중단했습니다');const info=classifyCoupangUrl(raw);if(!info.valid||!info.plainCoupang)throw new Error(`쿠팡 상품 URL 형식이 올바르지 않습니다: ${raw.slice(0,120)}`);if(info.alreadyAffiliate){console.log(`[Coupang][LINK] 이미 파트너스 링크라 딥링크 변환 생략 host=${info.host}`);return raw;}try{const links=await coupangApi.createDeeplink(account.id,[raw]);const first=Array.isArray(links)?links[0]:null;const affiliate=String(first?.shortenUrl||first?.landingUrl||first?.originalUrl||'').trim();if(!affiliate)throw new Error('쿠팡 파트너스 링크 생성 결과가 비어 있습니다');console.log(`[Coupang][LINK] 일반 상품 URL → 딥링크 변환 성공`);return affiliate;}catch(err){const msg=String(err?.message||err?.response?.data?.rMessage||'');if(/url convert failed/i.test(msg)){console.warn(`[Coupang][LINK] 딥링크 재변환 거부 → 검색 API productUrl 그대로 사용`);return raw;}throw err;}}
-async function runAutopilotOnce(account){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=await chooseSourceMedia(result);saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V14 MATERIAL-IMPORTER-VIDEO] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
+async function runAutopilotOnce(account){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=await chooseSourceMedia(result);saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V15 MATERIAL-MIXED-MEDIA] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
 function startAutopilotJob(){const nextRunAt=new Map();cron.schedule('* * * * *',async()=>{const now=Date.now();for(const s of listAllAccountsForSystem()){const account=getAccount(s.id);if(!account.autopilot_enabled){nextRunAt.delete(account.id);continue;}if(hasCoupangKeys(account)){const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown)continue;}const due=nextRunAt.get(account.id)||0;if(now<due)continue;nextRunAt.set(account.id,now+randomIntervalMinutes()*60*1000);try{await runAutopilotOnce(account);}catch(err){if(coupangApi.isRateLimitError?.(err)){console.error(`[완전자동화 중단][Coupang rate limit] account #${account.id}: ${err.message}`);continue;}console.error(`[완전자동화 실패] account #${account.id}:`,err.response?.data||err.message);}}});}
 module.exports={startPublishJob,startInsightsJob,startAutopilotJob};
