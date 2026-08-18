@@ -13,37 +13,322 @@ db.exec(`
   );
 `);
 
-function normalizeUsername(value){let v=String(value||'').trim();if(!v)return'';try{if(/^https?:\/\//i.test(v)){const u=new URL(v);const m=u.pathname.match(/^\/@?([^/]+)/);if(m)v=m[1];}}catch{}v=v.replace(/^@+/,'').split(/[/?#]/)[0].trim();return/^[A-Za-z0-9._]{1,64}$/.test(v)?v:'';}
-function parseUsernames(value){const raw=Array.isArray(value)?value.join('\n'):String(value||'');return[...new Set(raw.split(/[\s,;]+/).map(normalizeUsername).filter(Boolean))];}
-function listBenchmarkAccounts(){return db.prepare('SELECT id, username, created_at FROM threads_benchmark_accounts ORDER BY id DESC').all();}
-function addBenchmarkAccount(value){const username=normalizeUsername(value);if(!username)throw new Error('올바른 Threads 아이디를 입력해주세요.');db.prepare('INSERT OR IGNORE INTO threads_benchmark_accounts (username) VALUES (?)').run(username);return db.prepare('SELECT id, username, created_at FROM threads_benchmark_accounts WHERE username=?').get(username);}
-function addBenchmarkAccountsBulk(value){const usernames=parseUsernames(value);if(!usernames.length)throw new Error('등록할 Threads 아이디가 없습니다.');const insert=db.prepare('INSERT OR IGNORE INTO threads_benchmark_accounts (username) VALUES (?)');let added=0,skipped=0;for(const username of usernames){const info=insert.run(username);if(Number(info?.changes||0)>0)added++;else skipped++;}return{added,skipped,total:usernames.length,accounts:listBenchmarkAccounts()};}
-function deleteBenchmarkAccount(id){return db.prepare('DELETE FROM threads_benchmark_accounts WHERE id=?').run(Number(id));}
-function markUsedPost(url){if(url)db.prepare('INSERT OR IGNORE INTO threads_benchmark_used_posts (post_url) VALUES (?)').run(String(url));}
-function isUsedPost(url){return!!db.prepare('SELECT 1 FROM threads_benchmark_used_posts WHERE post_url=?').get(String(url));}
-function shuffle(items){const a=[...items];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
-function uniq(a){return[...new Set((a||[]).filter(Boolean))];}
-function isShopLink(v){return/(?:link\.)?coupang\.com|naver\.me|shopping\.naver\.com|smartstore\.naver\.com|brand\.naver\.com/i.test(String(v||''));}
-function decodeEscaped(s){return String(s||'').replace(/\\u0026/gi,'&').replace(/\\u003d/gi,'=').replace(/\\u002f/gi,'/').replace(/\\\//g,'/').replace(/&amp;/gi,'&');}
-function extractShopUrls(raw){const s=decodeEscaped(raw);const out=[];for(const m of s.matchAll(/https?:\/\/[^\s"'<>\\)\]}]+/gi)){let u=m[0].replace(/[.,;]+$/,'');if(isShopLink(u)&&!out.includes(u))out.push(u);}return out;}
+function normalizeUsername(value) {
+  let v = String(value || '').trim();
+  if (!v) return '';
+  try {
+    if (/^https?:\/\//i.test(v)) {
+      const u = new URL(v);
+      const m = u.pathname.match(/^\/@?([^/]+)/);
+      if (m) v = m[1];
+    }
+  } catch {}
+  v = v.replace(/^@+/, '').split(/[/?#]/)[0].trim();
+  return /^[A-Za-z0-9._]{1,64}$/.test(v) ? v : '';
+}
 
-async function openBrowser(){const playwright=require('playwright');const browser=await playwright.chromium.launch({headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-background-networking']});const context=await browser.newContext({locale:'ko-KR',viewport:{width:1100,height:1500},userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36'});return{browser,context};}
+function parseUsernames(value) {
+  const raw = Array.isArray(value) ? value.join('\n') : String(value || '');
+  return [...new Set(raw.split(/[\s,;]+/).map(normalizeUsername).filter(Boolean))];
+}
 
-async function collectProfilePostsWithContext(context,username,{limit=2}={}){const page=await context.newPage();try{page.setDefaultTimeout(12000);await page.goto(`https://www.threads.com/@${encodeURIComponent(username)}`,{waitUntil:'domcontentloaded',timeout:12000});await page.waitForTimeout(1500);for(let i=0;i<3;i++){await page.mouse.wheel(0,900);await page.waitForTimeout(300);}return await page.evaluate(({username,limit})=>{
- const clean=s=>String(s||'').replace(/\s+/g,' ').trim();const canonical=href=>{try{const u=new URL(href,location.origin);return`${u.origin}${u.pathname}`;}catch{return String(href||'').split(/[?#]/)[0];}};const isProfileImg=url=>/(?:t51\.82787-19|profile[_-]?pic|profile_pic|avatar|dst-jpg_s150x150|s150x150|150x150|_s150x150_)/i.test(String(url||''));const addUrl=(arr,v)=>{v=String(v||'').trim();if(/^https?:\/\//i.test(v)&&!arr.includes(v))arr.push(v);};const addSrcset=(arr,s)=>{for(const part of String(s||'').split(','))addUrl(arr,part.trim().split(/\s+/)[0]);};const collectMedia=root=>{const rawImages=[],rawVideos=[];for(const img of root.querySelectorAll('img')){addUrl(rawImages,img.currentSrc);addUrl(rawImages,img.src);addSrcset(rawImages,img.srcset);addSrcset(rawImages,img.getAttribute('srcset'));}for(const s of root.querySelectorAll('picture source')){addUrl(rawImages,s.src);addSrcset(rawImages,s.srcset);addSrcset(rawImages,s.getAttribute('srcset'));}for(const v of root.querySelectorAll('video')){addUrl(rawVideos,v.currentSrc);addUrl(rawVideos,v.src);addUrl(rawImages,v.poster);for(const s of v.querySelectorAll('source'))addUrl(rawVideos,s.src);}for(const s of root.querySelectorAll('video source'))addUrl(rawVideos,s.src);const images=rawImages.filter(u=>!isProfileImg(u)),profileRejected=rawImages.length-images.length;return{images:[...new Set(images)].slice(0,10),videos:[...new Set(rawVideos)].slice(0,5),profileRejected};};const findRoot=(a,target)=>{const article=a.closest('article,[role="article"]');if(article&&clean(article.innerText).length>=8)return article;let node=a.parentElement,best=null;for(let i=0;i<9&&node;i++,node=node.parentElement){const txt=clean(node.innerText);if(txt.length<8)continue;const links=[...new Set([...node.querySelectorAll('a[href*="/post/"]')].map(x=>canonical(x.href)))];if(links.length===1&&links[0]===target&&txt.length<=5000)best=node;if(links.length>1&&best)break;}return best;};const out=[],seen=new Set();for(const a of document.querySelectorAll('a[href*="/post/"]')){if(out.length>=limit)break;const href=canonical(a.href||'');if(!href||seen.has(href))continue;seen.add(href);if(!/\/post\//i.test(new URL(href).pathname))continue;const root=findRoot(a,href);if(!root)continue;const text=clean(root.innerText||'').slice(0,1800);if(text.length<8)continue;const{images,videos,profileRejected}=collectMedia(root);out.push({url:href,text,username,images,thumbnail:images[0]||'',imageCount:images.length,hasVideo:videos.length>0,videoCount:videos.length,videos,profileRejected});}return out;
- },{username,limit});}finally{try{await page.close();}catch{}}}
-async function collectProfilePosts(username,{limit=2}={}){let browser,context;try{({browser,context}=await openBrowser());return await collectProfilePostsWithContext(context,username,{limit});}finally{if(context)try{await context.close();}catch{}if(browser)try{await browser.close();}catch{}}}
+function listBenchmarkAccounts() {
+  return db.prepare('SELECT id, username, created_at FROM threads_benchmark_accounts ORDER BY id DESC').all();
+}
+function addBenchmarkAccount(value) {
+  const username = normalizeUsername(value);
+  if (!username) throw new Error('올바른 Threads 아이디를 입력해주세요.');
+  db.prepare('INSERT OR IGNORE INTO threads_benchmark_accounts (username) VALUES (?)').run(username);
+  return db.prepare('SELECT id, username, created_at FROM threads_benchmark_accounts WHERE username=?').get(username);
+}
+function addBenchmarkAccountsBulk(value) {
+  const usernames = parseUsernames(value);
+  if (!usernames.length) throw new Error('등록할 Threads 아이디가 없습니다.');
+  const insert = db.prepare('INSERT OR IGNORE INTO threads_benchmark_accounts (username) VALUES (?)');
+  let added = 0, skipped = 0;
+  for (const username of usernames) {
+    const info = insert.run(username);
+    if (Number(info?.changes || 0) > 0) added++; else skipped++;
+  }
+  return { added, skipped, total: usernames.length, accounts: listBenchmarkAccounts() };
+}
+function deleteBenchmarkAccount(id) { return db.prepare('DELETE FROM threads_benchmark_accounts WHERE id=?').run(Number(id)); }
+function markUsedPost(url) { if (url) db.prepare('INSERT OR IGNORE INTO threads_benchmark_used_posts (post_url) VALUES (?)').run(String(url)); }
+function isUsedPost(url) { return !!db.prepare('SELECT 1 FROM threads_benchmark_used_posts WHERE post_url=?').get(String(url)); }
+function shuffle(items) { const a=[...items]; for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
 
-async function expandReplies(page){for(let round=0;round<8;round++){let clicked=0;try{clicked=await page.evaluate(()=>{const clean=s=>String(s||'').replace(/\s+/g,' ').trim();const re=/(답글|댓글|repl(?:y|ies)|responses?|더\s*보기|view\s*more)/i;let n=0;for(const el of document.querySelectorAll('button,[role="button"],a')){if(n>=24)break;const t=clean(el.innerText||el.textContent||el.getAttribute('aria-label')||'');if(!t||t.length>120||!re.test(t))continue;try{el.click();n++;}catch{}}return n;});}catch{}await page.mouse.wheel(0,700);await page.waitForTimeout(clicked?700:350);if(!clicked&&round>=4)break;}}
-let detailQueue=Promise.resolve();function serializedDetail(task){const run=detailQueue.then(task,task);detailQueue=run.catch(()=>{});return run;}
+async function openBrowser() {
+  const playwright = require('playwright');
+  const browser = await playwright.chromium.launch({ headless:true, args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu'] });
+  const context = await browser.newContext({
+    locale:'ko-KR',
+    viewport:{width:1100,height:1500},
+    userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36'
+  });
+  return { browser, context };
+}
 
-async function collectPostDetails(url,username){return serializedDetail(async()=>{let browser,context;try{({browser,context}=await openBrowser());const page=await context.newPage();page.setDefaultTimeout(18000);const networkTexts=[];page.on('response',async r=>{try{const u=r.url(),ct=String(r.headers()['content-type']||'');if(!/(threads|instagram|graphql|api)/i.test(u)||!/json|text|javascript/i.test(ct))return;const txt=await r.text();if(txt&&txt.length<1200000&&/(coupang|naver\.me|shopping\.naver|smartstore\.naver|brand\.naver)/i.test(txt))networkTexts.push(txt);}catch{}});await page.goto(url,{waitUntil:'domcontentloaded',timeout:18000});await page.waitForTimeout(2200);await expandReplies(page);await page.mouse.wheel(0,900);await page.waitForTimeout(700);
- const data=await page.evaluate(({username,sourceUrl})=>{const clean=s=>String(s||'').replace(/\s+/g,' ').trim();const canonical=href=>{try{const u=new URL(href,location.origin);return`${u.origin}${u.pathname}`;}catch{return String(href||'').split(/[?#]/)[0];}};const target=canonical(sourceUrl),targetUser=String(username||'').replace(/^@/,'').toLowerCase(),userPath=`/@${targetUser}`;const isOwnProfileLink=a=>{try{return new URL(a.href,location.origin).pathname.toLowerCase().replace(/\/$/,'')===userPath;}catch{return false;}};const ext=h=>{try{const u=new URL(h,location.origin),host=u.hostname.toLowerCase();if(host.includes('threads.com')||host.includes('threads.net')||host.includes('instagram.com'))return'';return u.href;}catch{return'';}};const shop=h=>/(?:link\.)?coupang\.com|naver\.me|shopping\.naver|smartstore\.naver|brand\.naver/i.test(String(h||''));let main=null;for(const a of document.querySelectorAll('a[href*="/post/"]')){if(canonical(a.href||'')!==target)continue;const article=a.closest('article,[role="article"]');if(article){main=article;break;}let n=a.parentElement;for(let i=0;i<10&&n;i++,n=n.parentElement){const links=[...new Set([...n.querySelectorAll('a[href*="/post/"]')].map(x=>canonical(x.href)))];if(links.length===1&&links[0]===target&&clean(n.innerText).length<=6000)main=n;}}
- const metas=[document.querySelector('meta[property="og:description"]')?.content,document.querySelector('meta[name="description"]')?.content,document.querySelector('meta[name="twitter:description"]')?.content].map(clean).filter(Boolean),bodyCandidates=[...document.querySelectorAll('[dir="auto"],span,div')].map(el=>clean(el.innerText||'')).filter(t=>t.length>=12&&t.length<=2500&&!/^(좋아요|답글|공유|팔로우)/.test(t)),mainText=clean(main?.innerText||''),sourceText=[mainText,...metas,...bodyCandidates].find(t=>t&&t.length>=12)||'';
- const images=[],videos=[],mediaRoot=main||document,isProfileImg=url=>/(?:t51\.82787-19|profile[_-]?pic|profile_pic|avatar|dst-jpg_s150x150|s150x150|150x150|_s150x150_)/i.test(String(url||'')),add=(arr,v)=>{v=String(v||'').trim();if(/^https?:\/\//i.test(v)&&!arr.includes(v))arr.push(v);},addSrcset=(arr,s)=>{for(const part of String(s||'').split(','))add(arr,part.trim().split(/\s+/)[0]);};for(const img of mediaRoot.querySelectorAll('img')){const alt=(img.alt||'').toLowerCase(),r=img.getBoundingClientRect(),tmp=[];add(tmp,img.currentSrc);add(tmp,img.src);addSrcset(tmp,img.srcset);addSrcset(tmp,img.getAttribute('srcset'));if(r.width<120||r.height<120||/profile|프로필|avatar|사용자/.test(alt))continue;for(const u of tmp)if(!isProfileImg(u))add(images,u);}for(const s of mediaRoot.querySelectorAll('picture source')){const tmp=[];add(tmp,s.src);addSrcset(tmp,s.srcset);addSrcset(tmp,s.getAttribute('srcset'));for(const u of tmp)if(!isProfileImg(u))add(images,u);}for(const v of mediaRoot.querySelectorAll('video')){add(videos,v.currentSrc);add(videos,v.src);if(v.poster&&!isProfileImg(v.poster))add(images,v.poster);for(const s of v.querySelectorAll('source'))add(videos,s.src);}for(const s of mediaRoot.querySelectorAll('video source'))add(videos,s.src);
- const authorReplies=[],affiliateLinks=[],seen=new Set();for(const a of document.querySelectorAll('a[href]')){if(!isOwnProfileLink(a))continue;let root=a.closest('article,[role="article"]')||a.parentElement;for(let i=0;i<6&&root;i++,root=root.parentElement){if(root===main)break;const txt=clean(root.innerText||''),hrefs=[...root.querySelectorAll('a[href]')].map(x=>ext(x.href)).filter(Boolean),shops=hrefs.filter(shop);if(shops.length||txt.length>=4){const packed=[txt,...hrefs].filter(Boolean).join('\n').slice(0,7000);if(packed&&!seen.has(packed)){seen.add(packed);authorReplies.push(packed);}for(const h of shops)if(!affiliateLinks.includes(h))affiliateLinks.push(h);if(shops.length)break;}}}for(const a of document.querySelectorAll('a[href]')){const h=ext(a.href);if(h&&shop(h)&&!affiliateLinks.includes(h))affiliateLinks.push(h);}return{sourceText,authorReplies:authorReplies.slice(0,20),affiliateLinks:affiliateLinks.slice(0,20),images:images.slice(0,10),videos:videos.slice(0,5),hasVideo:[...document.querySelectorAll('video,video source')].length>0,exactUrl:canonical(location.href)===target,html:document.documentElement.outerHTML.slice(0,1500000)};},{username,sourceUrl:url});
- const htmlLinks=extractShopUrls(data.html||''),networkLinks=uniq(networkTexts.flatMap(extractShopUrls)),affiliateLinks=uniq([...(data.affiliateLinks||[]),...htmlLinks,...networkLinks]);let authorReplies=(data.authorReplies||[]).filter(Boolean);if(affiliateLinks.length&&!authorReplies.some(x=>isShopLink(x)))authorReplies.push(`[작성자/게시물 쇼핑링크]\n${affiliateLinks.join('\n')}`);let sourceText=String(data.sourceText||'').trim(),images=(data.images||[]).filter(Boolean),videos=(data.videos||[]).filter(Boolean),profileHasVideo=false;if(!sourceText||(!images.length&&!videos.length)){try{const profile=await collectProfilePostsWithContext(context,username,{limit:16}),wanted=String(url||'').split(/[?#]/)[0].replace(/\/media$/,'');const hit=profile.find(x=>String(x.url||'').split(/[?#]/)[0].replace(/\/media$/,'')===wanted);if(hit){if(!sourceText){sourceText=String(hit.text||'').trim();if(sourceText)console.log(`[Threads detail fallback] @${username} 프로필 본문 재사용 source=${sourceText.length}`);}if(!images.length&&Array.isArray(hit.images)&&hit.images.length){images=uniq(hit.images).slice(0,10);console.log(`[Threads media fallback] @${username} 동일 post 프로필 미디어 재사용 images=${images.length} profileRejected=${hit.profileRejected||0} source=${url}`);}if(!videos.length&&Array.isArray(hit.videos)&&hit.videos.length)videos=uniq(hit.videos).slice(0,5);if(hit.hasVideo){profileHasVideo=true;if(!videos.length)console.log(`[Threads media fallback] @${username} 동일 post 영상 존재 신호 확인 source=${url}`);}}}catch(err){console.log(`[Threads detail fallback] @${username} 실패: ${err.message}`);}}if(!sourceText)throw new Error('Threads 원문 텍스트를 읽지 못했습니다.');const hasVideo=videos.length>0||!!data.hasVideo||profileHasVideo;console.log(`[Threads detail] @${username} source=${sourceText.length} replies=${authorReplies.length} affiliateLinks=${affiliateLinks.length} images=${images.length} videos=${videos.length} hasVideo=${hasVideo?'yes':'no'}`);if(affiliateLinks.length)console.log(`[Threads affiliate] @${username} 쇼핑링크 감지 count=${affiliateLinks.length} first=${affiliateLinks[0]}`);return{sourceText,authorReplies,affiliateLinks,images,videos,hasVideo,exactUrl:!!data.exactUrl};}finally{if(context)try{await context.close();}catch{}if(browser)try{await browser.close();}catch{}}});}
+async function collectProfilePostsWithContext(context, username, {limit=2}={}) {
+  const page = await context.newPage();
+  try {
+    page.setDefaultTimeout(12000);
+    await page.goto(`https://www.threads.com/@${encodeURIComponent(username)}`, { waitUntil:'domcontentloaded', timeout:12000 });
+    await page.waitForTimeout(1600);
+    for (let i=0;i<3;i++) {
+      await page.mouse.wheel(0,900);
+      await page.waitForTimeout(350);
+    }
+    return await page.evaluate(({username,limit}) => {
+      const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
+      const canonical=href=>{try{const u=new URL(href,location.origin);return`${u.origin}${u.pathname}`;}catch{return String(href||'').split(/[?#]/)[0];}};
+      const rectOverlap=(a,b)=>{const x=Math.max(0,Math.min(a.right,b.right)-Math.max(a.left,b.left));const y=Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top));const inter=x*y;if(!inter)return 0;return inter/Math.max(1,Math.min(a.width*a.height,b.width*b.height));};
+      const findRoot=(a,target)=>{
+        const article=a.closest('article,[role="article"]');
+        if(article&&clean(article.innerText).length>=8)return article;
+        let node=a.parentElement,best=null;
+        for(let i=0;i<9&&node;i++,node=node.parentElement){
+          const txt=clean(node.innerText);
+          if(txt.length<8)continue;
+          const links=[...node.querySelectorAll('a[href*="/post/"]')].map(x=>canonical(x.href));
+          const uniq=[...new Set(links)];
+          if(uniq.length===1&&uniq[0]===target&&txt.length<=5000)best=node;
+          if(uniq.length>1&&best)break;
+        }
+        return best;
+      };
+      const mediaFromRoot=root=>{
+        if(!root)return{images:[],hasVideo:false,videoCount:0};
+        const videos=[...root.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>=180&&r.height>=180;});
+        const videoRects=videos.map(v=>v.getBoundingClientRect());
+        const images=[];
+        for(const img of root.querySelectorAll('img')){
+          const r=img.getBoundingClientRect(),src=img.currentSrc||img.src||'',alt=(img.alt||'').toLowerCase();
+          if(!src||r.width<180||r.height<180)continue;
+          if(/profile|프로필|avatar|사용자/.test(alt))continue;
+          if(videoRects.some(vr=>rectOverlap(r,vr)>=0.55))continue;
+          if(img.closest('video')||img.parentElement?.querySelector?.('video'))continue;
+          if(!images.includes(src))images.push(src);
+        }
+        return{images:images.slice(0,10),hasVideo:videos.length>0,videoCount:videos.length};
+      };
+      const out=[],seen=new Set();
+      for(const a of document.querySelectorAll('a[href*="/post/"]')){
+        if(out.length>=limit)break;
+        const href=canonical(a.href||'');
+        if(!href||seen.has(href))continue;
+        seen.add(href);
+        let p='';try{p=new URL(href).pathname;}catch{}
+        if(!/\/post\//i.test(p))continue;
+        const root=findRoot(a,href);if(!root)continue;
+        const text=clean(root.innerText||'').slice(0,1800);if(text.length<8)continue;
+        const media=mediaFromRoot(root);
+        out.push({url:href,text,username,images:media.images,thumbnail:media.images[0]||'',imageCount:media.images.length,hasVideo:media.hasVideo,videoCount:media.videoCount});
+      }
+      return out;
+    }, {username,limit});
+  } finally { try{await page.close();}catch{} }
+}
 
-async function mapWithConcurrency(items,concurrency,worker){const results=[];let cursor=0;async function run(){while(true){const i=cursor++;if(i>=items.length)return;try{results[i]=await worker(items[i],i);}catch(err){results[i]={error:err};}}}await Promise.all(Array.from({length:Math.min(concurrency,items.length)},run));return results;}
-async function collectBenchmarkMaterials({limit=10}={}){const accounts=shuffle(listBenchmarkAccounts());if(!accounts.length)throw new Error('관리자 페이지에서 소재 참고 계정을 먼저 등록해주세요.');const sample=accounts.slice(0,Math.min(accounts.length,12));let browser,context;try{({browser,context}=await openBrowser());const perAccount=Math.max(8,Math.ceil(limit/Math.max(1,sample.length))+4),scanned=await mapWithConcurrency(sample,3,async account=>(await collectProfilePostsWithContext(context,account.username,{limit:perAccount})).filter(x=>!isUsedPost(x.url))),pools=scanned.filter(Array.isArray).filter(x=>x.length),all=[];let round=0;while(all.length<limit&&pools.some(p=>p.length>round)){for(const pool of shuffle(pools)){if(all.length>=limit)break;if(pool[round])all.push(pool[round]);}round++;}console.log(`[Threads benchmark] accounts=${sample.length} pools=${pools.length} collected=${all.length} requested=${limit}`);return all.slice(0,limit);}finally{if(context)try{await context.close();}catch{}if(browser)try{await browser.close();}catch{}}}
+async function collectProfilePosts(username,{limit=2}={}) {
+  let browser,context;
+  try { ({browser,context}=await openBrowser()); return await collectProfilePostsWithContext(context,username,{limit}); }
+  finally { if(context)try{await context.close();}catch{} if(browser)try{await browser.close();}catch{} }
+}
+
+async function expandReplies(page) {
+  for (let round=0; round<5; round++) {
+    let clicked=0;
+    try {
+      clicked=await page.evaluate(() => {
+        const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
+        const re=/(답글\s*(?:보기|더\s*보기)|댓글\s*(?:보기|더\s*보기)|답글\s*\d+개|댓글\s*\d+개|view\s+(?:more\s+)?repl(?:y|ies)|more\s+repl(?:y|ies))/i;
+        let n=0;
+        for(const el of document.querySelectorAll('button,[role="button"],a')){
+          if(n>=12)break;
+          const t=clean(el.innerText||el.textContent||'');
+          if(!t||t.length>80||!re.test(t))continue;
+          try{el.click();n++;}catch{}
+        }
+        return n;
+      });
+    } catch {}
+    await page.mouse.wheel(0,850);
+    await page.waitForTimeout(clicked?650:350);
+    if(!clicked&&round>=2)break;
+  }
+}
+
+async function collectPostDetails(url, username) {
+  let browser,context;
+  try {
+    ({browser,context}=await openBrowser());
+    const page=await context.newPage();
+    page.setDefaultTimeout(16000);
+    await page.goto(url,{waitUntil:'domcontentloaded',timeout:16000});
+    await page.waitForTimeout(1800);
+    await expandReplies(page);
+    await page.mouse.wheel(0,1000);
+    await page.waitForTimeout(500);
+
+    const data=await page.evaluate(({username,sourceUrl})=>{
+      const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
+      const canonical=href=>{try{const u=new URL(href,location.origin);return`${u.origin}${u.pathname}`;}catch{return String(href||'').split(/[?#]/)[0];}};
+      const targetUrl=canonical(sourceUrl),targetUser=String(username||'').toLowerCase();
+      const sameUserHref=href=>{
+        try {
+          const u=new URL(href,location.origin);
+          return u.pathname.toLowerCase().replace(/\/$/,'')===`/@${targetUser}`;
+        } catch { return false; }
+      };
+      function externalTargetsFromHref(raw){
+        const out=[];
+        const add=v=>{const s=String(v||'').trim();if(/^https?:\/\//i.test(s)&&!out.includes(s))out.push(s);};
+        try{
+          const u=new URL(raw,location.origin);
+          if(!/(^|\.)threads\.(com|net)$/i.test(u.hostname))add(u.href);
+          for(const key of['u','url','target','redirect','redirect_url']){
+            const v=u.searchParams.get(key);
+            if(!v)continue;
+            try{add(decodeURIComponent(v));}catch{add(v);}
+          }
+        }catch{}
+        return out;
+      }
+      function externalLinksFromRoot(root){
+        if(!root)return[];
+        const out=[];
+        for(const a of root.querySelectorAll('a[href]')){
+          for(const u of externalTargetsFromHref(a.href||a.getAttribute('href')||''))if(!out.includes(u))out.push(u);
+        }
+        const txt=clean(root.innerText||'');
+        const matches=txt.match(/https?:\/\/[^\s)\]}>,]+/gi)||[];
+        for(const u of matches)if(!out.includes(u))out.push(u);
+        return out.slice(0,12);
+      }
+      function compactRoot(anchor){
+        const article=anchor.closest('article,[role="article"]');
+        if(article)return article;
+        let node=anchor.parentElement,best=null;
+        for(let i=0;i<9&&node;i++,node=node.parentElement){
+          const text=clean(node.innerText||'');
+          if(text.length<8)continue;
+          if(text.length<=5000)best=node;
+          if(text.length>5000&&best)break;
+        }
+        return best;
+      }
+      function postLinks(root){return root?[...new Set([...root.querySelectorAll('a[href*="/post/"]')].map(a=>canonical(a.href||'')))]:[];}
+      function isMainRoot(root){return !!root&&postLinks(root).includes(targetUrl);}
+      function replyTextWithLinks(root){
+        const text=clean(root?.innerText||'').slice(0,4000);
+        const links=externalLinksFromRoot(root);
+        return [text,...links].filter(Boolean).join('\n').slice(0,6000);
+      }
+
+      let main=null;
+      for(const a of document.querySelectorAll('a[href*="/post/"]')){
+        if(canonical(a.href||'')!==targetUrl)continue;
+        const root=compactRoot(a);
+        if(!root)continue;
+        if(!main||clean(root.innerText).length<clean(main.innerText).length)main=root;
+      }
+      const metaDescription=clean(document.querySelector('meta[property="og:description"]')?.content||document.querySelector('meta[name="description"]')?.content||'');
+      const sourceText=clean(main?.innerText||metaDescription||'').slice(0,5000);
+
+      const images=[],videos=[];
+      if(main){
+        for(const v of main.querySelectorAll('video')){const src=v.currentSrc||v.src||'';if(src&&!videos.includes(src))videos.push(src);}
+        for(const img of main.querySelectorAll('img')){
+          const src=img.currentSrc||img.src||'',alt=(img.alt||'').toLowerCase();
+          const r=img.getBoundingClientRect();
+          if(!src||r.width<160||r.height<160)continue;
+          if(/profile|프로필|avatar|사용자/.test(alt))continue;
+          if(!images.includes(src))images.push(src);
+        }
+      }
+
+      const authorReplies=[],seen=new Set(),authorRoots=new Set();
+      const authorAnchors=[...document.querySelectorAll('a[href]')].filter(a=>sameUserHref(a.href||a.getAttribute('href')||''));
+      for(const a of authorAnchors){
+        const root=compactRoot(a);
+        if(!root||root===main||isMainRoot(root))continue;
+        authorRoots.add(root);
+      }
+      for(const block of document.querySelectorAll('article,[role="article"]')){
+        if(block===main||isMainRoot(block))continue;
+        const anchors=[...block.querySelectorAll('a[href]')];
+        if(anchors.some(a=>sameUserHref(a.href||a.getAttribute('href')||'')))authorRoots.add(block);
+      }
+      for(const root of authorRoots){
+        const reply=replyTextWithLinks(root);
+        if(!reply||reply.length<8||seen.has(reply))continue;
+        seen.add(reply);
+        authorReplies.push(reply);
+      }
+
+      const allAffiliateLinks=[];
+      for(const reply of authorReplies){
+        const matches=reply.match(/https?:\/\/[^\s)\]}>,]+/gi)||[];
+        for(const m of matches){if(/coupang|naver/i.test(m)&&!allAffiliateLinks.includes(m))allAffiliateLinks.push(m);}
+      }
+      return{
+        sourceText,
+        authorReplies:authorReplies.slice(0,15),
+        images:images.slice(0,10),
+        videos:videos.slice(0,5),
+        hasVideo:videos.length>0,
+        exactUrl:canonical(location.href)===targetUrl,
+        metaDescription,
+        authorAnchorCount:authorAnchors.length,
+        authorRootCount:authorRoots.size,
+        affiliateLinkCount:allAffiliateLinks.length
+      };
+    },{username,sourceUrl:url});
+
+    const sourceText=String(data.sourceText||data.metaDescription||'').trim();
+    if(!sourceText)throw new Error('Threads 원문 텍스트를 읽지 못했습니다.');
+    console.log(`[Threads detail] @${username} source=${sourceText.length} replies=${(data.authorReplies||[]).length} authorAnchors=${data.authorAnchorCount||0} authorRoots=${data.authorRootCount||0} affiliateLinks=${data.affiliateLinkCount||0} images=${(data.images||[]).length} videos=${(data.videos||[]).length}`);
+    return{
+      sourceText,
+      authorReplies:(data.authorReplies||[]).filter(Boolean),
+      images:data.images||[],
+      videos:data.videos||[],
+      hasVideo:!!data.hasVideo,
+      exactUrl:!!data.exactUrl
+    };
+  } finally {
+    if(context)try{await context.close();}catch{}
+    if(browser)try{await browser.close();}catch{}
+  }
+}
+
+async function mapWithConcurrency(items,concurrency,worker){
+  const results=[];let cursor=0;
+  async function run(){while(true){const i=cursor++;if(i>=items.length)return;try{results[i]=await worker(items[i],i);}catch(err){results[i]={error:err};}}}
+  await Promise.all(Array.from({length:Math.min(concurrency,items.length)},run));
+  return results;
+}
+
+async function collectBenchmarkMaterials({limit=10}={}){
+  const accounts=shuffle(listBenchmarkAccounts());
+  if(!accounts.length)throw new Error('관리자 페이지에서 소재 참고 계정을 먼저 등록해주세요.');
+  const sample=accounts.slice(0,Math.min(accounts.length,12));
+  let browser,context;
+  try{
+    ({browser,context}=await openBrowser());
+    const perAccount=Math.max(8,Math.ceil(limit/Math.max(1,sample.length))+4);
+    const scanned=await mapWithConcurrency(sample,4,async account=>(await collectProfilePostsWithContext(context,account.username,{limit:perAccount})).filter(x=>!isUsedPost(x.url)));
+    const pools=scanned.filter(Array.isArray).filter(x=>x.length),all=[];let round=0;
+    while(all.length<limit&&pools.some(p=>p.length>round)){
+      for(const pool of shuffle(pools)){if(all.length>=limit)break;if(pool[round])all.push(pool[round]);}
+      round++;
+    }
+    console.log(`[Threads benchmark] accounts=${sample.length} pools=${pools.length} collected=${all.length} requested=${limit}`);
+    return all.slice(0,limit);
+  } finally {
+    if(context)try{await context.close();}catch{}
+    if(browser)try{await browser.close();}catch{}
+  }
+}
+
 module.exports={listBenchmarkAccounts,addBenchmarkAccount,addBenchmarkAccountsBulk,deleteBenchmarkAccount,markUsedPost,collectBenchmarkMaterials,collectPostDetails,collectProfilePosts};
