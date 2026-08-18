@@ -19,7 +19,49 @@ function trimToLimit(text,limit){const n=String(text||'').trim();const cap=Math.
 function cleanCommentLine(line){return String(line||'').replace(/\s+/g,' ').trim();}
 function compactRecipePrefix(prefix,limit){const cap=Math.max(0,Number(limit)||0);if(!cap)return'';const raw=String(prefix||'').replace(/\r/g,'').trim();if(!raw)return'';if(raw.length<=cap)return raw;const lines=raw.split('\n').map(cleanCommentLine).filter(Boolean);const ingredientIdx=lines.findIndex(x=>/재료/.test(x));const methodIdx=lines.findIndex(x=>/(만드는\s*법|조리\s*법|만들기)/.test(x));const isRecipe=ingredientIdx>=0||methodIdx>=0;if(!isRecipe){const out=[];let used=0;for(const line of lines){const add=(out.length?1:0)+line.length;if(used+add>cap)break;out.push(line);used+=add;}return out.join('\n');}const ingredientHeader='🥘 재료';const methodHeader='🍳 만드는 법';let ingredients=[];let methods=[];const ingStart=ingredientIdx>=0?ingredientIdx+1:0;const ingEnd=methodIdx>ingStart?methodIdx:lines.length;for(const line of lines.slice(ingStart,ingEnd)){const cleaned=line.replace(/^[▪•·\-–—*✅\s]+/,'').trim();if(cleaned&&!/^(재료|만드는\s*법|조리\s*법)$/i.test(cleaned))ingredients.push(cleaned);}if(methodIdx>=0){for(const line of lines.slice(methodIdx+1)){const cleaned=line.replace(/^\s*\d+[.)]\s*/,'').replace(/^[▪•·\-–—*✅\s]+/,'').trim();if(cleaned)methods.push(cleaned);}}if(!ingredients.length&&ingredientIdx>=0){const inline=lines[ingredientIdx].replace(/^.*?재료\s*[:：]?\s*/,'').trim();if(inline)ingredients=[inline];}if(!methods.length&&methodIdx>=0){const inline=lines[methodIdx].replace(/^.*?(?:만드는\s*법|조리\s*법|만들기)\s*[:：]?\s*/,'').trim();if(inline)methods=[inline];}const render=(ings,steps)=>{const a=ings.length?`${ingredientHeader}\n${ings.join(', ')}`:'';const b=steps.length?`${methodHeader}\n${steps.map((x,i)=>`${i+1}. ${x}`).join('\n')}`:'';return[a,b].filter(Boolean).join('\n\n');};let ing=ingredients.slice(0,8),steps=methods.slice(0,4),out=render(ing,steps);while(out.length>cap&&steps.length>1){steps.pop();out=render(ing,steps);}while(out.length>cap&&ing.length>3){ing.pop();out=render(ing,steps);}if(out.length<=cap&&ing.length&&steps.length)return out;const minIng=ingredients.slice(0,3);const minSteps=methods.slice(0,1);out=render(minIng,minSteps);if(out.length<=cap&&minIng.length&&minSteps.length)return out;const safe=[];let used=0;for(const line of lines){const add=(safe.length?1:0)+line.length;if(used+add>cap)break;safe.push(line);used+=add;}return safe.join('\n');}
 function buildDoubleLinkComment(account,prefix,link,maxLength=490){const cap=Math.min(490,Math.max(1,Number(maxLength)||490));const l=String(link||'').trim();let disclosure=isCoupangLink(l)?buildDisclosureOnly(account):'';const links=l?`${l}\n${l}`:'';let tail=[links,disclosure].filter(Boolean).join('\n\n');if(tail.length>cap&&isCoupangLink(l)){disclosure=DEFAULT_COUPANG_DISCLOSURE;tail=[links,disclosure].filter(Boolean).join('\n\n');}if(tail.length>cap)throw new Error(`댓글 필수영역(링크 2개+고지문)이 Threads ${cap}자 제한을 초과했습니다: ${tail.length}자`);const available=cap-tail.length-(tail?2:0);const head=compactRecipePrefix(prefix,available);const out=[head,tail].filter(Boolean).join('\n\n');if(out.length>cap)throw new Error(`댓글 길이 조립 오류: ${out.length}/${cap}자`);return out;}
-function formatThreadsBody(text){let t=String(text||'').replace(/\r/g,'').trim();if(!t)return t;const existing=t.split('\n').map(x=>x.trim()).filter(Boolean);if(existing.length>=3)return existing.join('\n');t=t.replace(/([.!?]|ㅋㅋ|ㅎㅎ)(?=\s+)/g,'$1\n').replace(/\n{2,}/g,'\n');let lines=t.split('\n').map(x=>x.trim()).filter(Boolean);if(lines.length<3&&t.length>90){const chunks=[];for(const line of lines){if(line.length<=55){chunks.push(line);continue;}const parts=line.split(/(?<=[.!?])\s+/).filter(Boolean);if(parts.length>1)chunks.push(...parts);else chunks.push(line);}lines=chunks;}return lines.slice(0,7).join('\n').trim();}
+
+function splitThreadsSentences(text){
+  let t=String(text||'').replace(/\r/g,' ').replace(/\n+/g,' ').replace(/\s+/g,' ').trim();
+  if(!t)return[];
+  const chunks=t.split(/(?<=[.!?])\s+|(?<=ㅋㅋ)\s+|(?<=ㅎㅎ)\s+/).map(x=>x.trim()).filter(Boolean);
+  const out=[];
+  for(const chunk of chunks){
+    if(chunk.length<=54){out.push(chunk);continue;}
+    let rest=chunk;
+    while(rest.length>54){
+      let cut=Math.max(rest.lastIndexOf(' ',54),rest.lastIndexOf(',',54));
+      if(cut<24)cut=54;
+      out.push(rest.slice(0,cut).trim());
+      rest=rest.slice(cut).trim();
+    }
+    if(rest)out.push(rest);
+  }
+  return out.filter(Boolean);
+}
+function formatThreadsBody(text){
+  const sentences=splitThreadsSentences(text).slice(0,8);
+  if(!sentences.length)return'';
+  const paragraphs=[];
+  let i=0;
+  while(i<sentences.length&&paragraphs.length<5){
+    const remaining=sentences.length-i;
+    const remainingSlots=5-paragraphs.length;
+    let take=1;
+    if(remaining>remainingSlots&&paragraphs.length>0)take=2;
+    if(paragraphs.length===0&&sentences[i].length<30&&remaining>=2&&sentences[i+1].length<32)take=2;
+    const block=sentences.slice(i,i+take).join('\n').trim();
+    if(block)paragraphs.push(block);
+    i+=take;
+  }
+  if(i<sentences.length&&paragraphs.length){
+    const extra=sentences.slice(i).join(' ').trim();
+    if(extra){
+      const last=paragraphs.pop();
+      paragraphs.push(`${last}\n${extra}`);
+    }
+  }
+  return paragraphs.filter(Boolean).slice(0,5).join('\n\n').trim();
+}
 
 const uploadsDir=path.join(__dirname,'uploads');
 function localPathFromUploadUrl(url){if(!url)return null;const marker='/uploads/';const idx=url.indexOf(marker);if(idx===-1)return null;return path.join(uploadsDir,url.slice(idx+marker.length));}
@@ -37,6 +79,6 @@ async function runContentOnlyAutopilot(account,target){const r=await generateCon
 function chooseSourceMedia(result){const videos=Array.isArray(result?.sourceVideos)?result.sourceVideos.filter(Boolean):[];const images=Array.isArray(result?.sourceImages)?result.sourceImages.filter(Boolean):[];if(videos.length>=1)return{videoUrl:videos[0],imageUrl:null,extraImageUrl:null,imageSourceLabel:'Threads 소재 원본 영상 1개'};if(images.length>=2)return{videoUrl:null,imageUrl:images[0],extraImageUrl:images[1],imageSourceLabel:'Threads 소재 원본 이미지 2장'};if(images.length===1)return{videoUrl:null,imageUrl:images[0],extraImageUrl:null,imageSourceLabel:'Threads 소재 원본 이미지 1장'};return{videoUrl:null,imageUrl:result?.product?.image||null,extraImageUrl:null,imageSourceLabel:result?.product?.image?'Threads 미디어 없음 → 쿠팡 상품 이미지 1장':'미디어 없음'};}
 function classifyCoupangUrl(raw){try{const u=new URL(String(raw||'').trim());const host=u.hostname.toLowerCase();const alreadyAffiliate=host==='link.coupang.com'||host.endsWith('.link.coupang.com')||/lptag|subid|aff/i.test(u.search);const plainCoupang=host==='coupang.com'||host==='www.coupang.com'||host.endsWith('.coupang.com');return{valid:/^https?:$/i.test(u.protocol),alreadyAffiliate,plainCoupang,host};}catch{return{valid:false,alreadyAffiliate:false,plainCoupang:false,host:''};}}
 async function makeAffiliateLink(account,result){const raw=String(result?.product?.url||'').trim();if(!raw)throw new Error('쿠팡 상품 URL이 비어 있어 자동발행을 중단했습니다');const info=classifyCoupangUrl(raw);if(!info.valid||!info.plainCoupang)throw new Error(`쿠팡 상품 URL 형식이 올바르지 않습니다: ${raw.slice(0,120)}`);if(info.alreadyAffiliate){console.log(`[Coupang][LINK] 이미 파트너스 링크라 딥링크 변환 생략 host=${info.host}`);return raw;}try{const links=await coupangApi.createDeeplink(account.id,[raw]);const first=Array.isArray(links)?links[0]:null;const affiliate=String(first?.shortenUrl||first?.landingUrl||first?.originalUrl||'').trim();if(!affiliate)throw new Error('쿠팡 파트너스 링크 생성 결과가 비어 있습니다');console.log(`[Coupang][LINK] 일반 상품 URL → 딥링크 변환 성공`);return affiliate;}catch(err){const msg=String(err?.message||err?.response?.data?.rMessage||'');if(/url convert failed/i.test(msg)){console.warn(`[Coupang][LINK] 딥링크 재변환 거부 → 검색 API productUrl 그대로 사용`);return raw;}throw err;}}
-async function runAutopilotOnce(account){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=chooseSourceMedia(result);saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V12 BODY-LINEBREAKS] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
+async function runAutopilotOnce(account){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=chooseSourceMedia(result);saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V13 FIXED-PARAGRAPH-LAYOUT] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
 function startAutopilotJob(){const nextRunAt=new Map();cron.schedule('* * * * *',async()=>{const now=Date.now();for(const s of listAllAccountsForSystem()){const account=getAccount(s.id);if(!account.autopilot_enabled){nextRunAt.delete(account.id);continue;}if(hasCoupangKeys(account)){const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown)continue;}const due=nextRunAt.get(account.id)||0;if(now<due)continue;nextRunAt.set(account.id,now+randomIntervalMinutes()*60*1000);try{await runAutopilotOnce(account);}catch(err){if(coupangApi.isRateLimitError?.(err)){console.error(`[완전자동화 중단][Coupang rate limit] account #${account.id}: ${err.message}`);continue;}console.error(`[완전자동화 실패] account #${account.id}:`,err.response?.data||err.message);}}});}
 module.exports={startPublishJob,startInsightsJob,startAutopilotJob};
