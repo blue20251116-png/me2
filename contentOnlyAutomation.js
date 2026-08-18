@@ -31,6 +31,42 @@ async function callOpenAI(accountId, system, user, { maxTokens = 1000, json = fa
   return json ? JSON.parse(text) : text;
 }
 
+function looksBloggy(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  const bad = [
+    /(?:입니다|합니다|됩니다|드립니다|보세요|해보세요|추천드립니다)[.!]?/,
+    /풍미가\s*(?:배가|더해|살아)/,
+    /특별한\s*(?:저녁|식사|한\s*끼)/,
+    /고급\s*요리/,
+    /간단하면서도/,
+    /손쉽게\s*(?:만들|완성)/,
+    /맛과\s*영양/,
+    /입맛을\s*사로잡/,
+    /꼭\s*시도해/,
+    /즐겨보세요/,
+    /완벽한\s*(?:메뉴|선택)/,
+  ];
+  return bad.some(r => r.test(t)) || (t.match(/(?:요\.|니다\.)/g) || []).length >= 2;
+}
+
+async function humanizeHook(accountId, hook, dishName) {
+  let text = String(hook || '').trim();
+  if (!text || !looksBloggy(text)) return text;
+  try {
+    const d = await callOpenAI(accountId,
+      `한국 Threads 말투 교정기다. 블로그/광고/AI 문체를 실제 사람이 친구한테 툭 말하는 짧은 반말로 바꾼다. 2~5줄. 문장은 짧게 끊고 필요하면 ㅋㅋ, 헐, 이거, 생각보다 같은 생활어를 자연스럽게 한두 번만 쓴다. 음슴체 금지. 존댓말 금지. '~입니다/~합니다/~됩니다/~해보세요/~추천합니다', '풍미가 배가된다', '고급 요리', '특별한 식사', '완벽한 메뉴', '간단하면서도' 같은 블로그 표현 금지. 과장된 효능이나 해보지 않은 개인 경험은 만들지 않는다. 제목, 해시태그, 링크, 광고문구 금지. JSON={"text":""}만 출력한다.`,
+      `요리:${dishName}\n원문:${text}`,
+      { maxTokens: 300, json: true, temperature: 0.65 }
+    );
+    const fixed = String(d.text || '').trim();
+    if (fixed) text = fixed;
+  } catch (e) {
+    console.log(`[ContentOnly][Tone] 교정 실패: ${e.message}`);
+  }
+  return text;
+}
+
 async function buildImageQueries(accountId, dish) {
   const queries = [];
   const push = (q) => {
@@ -134,15 +170,19 @@ async function generateRecipe(accountId, target) {
   for (const topic of topics.slice(0, 6)) {
     try {
       const r = await callOpenAI(accountId,
-        `한국 Threads 레시피 에디터다. JSON만 출력한다. 정확한 재료와 계량, 실제 따라할 수 있는 조리 순서 3~6단계를 만든다. 자연스러운 반말을 사용하고 음슴체는 금지한다. 상품/구매/광고/제휴 이야기는 절대 넣지 않는다. hook은 실제 사람이 툭 쓴 것 같은 2~4줄 생활 상황으로 만든다. JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","amount":""}],"steps":[""]}`,
-        `주제: ${topic}`, { maxTokens: 1100, json: true });
+        `한국 Threads 레시피 에디터다. JSON만 출력한다. 정확한 재료와 계량, 실제 따라할 수 있는 조리 순서 3~6단계를 만든다.
+말투 규칙이 가장 중요하다. hook은 실제 한국인이 Threads에 툭 쓰는 반말 2~4줄이다. 한 줄은 짧게 끊는다. 설명문/블로그/기사체 금지. 음슴체 금지. 존댓말 금지. '~입니다/~합니다/~됩니다/~해보세요/~추천합니다', '풍미가 배가된다', '고급 요리', '특별한 식사', '완벽한 메뉴', '간단하면서도', '손쉽게 완성' 같은 표현은 절대 쓰지 않는다. 필요하면 ㅋㅋ, 헐, 이거, 생각보다 같은 생활어를 한두 번 자연스럽게 쓸 수 있다. 상품/구매/광고/제휴 이야기는 절대 넣지 않는다. 가짜 개인경험은 만들지 않는다.
+JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","amount":""}],"steps":[""]}`,
+        `주제: ${topic}`, { maxTokens: 1100, json: true, temperature: 0.75 });
       const dishName = String(r.dishName || topic).trim();
       const ingredients = Array.isArray(r.ingredients) ? r.ingredients.filter(x => x?.name && x?.amount).slice(0, 10) : [];
       const steps = Array.isArray(r.steps) ? r.steps.map(x => String(x || '').trim()).filter(Boolean).slice(0, 6) : [];
       if (!ingredients.length || !steps.length) throw new Error('레시피 내용 부족');
       const img = await pickPhotos(accountId, dishName);
       if (!img.photos.length) { console.log(`[ContentOnly][Recipe] 이미지 없음 → 다음 주제: ${dishName}`); continue; }
-      const text = `${String(r.hook || `${dishName} 해먹고 싶을 때`).trim()}\n\n재료랑 만드는 순서는 댓글에 적어둘게.`;
+      let hook = String(r.hook || `${dishName} 이거 생각보다 간단하네ㅋㅋ`).trim();
+      hook = await humanizeHook(accountId, hook, dishName);
+      const text = `${hook}\n\n재료랑 만드는 순서는 댓글에 적어둘게.`;
       const ing = ingredients.map(x => `▪ ${String(x.name).trim()} ${String(x.amount).trim()}`).join('\n');
       const cooking = steps.map((s, i) => `${i + 1}. ${s}`).join('\n');
       const recipeCommentText = `✅ ${dishName} (${String(r.servings || '2인분').trim()} 기준)\n\n${ing}\n\n✅ 만드는 법\n${cooking}`;
@@ -160,9 +200,11 @@ async function generateRecipe(accountId, target) {
 }
 
 async function generateDailyStory(accountId, target) {
-  const system = `너는 한국 Threads에서 실제 사람이 툭 쓴 듯한 짧은 일상 공감글을 쓴다. 상품 광고나 구매 유도는 절대 하지 않는다. 3~7줄, 자연스러운 반말, 음슴체 금지. 제목/번호/해시태그/링크/이모지는 넣지 않는다. 가짜 경험, 효능, 구체적인 날씨 단정도 하지 않는다. 집, 회사, 식사, 정리, 출퇴근, 주말, 잠, 인간관계, 소비습관 같은 평범한 생활 소재 중 하나를 골라 매번 다르게 쓴다.`;
-  const text = await callOpenAI(accountId, system, `타겟: ${target || '전체'}\n오늘 Threads에 올릴 자연스러운 일상글 하나만 작성해.`, { maxTokens: 350, temperature: 1.0 });
-  return { text: text.replace(/^["'“”]+|["'“”]+$/g, '').trim(), link: null, imageUrl: null, extraImageUrl: null, keyword: '일상', trendNote: '쿠팡 API 없음 · 순수 일상형', target };
+  const system = `너는 한국 Threads에서 실제 사람이 툭 쓴 듯한 짧은 일상 공감글을 쓴다. 상품 광고나 구매 유도는 절대 하지 않는다. 3~7줄, 자연스러운 반말, 음슴체 금지. 제목/번호/해시태그/링크/이모지는 넣지 않는다. 가짜 경험, 효능, 구체적인 날씨 단정도 하지 않는다. 집, 회사, 식사, 정리, 출퇴근, 주말, 잠, 인간관계, 소비습관 같은 평범한 생활 소재 중 하나를 골라 매번 다르게 쓴다. 블로그/에세이/AI 문체 금지. '~입니다/~합니다/~됩니다/~해보세요', '현대인', '일상 속에서', '소소한 행복', '바쁜 하루', '특별한' 같은 상투어 금지. 한 문장을 짧게 끊고 실제 대화처럼 쓴다.`;
+  let text = await callOpenAI(accountId, system, `타겟: ${target || '전체'}\n오늘 Threads에 올릴 자연스러운 일상글 하나만 작성해.`, { maxTokens: 350, temperature: 1.0 });
+  text = text.replace(/^["'“”]+|["'“”]+$/g, '').trim();
+  if (looksBloggy(text)) text = await humanizeHook(accountId, text, '일상');
+  return { text, link: null, imageUrl: null, extraImageUrl: null, keyword: '일상', trendNote: '쿠팡 API 없음 · 순수 일상형', target };
 }
 
 module.exports = { generateRecipe, generateDailyStory };
