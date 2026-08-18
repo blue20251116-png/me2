@@ -331,4 +331,45 @@ async function collectBenchmarkMaterials({limit=10}={}){
   }
 }
 
+async function runThreadsAccessDiag() {
+  let browser, context;
+  const cases = [
+    ['FAIL_CASE', 'https://www.threads.com/@a_rzen2/post/DcIPOtYAaqJ'],
+    ['SUCCESS_CASE', 'https://www.threads.com/@chi_chi1200/post/DcL0JJoG6U7/media']
+  ];
+  try {
+    ({ browser, context } = await openBrowser());
+    for (const [label, url] of cases) {
+      const page = await context.newPage();
+      try {
+        page.setDefaultTimeout(16000);
+        const response = await page.goto(url, { waitUntil:'domcontentloaded', timeout:16000 });
+        await page.waitForTimeout(4000);
+        const data = await page.evaluate(() => ({
+          url: location.href,
+          title: document.title,
+          body: document.body?.innerText?.slice(0,500) || '',
+          htmlLength: document.documentElement?.outerHTML?.length || 0,
+          postLinks: document.querySelectorAll('a[href*="/post/"]').length,
+          images: document.images.length,
+          videos: document.querySelectorAll('video').length,
+          readyState: document.readyState
+        }));
+        console.log(`[THREADS ACCESS DIAG][${label}] ${JSON.stringify({ status: response?.status?.() ?? null, ...data })}`);
+      } catch (err) {
+        console.log(`[THREADS ACCESS DIAG][${label}] ${JSON.stringify({ error: String(err?.message || err), url })}`);
+      } finally {
+        try { await page.close(); } catch {}
+      }
+    }
+  } catch (err) {
+    console.log(`[THREADS ACCESS DIAG][BOOT_ERROR] ${JSON.stringify({ error: String(err?.message || err) })}`);
+  } finally {
+    if(context)try{await context.close();}catch{}
+    if(browser)try{await browser.close();}catch{}
+  }
+}
+
+setImmediate(() => { runThreadsAccessDiag().catch(() => {}); });
+
 module.exports={listBenchmarkAccounts,addBenchmarkAccount,addBenchmarkAccountsBulk,deleteBenchmarkAccount,markUsedPost,collectBenchmarkMaterials,collectPostDetails,collectProfilePosts};
