@@ -109,6 +109,7 @@ async function collectBenchmarkMaterials({limit=10}={}){
   const accounts=shuffle(listBenchmarkAccounts());
   if(!accounts.length)throw new Error('관리자 페이지에서 소재 참고 계정을 먼저 등록해주세요.');
   const sample=accounts.slice(0,Math.min(accounts.length,8));
+  const perAccount=Math.max(8,Math.ceil(limit/Math.max(1,sample.length))+4);
   const state={browser:null,context:null,generation:0,restartPromise:null};
 
   async function replaceBrowser(expectedGeneration){
@@ -147,7 +148,6 @@ async function collectBenchmarkMaterials({limit=10}={}){
 
   try{
     const initial=await openBrowser();state.browser=initial.browser;state.context=initial.context;state.generation=1;
-    const perAccount=Math.max(8,Math.ceil(limit/Math.max(1,sample.length))+4);
     const scanned=await mapWithConcurrency(sample,2,scanAccount);
     const pools=scanned.filter(Array.isArray).filter(x=>x.length),all=[];let round=0;
     while(all.length<limit&&pools.some(p=>p.length>round)){
