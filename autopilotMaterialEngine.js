@@ -69,11 +69,11 @@ function dedupeMaterials(items){
 function materialScore(i){
   const t=clean(i?.text);if(isEngagementBait(t))return-1000;
   let s=0;
-  if(i?.hasVideo||Number(i?.videoCount||0)>0)s+=3;
-  if(Number(i?.imageCount||0)>0||(Array.isArray(i?.images)&&i.images.length))s+=2;
+  if(i?.hasVideo||Number(i?.videoCount||0)>0)s+=2;
+  if(Number(i?.imageCount||0)>0||(Array.isArray(i?.images)&&i.images.length))s+=1;
   if(t.length>=40&&t.length<=1000)s+=4;else if(t.length>=20)s+=2;
   if(/(레시피|소스|양념|재료|만드는|볶|굽|끓|에어프라이어|큰술|스푼|\bT\b)/i.test(t))s+=5;
-  if(/(비밀|핵심|이거|댓글|진짜|ㅋㅋ|꿀템|사버|추천)/i.test(t))s+=2;
+  if(/(비밀|핵심|이거|댓글|진짜|ㅋㅋ|꿀템|사버|추천|구매|제품)/i.test(t))s+=3;
   if(hasExternalLink(t))s-=30;
   return s+Math.random();
 }
@@ -99,20 +99,23 @@ async function enrichThreadsMaterial(i){
   if(!hasAffiliateLink(authorReplies))throw new Error('작성자 댓글에 쿠팡/네이버 쇼핑 링크가 없는 소재');
   return{...i,sourceText,authorReplies,images,videos};
 }
-async function pickQualifiedThreadsMaterial(){
+async function collectQualifiedThreadsMaterials(maxQualified=6){
   const candidates=await pickThreadsMaterials();
+  const out=[];
   let lastError=null;
   for(const candidate of candidates.slice(0,60)){
     try{
       const material=await enrichThreadsMaterial(candidate);
-      console.log(`[AutopilotV3][Material] 채택 @${material.username||'-'} 작성자 쇼핑링크 확인 source=${material.url}`);
-      return material;
+      out.push(material);
+      console.log(`[AutopilotV3][Material] 후보채택 ${out.length}/${maxQualified} @${material.username||'-'} 쇼핑링크 확인 source=${material.url}`);
+      if(out.length>=maxQualified)break;
     }catch(e){
       lastError=e;
       console.log(`[AutopilotV3][Material] 제외 @${candidate.username||'-'} reason="${e.message}" source=${candidate.url}`);
     }
   }
-  throw new Error(`조건에 맞는 소재를 찾지 못했습니다${lastError?`: ${lastError.message}`:''}`);
+  if(!out.length)throw new Error(`조건에 맞는 소재를 찾지 못했습니다${lastError?`: ${lastError.message}`:''}`);
+  return out;
 }
 function grounded(term,evidence){
   const t=normalized(term),e=normalized(evidence);if(!t||!e)return false;
@@ -120,50 +123,61 @@ function grounded(term,evidence){
   const tokens=clean(term).split(/\s+/).map(normalized).filter(x=>x.length>=2);
   return tokens.length>0&&tokens.every(x=>e.includes(x));
 }
+function commerceTargetPrompt(){return `너는 Threads 쇼핑 소재의 실제 판매/추천 대상을 식별하는 검수자다. 본문과 작성자 댓글을 우선 보고, 이미지가 제공되면 보조 근거로만 사용한다. 화면에 보이는 주변 물건을 판매 대상으로 착각하지 않는다. 음식이면 완성요리와 실제 제휴 핵심재료/소스/조미료를 구분한다. 브랜드/모델은 근거가 있을 때만 쓴다. searchTerms는 쿠팡에서 실제 상품을 찾기 좋은 검색어 최대 2개다. 단순 주제어(예: 운동, 다이어트, 일상)만 쓰지 말고 실제 구매 가능한 물건/식품명이어야 한다. JSON만 출력: {"kind":"product|food|recipe|lifestyle","soldObject":"","dish":"","promotedIngredient":"","searchTerms":[""],"confidence":0,"evidence":""}`;}
+function commerceTargetText(m){return `[Threads 본문]\n${m.sourceText.slice(0,4500)}\n\n[작성자 댓글]\n${m.authorReplies.slice(0,3500)||'(없음)'}`;}
+function normalizeVisionResult(d){
+  return{
+    kind:['product','food','recipe','lifestyle'].includes(d?.kind)?d.kind:'product',
+    soldObject:clean(d?.soldObject),dish:clean(d?.dish),promotedIngredient:clean(d?.promotedIngredient),
+    searchTerms:[...new Set((Array.isArray(d?.searchTerms)?d.searchTerms:[]).map(clean).filter(Boolean))].slice(0,2),
+    confidence:Math.max(0,Math.min(100,Number(d?.confidence)||0)),evidence:clean(d?.evidence).slice(0,300)
+  };
+}
 async function identifyCommerceTarget(accountId,m){
   const images=(Array.isArray(m.images)?m.images:[]).filter(Boolean).slice(0,3);
+  const system=commerceTargetPrompt();
+  const text=commerceTargetText(m);
+  if(images.length){
+    try{
+      const d=await callOpenAIVision(accountId,system,`${text}\n\n대표 시각자료 ${images.length}장.`,images,{maxTokens:1200,temperature:.1});
+      const result=normalizeVisionResult(d);
+      console.log(`[AutopilotV3][VISION TARGET] kind=${result.kind} sold="${result.soldObject||'-'}" dish="${result.dish||'-'}" ingredient="${result.promotedIngredient||'-'}" confidence=${result.confidence} terms="${result.searchTerms.join(' / ')}"`);
+      return result;
+    }catch(e){
+      console.warn(`[AutopilotV3][VISION TARGET] 이미지 분석 실패 → 텍스트 재시도: ${e.response?.status||'-'} ${e.response?.data?.error?.message||e.message}`);
+    }
+  }
   try{
-    const d=await callOpenAIVision(accountId,
-`너는 Threads 쇼핑 소재의 '실제로 판매/추천하는 대상'을 식별하는 검수자다. 본문·작성자 댓글·대표 이미지/영상 커버 장면을 함께 보고 판단한다.
-가장 중요한 규칙:
-- 화면에 보인다고 판매 대상이라고 단정하지 않는다. 본문에서 무엇을 칭찬/추천/구매유도하는지와 시각정보를 교차검증한다.
-- 예: 커피가 텀블러 안에 보여도 글이 보온, 뚜껑, 휴대성을 말하면 판매 대상은 '텀블러'다. 반대로 원두/맛/향/카페인/커피 자체를 말하면 판매 대상은 '커피'다.
-- 음식 사진이면 완성요리 자체와 제휴하려는 핵심 재료/소스/조미료를 구분한다. 요리명은 dish, 실제 쿠팡에서 찾을 대상은 soldObject/searchTerms에 둔다.
-- 주변 소품(접시, 컵, 냄비, 휴대폰, 배경 가구)을 판매 대상으로 착각하지 않는다.
-- 브랜드/정확한 모델명은 화면이나 글에 명확한 근거가 있을 때만 쓴다. 근거 없으면 일반 카테고리명으로 쓴다.
-- searchTerms는 쿠팡 API를 아끼기 위해 가장 정확한 검색어 최대 2개만 만든다. 1순위는 구체적이되 과도한 모델 추측은 금지한다.
-JSON만 출력: {"kind":"product|food|recipe|lifestyle","soldObject":"","dish":"","promotedIngredient":"","searchTerms":[""],"confidence":0,"evidence":""}`,
-`[Threads 본문]\n${m.sourceText.slice(0,4500)}\n\n[작성자 댓글]\n${m.authorReplies.slice(0,3500)||'(없음)'}\n\n대표 시각자료 ${images.length}장. 영상 소재는 수집된 대표 이미지/커버 장면을 시각 근거로 사용하라.`,
-      images,{maxTokens:1200,temperature:.1});
-    const result={
-      kind:['product','food','recipe','lifestyle'].includes(d.kind)?d.kind:'product',
-      soldObject:clean(d.soldObject),
-      dish:clean(d.dish),
-      promotedIngredient:clean(d.promotedIngredient),
-      searchTerms:[...new Set((Array.isArray(d.searchTerms)?d.searchTerms:[]).map(clean).filter(Boolean))].slice(0,2),
-      confidence:Math.max(0,Math.min(100,Number(d.confidence)||0)),
-      evidence:clean(d.evidence).slice(0,300)
-    };
-    console.log(`[AutopilotV3][VISION TARGET] kind=${result.kind} sold="${result.soldObject||'-'}" dish="${result.dish||'-'}" ingredient="${result.promotedIngredient||'-'}" confidence=${result.confidence} terms="${result.searchTerms.join(' / ')}"`);
+    const d=await callOpenAI(accountId,system,text,{maxTokens:1200,temperature:.1});
+    const result=normalizeVisionResult(d);
+    console.log(`[AutopilotV3][TEXT TARGET] kind=${result.kind} sold="${result.soldObject||'-'}" dish="${result.dish||'-'}" ingredient="${result.promotedIngredient||'-'}" confidence=${result.confidence} terms="${result.searchTerms.join(' / ')}"`);
     return result;
   }catch(e){
-    console.warn(`[AutopilotV3][VISION TARGET] 실패 → 텍스트 분석만 사용: ${e.message}`);
+    console.warn(`[AutopilotV3][TEXT TARGET] 실패: ${e.response?.status||'-'} ${e.response?.data?.error?.message||e.message}`);
     return{kind:'product',soldObject:'',dish:'',promotedIngredient:'',searchTerms:[],confidence:0,evidence:''};
   }
 }
+function purchasableTerm(term){
+  const t=clean(term);
+  if(!t)return false;
+  if(/^(운동|다이어트|건강|요리|레시피|일상|생활|식단|간식|아침|점심|저녁|홈트|헬스)$/i.test(t))return false;
+  return t.length>=2;
+}
 async function analyzeMaterial(accountId,m,target,vision){
   const evidence=`${m.sourceText}\n${m.authorReplies}`;
-  const visionText=vision&&vision.confidence>=55?JSON.stringify(vision):'(Vision 확신 부족 또는 없음)';
+  const visionText=vision&&vision.confidence>=45?JSON.stringify(vision):'(Vision/Text 타겟 확신 부족 또는 없음)';
   const d=await callOpenAI(accountId,
-    `너는 한국 Threads 소재를 쿠팡파트너스 상품과 연결하는 편집자다. Threads 소재가 무조건 먼저다. 본문/작성자댓글과 Vision 검수 결과를 교차검증해 실제 판매 대상을 정한다. 화면에 등장한 물건과 판매하는 물건을 혼동하지 않는다. 특히 '커피가 담긴 텀블러'처럼 내용물과 용기가 함께 있으면 본문이 어떤 기능/효과를 강조하는지로 판매 대상을 확정한다. mode(recipe/product/lifestyle), topic, secretTerm, searchTerms, facts, hookStyle을 판단한다. 레시피는 완성요리와 제휴 핵심재료를 구분한다. Vision confidence가 70 이상이면 그 soldObject/searchTerms를 강하게 우선하되 본문과 명백히 모순되면 본문을 우선한다. 쿠팡 검색어는 최대 2개만 출력한다. 브랜드/모델은 근거가 있을 때만 쓴다. 억지 상품 연결 금지. JSON만 출력: {"mode":"recipe|product|lifestyle","topic":"","secretTerm":"","hideInBody":true,"searchTerms":[""],"facts":[""],"hookStyle":""}`,
-    `타겟:${target||'전체'}\n[원 게시물]\n${m.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${m.authorReplies.slice(0,5000)||'(없음)'}\n[Vision 판매대상 검수]\n${visionText}`,
+    `너는 한국 Threads 쇼핑 소재를 쿠팡파트너스 상품과 연결하는 편집자다. 실제 구매 가능한 상품을 식별한다. mode(recipe/product/lifestyle), topic, secretTerm, searchTerms, facts, hookStyle을 판단한다. searchTerms는 최대 2개이며 반드시 쿠팡에서 구매 가능한 구체적인 물건/식품/소스명이어야 한다. '운동','다이어트','일상','레시피' 같은 추상 주제어만 출력하면 안 된다. 작성자 댓글에 쇼핑 링크가 있다는 점을 고려해 무엇을 판매하는 글인지 최대한 구체적으로 추론하되 근거 없는 브랜드/모델은 만들지 않는다. JSON만 출력: {"mode":"recipe|product|lifestyle","topic":"","secretTerm":"","hideInBody":true,"searchTerms":[""],"facts":[""],"hookStyle":""}`,
+    `타겟:${target||'전체'}\n[원 게시물]\n${m.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${m.authorReplies.slice(0,5000)||'(없음)'}\n[판매대상 검수]\n${visionText}`,
     {maxTokens:1200,temperature:.15}
   );
-  let terms=[...new Set((Array.isArray(d.searchTerms)?d.searchTerms:[]).map(clean).filter(Boolean))].slice(0,2);
-  if(vision?.confidence>=70&&vision.searchTerms?.length){
-    terms=[...new Set([...vision.searchTerms,...terms].map(clean).filter(Boolean))].slice(0,2);
-  }else if(d.mode!=='recipe'){
-    terms=terms.filter(t=>grounded(t,evidence));
+  let terms=[...new Set((Array.isArray(d.searchTerms)?d.searchTerms:[]).map(clean).filter(purchasableTerm))].slice(0,2);
+  if(vision?.confidence>=55&&vision.searchTerms?.length){
+    terms=[...new Set([...vision.searchTerms,...terms].map(clean).filter(purchasableTerm))].slice(0,2);
+  }
+  if(d.mode!=='recipe'&&vision?.confidence<55){
+    const groundedTerms=terms.filter(t=>grounded(t,evidence));
+    if(groundedTerms.length)terms=groundedTerms;
   }
   return{mode:['recipe','product','lifestyle'].includes(d.mode)?d.mode:'lifestyle',topic:clean(d.topic)||vision?.soldObject||vision?.dish||'Threads 소재',secretTerm:clean(d.secretTerm)||vision?.promotedIngredient||'',hideInBody:d.mode==='recipe'?true:d.hideInBody!==false,searchTerms:terms,facts:Array.isArray(d.facts)?d.facts.map(clean).filter(Boolean).slice(0,10):[],hookStyle:clean(d.hookStyle),vision};
 }
@@ -181,48 +195,91 @@ function scrubSecret(text,secret,product){
   for(const v of[secret,product]){const t=clean(v);if(t.length>=2)out=out.split(t).join('비밀 재료');}
   return out;
 }
+function hasIngredientHeading(text){return /(?:🥘|✅|▪|■)?\s*재료\s*[:：]?/i.test(String(text||''));}
+function hasMethodHeading(text){return /(?:🍳|✅|▪|■)?\s*(?:만드는\s*법|조리\s*방법|만들기)\s*[:：]?/i.test(String(text||''));}
+function normalizeRecipeHeadings(text){
+  let out=String(text||'').trim();
+  out=out.replace(/(?:🥘\s*)?재료\s*[:：]?/i,'🥘 재료');
+  out=out.replace(/(?:🍳\s*)?(?:만드는\s*법|조리\s*방법|만들기)\s*[:：]?/i,'🍳 만드는 법');
+  return out;
+}
+async function repairRecipeComment(accountId,{commentLead,material,analysis,productName}){
+  let fixed=normalizeRecipeHeadings(commentLead);
+  if(hasIngredientHeading(fixed)&&hasMethodHeading(fixed))return fixed;
+  try{
+    const d=await callOpenAI(accountId,
+      `레시피 댓글 포맷 교정기다. 기존 내용을 최대한 보존하면서 반드시 '🥘 재료' 섹션과 '🍳 만드는 법' 섹션을 둘 다 만든다. 실제로 따라할 수 있게 작성하되 쿠팡 상품명/브랜드명/정확한 비밀소스 이름은 쓰지 말고 핵심 제휴재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다. 링크와 광고고지는 쓰지 않는다. JSON만 출력: {"commentLead":""}`,
+      `[기존 댓글]\n${commentLead}\n\n[원문]\n${material.sourceText.slice(0,3500)}\n\n내부 비밀재료:${analysis.secretTerm||productName}`,
+      {maxTokens:1800,temperature:.25}
+    );
+    fixed=normalizeRecipeHeadings(String(d.commentLead||''));
+  }catch(e){console.warn(`[AutopilotV3][RECIPE REPAIR] AI 교정 실패: ${e.message}`);}
+  if(!hasIngredientHeading(fixed))fixed=`🥘 재료\n- 원문에 나온 기본 재료\n- 비밀 재료\n\n${fixed}`.trim();
+  if(!hasMethodHeading(fixed))fixed=`${fixed}\n\n🍳 만드는 법\n1. 원문 흐름에 맞게 재료를 준비한다.\n2. 비밀 재료를 더해 알맞게 조리한다.`.trim();
+  return fixed;
+}
 async function generatePost(accountId,{material,analysis,product,target}){
   const productName=clean(product?.name);
   const d=await callOpenAI(accountId,
 `너는 한국 Threads 글 편집자다. Threads 소재를 중심으로 새 글을 쓴다. 원문 문장 복사는 금지한다. 확인되지 않은 개인 경험을 만들지 않는다.
 [레시피]
-본문 text는 3~7줄의 짧은 후킹글이다. 요리 핵심 장면을 보여주고 정확한 제휴 소스/핵심재료 이름은 숨긴다. 끝에는 재료와 만드는 법을 댓글에서 보게 자연스럽게 유도한다.
-commentLead에는 실제 따라할 수 있는 레시피를 작성한다: 🥘 재료 + 🍳 만드는 법. 원문에 부족한 일반적인 재료/단계는 요리가 실제로 성립하도록 합리적으로 보완할 수 있다. 쿠팡 연결 핵심재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다. commentLead 어디에도 secretTerm, 쿠팡 상품명, 브랜드명, 정확한 비밀소스 이름을 적지 않는다. 링크와 광고고지도 쓰지 않는다.
+본문 text는 3~7줄의 짧은 후킹글이다. 요리 핵심 장면을 보여주고 정확한 제휴 소스/핵심재료 이름은 숨긴다. commentLead는 반드시 첫 섹션 제목을 '🥘 재료', 두 번째 섹션 제목을 '🍳 만드는 법'으로 정확히 쓴다. 원문에 부족한 일반 재료/단계는 요리가 성립하도록 보완할 수 있다. 쿠팡 연결 핵심재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다. 링크와 광고고지는 쓰지 않는다.
 [일반상품/생활]
-본문 text에는 Threads 소재 기반의 짧고 자연스러운 후킹/상황 글만 쓴다. 제품 스펙 목록, '✅ 핵심만', 쿠팡 링크, 광고고지, 상품명 나열을 본문에 넣지 않는다. 마지막에는 댓글을 보라고 억지로 유도하지 않아도 된다. 확인되지 않은 '내가 본 건/내가 산 건/써봤는데/사용해보니' 금지.
-commentLead에는 반드시 다음 형식으로 제품 핵심 정보를 작성한다:
-✅ 핵심만
-- 원문에서 확인되는 핵심 포인트 1
-- 원문에서 확인되는 핵심 포인트 2
-- 필요하면 핵심 포인트 3
-링크와 광고고지는 commentLead에 쓰지 않는다. 시스템이 commentLead 아래에 동일 쿠파스 링크 2개와 고지문을 자동으로 붙인다.
+본문 text에는 Threads 소재 기반의 짧고 자연스러운 후킹/상황 글만 쓴다. 제품 스펙 목록, '✅ 핵심만', 쿠팡 링크, 광고고지, 상품명 나열을 본문에 넣지 않는다. commentLead에는 반드시 '✅ 핵심만'과 원문에서 확인되는 핵심 포인트를 작성한다. 링크와 광고고지는 쓰지 않는다.
 JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
-    `타겟:${target||'전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm||productName}\n쿠팡 상품:${productName}\nVision 확인 대상:${analysis.vision?.soldObject||'-'} / 요리:${analysis.vision?.dish||'-'}\n[Threads 원문]\n${material.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0,5000)||'(없음)'}`,
-    {maxTokens:2800,temperature:.58}
+    `타겟:${target||'전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm||productName}\n쿠팡 상품:${productName}\n판매대상:${analysis.vision?.soldObject||'-'} / 요리:${analysis.vision?.dish||'-'}\n[Threads 원문]\n${material.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0,5000)||'(없음)'}`,
+    {maxTokens:2800,temperature:.5}
   );
   let text=String(d.text||'').trim(),commentLead=String(d.commentLead||'').trim();
   if(!text)throw new Error('Threads 소재 기반 본문 생성 결과가 비었습니다');
   if(analysis.mode==='recipe'){
-    text=scrubSecret(text,analysis.secretTerm,productName);commentLead=scrubSecret(commentLead,analysis.secretTerm,productName);
-    if(/🥘\s*재료|🍳\s*만드는 법/.test(text))throw new Error('레시피 본문에 재료/만드는 법이 들어갔습니다');
-    if(!/🥘\s*재료/.test(commentLead)||!/🍳\s*만드는 법/.test(commentLead))throw new Error('레시피 댓글에 재료 또는 만드는 법이 누락되었습니다');
+    text=scrubSecret(text,analysis.secretTerm,productName);
+    commentLead=scrubSecret(commentLead,analysis.secretTerm,productName);
+    if(/🥘\s*재료|🍳\s*만드는 법/.test(text)){
+      text=text.replace(/\n?(?:🥘\s*재료|🍳\s*만드는 법)[\s\S]*$/,'').trim();
+    }
+    commentLead=await repairRecipeComment(accountId,{commentLead,material,analysis,productName});
   }else{
-    if(/✅\s*핵심만/.test(text))throw new Error('일반상품 본문에 핵심만 섹션이 들어갔습니다');
-    if(!/✅\s*핵심만/.test(commentLead))throw new Error('일반상품 댓글에 핵심만 섹션이 누락되었습니다');
+    if(/✅\s*핵심만/.test(text))text=text.replace(/\n?✅\s*핵심만[\s\S]*$/,'').trim();
+    if(!/✅\s*핵심만/.test(commentLead))commentLead=`✅ 핵심만\n- ${analysis.facts?.[0]||analysis.topic}\n- ${analysis.facts?.[1]||'원문에서 확인되는 특징을 참고한 상품'}`;
     text=text.replace(/\{\{COUPANG_LINK\}\}/g,'').replace(/\n{3,}/g,'\n\n').trim();
   }
   return{text,commentLead};
 }
 async function buildThreadsFirstAutopilot(accountId,{target}){
-  const material=await pickQualifiedThreadsMaterial();
-  const vision=await identifyCommerceTarget(accountId,material);
-  const analysis=await analyzeMaterial(accountId,material,target,vision);
-  if(!analysis.searchTerms.length){markUsedPost(material.url);throw new Error(`Threads 소재 "${analysis.topic}"에서 쿠팡으로 연결할 상품 후보를 찾지 못했습니다`);}
-  console.log(`[AutopilotV3][COUPANG SEARCH] 최종 검색어=${analysis.searchTerms.join(' / ')} (최대 2회)`);
-  const found=await findProduct(accountId,analysis.searchTerms);
-  if(!found.product){markUsedPost(material.url);throw new Error(`Threads 소재 기반 쿠팡 상품을 찾지 못했습니다: ${analysis.searchTerms.join(', ')}`);}
-  const generated=await generatePost(accountId,{material,analysis,product:found.product,target});
-  markUsedPost(material.url);
-  return{text:generated.text,commentLead:generated.commentLead,product:found.product,productSearchTerm:found.searchTerm,mode:analysis.mode,topic:analysis.topic,secretTerm:analysis.secretTerm,sourceUrl:material.url,sourceUsername:material.username||null,sourceImages:Array.isArray(material.images)?material.images.filter(Boolean).slice(0,10):[],sourceVideos:Array.isArray(material.videos)?material.videos.filter(Boolean).slice(0,5):[],referenceImage:material.images?.[0]||null,visionTarget:vision};
+  const materials=await collectQualifiedThreadsMaterials(6);
+  let lastError=null;
+  for(let idx=0;idx<materials.length;idx++){
+    const material=materials[idx];
+    try{
+      console.log(`[AutopilotV3][TRY] ${idx+1}/${materials.length} @${material.username||'-'} source=${material.url}`);
+      const vision=await identifyCommerceTarget(accountId,material);
+      const analysis=await analyzeMaterial(accountId,material,target,vision);
+      if(!analysis.searchTerms.length){
+        lastError=new Error(`Threads 소재 "${analysis.topic}"에서 구매 가능한 상품 검색어를 찾지 못했습니다`);
+        console.log(`[AutopilotV3][SKIP] ${lastError.message} → 다음 소재`);
+        markUsedPost(material.url);
+        continue;
+      }
+      console.log(`[AutopilotV3][COUPANG SEARCH] 최종 검색어=${analysis.searchTerms.join(' / ')} (최대 2회)`);
+      const found=await findProduct(accountId,analysis.searchTerms);
+      if(!found.product){
+        lastError=new Error(`Threads 소재 기반 쿠팡 상품을 찾지 못했습니다: ${analysis.searchTerms.join(', ')}`);
+        console.log(`[AutopilotV3][SKIP] ${lastError.message} → 다음 소재`);
+        markUsedPost(material.url);
+        continue;
+      }
+      const generated=await generatePost(accountId,{material,analysis,product:found.product,target});
+      markUsedPost(material.url);
+      console.log(`[AutopilotV3][SUCCESS] @${material.username||'-'} product="${found.product.name}" mode=${analysis.mode}`);
+      return{text:generated.text,commentLead:generated.commentLead,product:found.product,productSearchTerm:found.searchTerm,mode:analysis.mode,topic:analysis.topic,secretTerm:analysis.secretTerm,sourceUrl:material.url,sourceUsername:material.username||null,sourceImages:Array.isArray(material.images)?material.images.filter(Boolean).slice(0,10):[],sourceVideos:Array.isArray(material.videos)?material.videos.filter(Boolean).slice(0,5):[],referenceImage:material.images?.[0]||null,visionTarget:vision};
+    }catch(e){
+      lastError=e;
+      console.warn(`[AutopilotV3][TRY FAIL] @${material.username||'-'} ${e.response?.data?.error?.message||e.message} → 다음 소재`);
+      if(coupangApi.isRateLimitError?.(e))throw e;
+      markUsedPost(material.url);
+    }
+  }
+  throw new Error(`쇼핑 소재 ${materials.length}개를 검사했지만 발행 가능한 상품 연결에 실패했습니다${lastError?`: ${lastError.message}`:''}`);
 }
 module.exports={buildThreadsFirstAutopilot};
