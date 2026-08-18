@@ -1,8 +1,5 @@
 const benchmark = require('./benchmarkAccounts');
 
-// 프로필 수집 결과의 본문만 캐시한다.
-// 미디어는 프로필 카드에서 쿠팡/외부 링크 프리뷰와 구분하기 어려우므로
-// 실제 post importer/상세 수집기가 다시 확인하게 한다.
 const CACHE_TTL = 10 * 60 * 1000;
 const postCache = new Map();
 
@@ -22,17 +19,48 @@ function cleanCache() {
   }
 }
 
+function isProfileImage(url) {
+  return /(?:t51\.82787-19|profile[_-]?pic|profile_pic|avatar|dst-jpg_s150x150|s150x150|150x150|_s150x150_)/i.test(String(url || ''));
+}
+
+function isShopPreview(url) {
+  const s = String(url || '');
+  return /\/emg1\/|thumbnail\.coupangcdn\.com|coupangcdn\.com|shopping\.naver|smartstore\.naver|brand\.naver/i.test(s);
+}
+
+function isTrustedThreadsImage(url) {
+  const s = String(url || '').trim();
+  if (!/^https?:\/\//i.test(s) || isProfileImage(s) || isShopPreview(s)) return false;
+  try {
+    const h = new URL(s).hostname.toLowerCase();
+    return h.includes('cdninstagram.com') || h.includes('fbcdn.net');
+  } catch { return false; }
+}
+
+function isTrustedThreadsVideo(url) {
+  const s = String(url || '').trim();
+  if (!/^https?:\/\//i.test(s)) return false;
+  try {
+    const h = new URL(s).hostname.toLowerCase();
+    return h.includes('cdninstagram.com') || h.includes('fbcdn.net') || h.includes('threads.com');
+  } catch { return false; }
+}
+
+function uniq(list) { return [...new Set((list || []).filter(Boolean))]; }
+
 function saveMaterial(item) {
   if (!item?.url) return;
   const text = String(item.text || item.sourceText || '').trim();
   if (!text) return;
+  const images = uniq((Array.isArray(item.images) ? item.images : []).filter(isTrustedThreadsImage)).slice(0, 10);
+  const videos = uniq((Array.isArray(item.videos) ? item.videos : []).filter(isTrustedThreadsVideo)).slice(0, 5);
   postCache.set(keyOf(item.url), {
     savedAt: Date.now(),
     username: item.username || '',
     sourceText: text,
-    // 중요: 프로필 카드의 images/videos는 링크 프리뷰가 섞일 수 있으므로 캐시하지 않는다.
-    profileImageCount: Array.isArray(item.images) ? item.images.filter(Boolean).length : 0,
-    profileHasVideo: !!item.hasVideo,
+    images,
+    videos,
+    hasVideo: videos.length > 0 || !!item.hasVideo,
   });
 }
 
@@ -41,7 +69,7 @@ benchmark.collectBenchmarkMaterials = async function patchedCollectBenchmarkMate
   cleanCache();
   const materials = await originalCollectBenchmarkMaterials(options);
   for (const item of materials || []) saveMaterial(item);
-  console.log(`[Threads][PROFILE TEXT CACHE] cached=${(materials || []).length} ttl=${CACHE_TTL / 60000}m mediaTrusted=no`);
+  console.log(`[Threads][PROFILE CACHE V3] cached=${(materials || []).length} ttl=${CACHE_TTL / 60000}m trustedMedia=yes`);
   return materials;
 };
 
@@ -50,49 +78,59 @@ benchmark.collectPostDetails = async function patchedCollectPostDetails(url, use
   cleanCache();
   const cached = postCache.get(keyOf(url));
 
-  // 본문은 캐시를 쓸 수 있지만, 미디어는 실제 post에서 검증해야 한다.
-  // 먼저 기존 상세 수집기를 호출한다. 성공하면 원본 미디어/댓글/제휴링크를 그대로 사용한다.
+  // 처음 프로필 수집에서 원문과 실제 Threads 미디어를 확보했다면 상세페이지를 다시 열지 않는다.
+  // 영상 URL이 아직 없고 hasVideo 신호만 있는 경우에는 뒤의 threadsVideoPatch가 해당 post에서 실제 mp4를 추출한다.
+  if (cached?.sourceText && (cached.images.length || cached.videos.length || cached.hasVideo)) {
+    console.log(`[Threads][PROFILE CACHE HIT V3] @${username || cached.username || '-'} source=${cached.sourceText.length} images=${cached.images.length} videos=${cached.videos.length} hasVideo=${cached.hasVideo ? 'yes' : 'no'} detailRequest=skipped`);
+    return {
+      sourceText: cached.sourceText,
+      authorReplies: [],
+      affiliateLinks: [],
+      images: cached.images,
+      videos: cached.videos,
+      hasVideo: cached.hasVideo,
+      exactUrl: true,
+      fromProfileCache: true,
+    };
+  }
+
+  // 프로필에서 미디어를 못 잡은 후보만 기존 상세 수집을 1회 시도한다.
   try {
     const details = await originalCollectPostDetails(url, username);
     if (details?.sourceText) return details;
   } catch (err) {
     const msg = String(err?.message || err || '');
     if (!cached?.sourceText) {
-      console.warn(`[Threads][DETAIL FALLBACK] @${username || '-'} detail failed reason="${msg}" cache=no`);
+      console.warn(`[Threads][DETAIL FALLBACK V3] @${username || '-'} detail failed reason="${msg}" cache=no`);
       throw err;
     }
-    // 429 등으로 상세 본문만 실패한 경우 텍스트 캐시로 살린다.
-    // images/videos는 빈 배열로 반환하여 뒤쪽 browser/video importer가 실제 post 미디어를 복구하게 한다.
-    console.warn(`[Threads][PROFILE TEXT CACHE FALLBACK] @${username || cached.username || '-'} detail failed reason="${msg}" source=${cached.sourceText.length} profileImagesIgnored=${cached.profileImageCount || 0} mediaRecovery=required`);
+    console.warn(`[Threads][PROFILE CACHE TEXT FALLBACK V3] @${username || cached.username || '-'} detail failed reason="${msg}" source=${cached.sourceText.length}`);
     return {
       sourceText: cached.sourceText,
       authorReplies: [],
       affiliateLinks: [],
-      images: [],
-      videos: [],
-      hasVideo: !!cached.profileHasVideo,
+      images: cached.images || [],
+      videos: cached.videos || [],
+      hasVideo: !!cached.hasVideo,
       exactUrl: true,
       fromProfileCache: true,
-      mediaNeedsRecovery: true,
     };
   }
 
   if (cached?.sourceText) {
-    console.log(`[Threads][PROFILE TEXT CACHE FALLBACK] @${username || cached.username || '-'} source=${cached.sourceText.length} profileImagesIgnored=${cached.profileImageCount || 0} mediaRecovery=required`);
     return {
       sourceText: cached.sourceText,
       authorReplies: [],
       affiliateLinks: [],
-      images: [],
-      videos: [],
-      hasVideo: !!cached.profileHasVideo,
+      images: cached.images || [],
+      videos: cached.videos || [],
+      hasVideo: !!cached.hasVideo,
       exactUrl: true,
       fromProfileCache: true,
-      mediaNeedsRecovery: true,
     };
   }
 
   throw new Error('Threads 원문 텍스트를 읽지 못했습니다.');
 };
 
-console.log('[Threads][PROFILE TEXT CACHE PATCH V2] 본문 캐시 유지 · 프로필/쿠팡 링크 프리뷰 미디어 미신뢰 · 실제 post 미디어 복구 강제');
+console.log('[Threads][PROFILE CACHE PATCH V3] 프로필 원문+실제 Threads 미디어 재사용 · 쿠팡 프리뷰/프로필 차단 · 상세 재요청 최소화');
