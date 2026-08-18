@@ -163,4 +163,67 @@ async function collectBenchmarkMaterials({limit=10}={}){
   }
 }
 
+async function diagnoseProfileCard(username, targetPath) {
+  let browser, context;
+  try {
+    ({ browser, context } = await openBrowser());
+    const page = await context.newPage();
+    page.setDefaultTimeout(12000);
+    await page.goto(`https://www.threads.com/@${encodeURIComponent(username)}`, { waitUntil: 'domcontentloaded', timeout: 12000 });
+    await page.waitForTimeout(1600);
+    for (let i = 0; i < 3; i++) { await page.mouse.wheel(0, 900); await page.waitForTimeout(350); }
+
+    const result = await page.evaluate(({ targetPath }) => {
+      const canonical = href => { try { const u = new URL(href, location.origin); return u.pathname; } catch { return String(href||'').split(/[?#]/)[0]; } };
+      const anchors = [...document.querySelectorAll('a[href*="/post/"]')].filter(a => canonical(a.href||'') === targetPath);
+      if (!anchors.length) return { found: false };
+
+      const a = anchors[0];
+      const levels = [];
+      let node = a.parentElement;
+      for (let i = 0; i < 10 && node; i++, node = node.parentElement) {
+        const postLinks = [...node.querySelectorAll('a[href*="/post/"]')];
+        const uniqLinks = [...new Set(postLinks.map(x => canonical(x.href||'')))];
+        levels.push({
+          depth: i,
+          tag: node.tagName,
+          role: node.getAttribute('role') || '',
+          textLen: (node.innerText||'').length,
+          textPreview: (node.innerText||'').replace(/\s+/g,' ').trim().slice(0, 200),
+          postLinkCount: postLinks.length,
+          uniquePostLinks: uniqLinks.length,
+          hasArticleAncestorMatch: !!node.closest('article,[role="article"]'),
+          ariaLabels: [...node.querySelectorAll('[aria-label]')].map(x => x.getAttribute('aria-label')).filter(Boolean).slice(0, 10)
+        });
+      }
+
+      const article = a.closest('article,[role="article"]');
+      const articleOuterHTMLSnippet = article ? article.outerHTML.slice(0, 3000) : '';
+
+      return {
+        found: true,
+        anchorHref: a.href,
+        levels,
+        articleOuterHTMLSnippet
+      };
+    }, { targetPath });
+
+    console.log(`[DIAG] @${username} ${targetPath} =>`, JSON.stringify(result, null, 2));
+    return result;
+  } finally {
+    if (context) try { await context.close(); } catch {}
+    if (browser) try { await browser.close(); } catch {}
+  }
+}
+
+// 일회성 진단: 실제 Railway/Playwright DOM 구조 확인용. 결과 확인 후 통째로 삭제.
+setTimeout(async () => {
+  try {
+    await diagnoseProfileCard('newnormalpower', '/@newnormalpower/post/DcLf_FOEvx_');
+    await diagnoseProfileCard('lovegohyun', '/@lovegohyun/post/DcLUGYrFNKu');
+  } catch (err) {
+    console.error('[DIAG][ERROR]', err?.stack || err?.message || err);
+  }
+}, 3000);
+
 module.exports={listBenchmarkAccounts,addBenchmarkAccount,addBenchmarkAccountsBulk,deleteBenchmarkAccount,markUsedPost,collectBenchmarkMaterials,collectPostDetails,collectProfilePosts};
