@@ -203,47 +203,139 @@ function normalizeRecipeHeadings(text){
   out=out.replace(/(?:🍳\s*)?(?:만드는\s*법|조리\s*방법|만들기)\s*[:：]?/i,'🍳 만드는 법');
   return out;
 }
+function normalizeThreadsLayout(text){
+  return String(text||'')
+    .replace(/\r/g,'')
+    .replace(/[ \t]+\n/g,'\n')
+    .replace(/\n{3,}/g,'\n\n')
+    .trim();
+}
+function badThreadsToneReasons(text){
+  const t=String(text||'');
+  const reasons=[];
+  const honorific=[/입니다[.!?]?/g,/합니다[.!?]?/g,/됩니다[.!?]?/g,/하세요[.!?]?/g,/해보세요/g,/추천드립니다/g,/바랍니다/g,/수 있습니다/g,/원하신다면/g];
+  const aiPhrases=[/고급 요리/i,/풍미가 배가/i,/특별한 (?:저녁|식사|한 끼)/i,/꼭 시도해/i,/즐겨보세요/i,/완벽한 조화/i,/매력적인 메뉴/i,/한층 더/i,/입맛을 사로잡/i,/감칠맛을 더해/i];
+  if(honorific.some(r=>r.test(t)))reasons.push('존댓말/설명문');
+  if(aiPhrases.some(r=>r.test(t)))reasons.push('AI/블로그 상투어');
+  const lines=t.split('\n').map(x=>x.trim()).filter(Boolean);
+  if(t.length>=120&&lines.length<=2)reasons.push('긴 문단');
+  if(lines.some(x=>x.length>95))reasons.push('문장 과다길이');
+  if(/^[가-힣A-Za-z0-9 ]+은\s|^[가-힣A-Za-z0-9 ]+는\s/.test(t)&&/(요리|제품|상품|아이템)(?:입니다|이다)/.test(t))reasons.push('사전식 도입');
+  return reasons;
+}
+async function rewriteThreadsTone(accountId,text,{mode,topic,material}){
+  const before=normalizeThreadsLayout(text);
+  const reasons=badThreadsToneReasons(before);
+  if(!reasons.length)return before;
+  console.warn(`[AutopilotV3][TONE] 재작성 필요 reason=${reasons.join(',')} preview="${before.slice(0,90).replace(/\n/g,' / ')}"`);
+  try{
+    const d=await callOpenAI(accountId,
+`한국 Threads 본문 말투 교정기다. 주어진 글의 사실과 주제는 유지하고 말투와 호흡만 완전히 바꾼다.
+필수 규칙:
+- 자연스러운 반말. 음슴체 금지.
+- 존댓말(~입니다, ~합니다, ~하세요, ~해보세요, ~됩니다) 절대 금지.
+- 블로그/광고/AI 문장 금지: '고급 요리', '풍미가 배가됩니다', '특별한 식사', '꼭 시도해보세요', '완벽한 조화', '한층 더' 같은 표현 금지.
+- 친구가 Threads에 툭 올린 느낌. 짧은 문장과 줄바꿈을 쓴다.
+- 3~7줄 정도. 한 줄은 되도록 짧게.
+- 첫 줄부터 정의/설명하지 말고 반응, 상황, 의외성, 궁금증 중 하나로 시작한다.
+- ㅋㅋ는 어울릴 때 최대 1~2번만 쓴다. 억지 유행어 금지.
+- 확인되지 않은 '내가 샀다/먹었다/써봤다/친구가 했다' 같은 경험을 새로 만들지 않는다.
+- 링크, 광고고지, 해시태그, 번호목록, 제품 스펙표 금지.
+- 레시피면 정확한 비밀 소스/제휴재료 이름은 본문에 쓰지 않는다.
+JSON만 출력: {"text":""}`,
+      `모드:${mode}\n주제:${topic}\n[원 Threads 소재]\n${String(material?.sourceText||'').slice(0,3000)}\n\n[교정할 본문]\n${before}`,
+      {maxTokens:900,temperature:.65}
+    );
+    const fixed=normalizeThreadsLayout(d.text||'');
+    const afterReasons=badThreadsToneReasons(fixed);
+    if(fixed&&afterReasons.length===0){
+      console.log(`[AutopilotV3][TONE] 재작성 통과 length=${fixed.length}`);
+      return fixed;
+    }
+    console.warn(`[AutopilotV3][TONE] 재작성 후 잔여=${afterReasons.join(',')||'empty'} → 규칙 기반 정리`);
+    return normalizeThreadsLayout((fixed||before)
+      .replace(/해보세요/g,'해봐')
+      .replace(/하세요/g,'해')
+      .replace(/추천드립니다/g,'추천해')
+      .replace(/원하신다면/g,'원하면')
+      .replace(/수 있습니다/g,'수 있어')
+      .replace(/됩니다/g,'돼')
+      .replace(/입니다/g,'이야')
+      .replace(/합니다/g,'해'));
+  }catch(e){
+    console.warn(`[AutopilotV3][TONE] 재작성 실패: ${e.message}`);
+    return normalizeThreadsLayout(before
+      .replace(/해보세요/g,'해봐')
+      .replace(/하세요/g,'해')
+      .replace(/원하신다면/g,'원하면')
+      .replace(/수 있습니다/g,'수 있어')
+      .replace(/됩니다/g,'돼')
+      .replace(/입니다/g,'이야')
+      .replace(/합니다/g,'해'));
+  }
+}
 async function repairRecipeComment(accountId,{commentLead,material,analysis,productName}){
   let fixed=normalizeRecipeHeadings(commentLead);
   if(hasIngredientHeading(fixed)&&hasMethodHeading(fixed))return fixed;
   try{
     const d=await callOpenAI(accountId,
-      `레시피 댓글 포맷 교정기다. 기존 내용을 최대한 보존하면서 반드시 '🥘 재료' 섹션과 '🍳 만드는 법' 섹션을 둘 다 만든다. 실제로 따라할 수 있게 작성하되 쿠팡 상품명/브랜드명/정확한 비밀소스 이름은 쓰지 말고 핵심 제휴재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다. 링크와 광고고지는 쓰지 않는다. JSON만 출력: {"commentLead":""}`,
+      `레시피 댓글 포맷 교정기다. 기존 내용을 최대한 보존하면서 반드시 '🥘 재료' 섹션과 '🍳 만드는 법' 섹션을 둘 다 만든다. 실제로 따라할 수 있게 작성한다. 조리 단계는 짧고 자연스러운 반말로 쓴다. 음슴체와 존댓말은 금지한다. 쿠팡 상품명/브랜드명/정확한 비밀소스 이름은 쓰지 말고 핵심 제휴재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다. 링크와 광고고지는 쓰지 않는다. JSON만 출력: {"commentLead":""}`,
       `[기존 댓글]\n${commentLead}\n\n[원문]\n${material.sourceText.slice(0,3500)}\n\n내부 비밀재료:${analysis.secretTerm||productName}`,
       {maxTokens:1800,temperature:.25}
     );
     fixed=normalizeRecipeHeadings(String(d.commentLead||''));
   }catch(e){console.warn(`[AutopilotV3][RECIPE REPAIR] AI 교정 실패: ${e.message}`);}
   if(!hasIngredientHeading(fixed))fixed=`🥘 재료\n- 원문에 나온 기본 재료\n- 비밀 재료\n\n${fixed}`.trim();
-  if(!hasMethodHeading(fixed))fixed=`${fixed}\n\n🍳 만드는 법\n1. 원문 흐름에 맞게 재료를 준비한다.\n2. 비밀 재료를 더해 알맞게 조리한다.`.trim();
+  if(!hasMethodHeading(fixed))fixed=`${fixed}\n\n🍳 만드는 법\n1. 재료를 먹기 좋게 준비해.\n2. 비밀 재료를 넣고 알맞게 익혀.`.trim();
   return fixed;
 }
 async function generatePost(accountId,{material,analysis,product,target}){
   const productName=clean(product?.name);
   const d=await callOpenAI(accountId,
-`너는 한국 Threads 글 편집자다. Threads 소재를 중심으로 새 글을 쓴다. 원문 문장 복사는 금지한다. 확인되지 않은 개인 경험을 만들지 않는다.
+`너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 원 Threads 소재의 핵심과 상황은 참고하되 문장을 복사하지 않는다.
+
+[말투 - 모든 모드 공통, 매우 중요]
+- 자연스러운 반말만 사용한다. 음슴체는 금지한다.
+- '~입니다/~합니다/~됩니다/~하세요/~해보세요' 같은 존댓말 설명문은 절대 쓰지 않는다.
+- 블로그·AI 문체 금지: '고급 요리', '풍미가 배가됩니다', '특별한 저녁 식사', '꼭 시도해보세요', '완벽한 조화', '한층 더', '매력적인 메뉴' 같은 표현을 쓰지 않는다.
+- 친구가 Threads에 툭 올린 느낌으로 짧게 쓴다. 3~7줄, 짧은 문장, 줄바꿈 중심.
+- 첫 문장에서 '~은/는 ...입니다'처럼 정의하지 않는다. 반응·상황·의외성·궁금증으로 시작한다.
+- ㅋㅋ는 자연스러울 때 최대 1~2회만. 억지 유행어 금지.
+- 확인되지 않은 구매/사용/섭취 경험을 만들어내지 않는다.
+
 [레시피]
-본문 text는 3~7줄의 짧은 후킹글이다. 요리 핵심 장면을 보여주고 정확한 제휴 소스/핵심재료 이름은 숨긴다. commentLead는 반드시 첫 섹션 제목을 '🥘 재료', 두 번째 섹션 제목을 '🍳 만드는 법'으로 정확히 쓴다. 원문에 부족한 일반 재료/단계는 요리가 성립하도록 보완할 수 있다. 쿠팡 연결 핵심재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다. 링크와 광고고지는 쓰지 않는다.
+- 본문 text에는 음식의 핵심 장면과 궁금증만 짧게 쓴다.
+- 정확한 제휴 소스/핵심재료 이름은 숨긴다.
+- 마지막은 '재료랑 만드는 법은 댓글에 적어둘게'처럼 자연스럽게 끝낼 수 있다.
+- commentLead는 반드시 '🥘 재료'와 '🍳 만드는 법' 두 섹션으로 쓴다.
+- 조리 단계도 짧은 반말로 쓴다. 음슴체/존댓말 금지.
+- 쿠팡 연결 핵심재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다.
+
 [일반상품/생활]
-본문 text에는 Threads 소재 기반의 짧고 자연스러운 후킹/상황 글만 쓴다. 제품 스펙 목록, '✅ 핵심만', 쿠팡 링크, 광고고지, 상품명 나열을 본문에 넣지 않는다. commentLead에는 반드시 '✅ 핵심만'과 원문에서 확인되는 핵심 포인트를 작성한다. 링크와 광고고지는 쓰지 않는다.
+- 본문 text는 제품 설명서가 아니라 상황→불편/발견→반응의 흐름을 우선한다.
+- 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.
+- commentLead에는 '✅ 핵심만' 아래 핵심 포인트 2~3개만 간결하게 쓴다.
+
 JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     `타겟:${target||'전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm||productName}\n쿠팡 상품:${productName}\n판매대상:${analysis.vision?.soldObject||'-'} / 요리:${analysis.vision?.dish||'-'}\n[Threads 원문]\n${material.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0,5000)||'(없음)'}`,
-    {maxTokens:2800,temperature:.5}
+    {maxTokens:2800,temperature:.65}
   );
-  let text=String(d.text||'').trim(),commentLead=String(d.commentLead||'').trim();
+  let text=normalizeThreadsLayout(d.text||''),commentLead=String(d.commentLead||'').trim();
   if(!text)throw new Error('Threads 소재 기반 본문 생성 결과가 비었습니다');
   if(analysis.mode==='recipe'){
     text=scrubSecret(text,analysis.secretTerm,productName);
     commentLead=scrubSecret(commentLead,analysis.secretTerm,productName);
-    if(/🥘\s*재료|🍳\s*만드는 법/.test(text)){
-      text=text.replace(/\n?(?:🥘\s*재료|🍳\s*만드는 법)[\s\S]*$/,'').trim();
-    }
+    if(/🥘\s*재료|🍳\s*만드는 법/.test(text))text=text.replace(/\n?(?:🥘\s*재료|🍳\s*만드는 법)[\s\S]*$/,'').trim();
     commentLead=await repairRecipeComment(accountId,{commentLead,material,analysis,productName});
   }else{
     if(/✅\s*핵심만/.test(text))text=text.replace(/\n?✅\s*핵심만[\s\S]*$/,'').trim();
-    if(!/✅\s*핵심만/.test(commentLead))commentLead=`✅ 핵심만\n- ${analysis.facts?.[0]||analysis.topic}\n- ${analysis.facts?.[1]||'원문에서 확인되는 특징을 참고한 상품'}`;
+    if(!/✅\s*핵심만/.test(commentLead))commentLead=`✅ 핵심만\n- ${analysis.facts?.[0]||analysis.topic}\n- ${analysis.facts?.[1]||'원문에서 확인되는 핵심 특징'}`;
     text=text.replace(/\{\{COUPANG_LINK\}\}/g,'').replace(/\n{3,}/g,'\n\n').trim();
   }
+  text=await rewriteThreadsTone(accountId,text,{mode:analysis.mode,topic:analysis.topic,material});
+  if(analysis.mode==='recipe')text=scrubSecret(text,analysis.secretTerm,productName);
+  const finalReasons=badThreadsToneReasons(text);
+  if(finalReasons.length)console.warn(`[AutopilotV3][TONE] 최종 경고=${finalReasons.join(',')} text="${text.slice(0,120).replace(/\n/g,' / ')}"`);
   return{text,commentLead};
 }
 async function buildThreadsFirstAutopilot(accountId,{target}){
