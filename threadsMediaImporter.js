@@ -23,6 +23,10 @@ function validateThreadsUrl(raw) {
     host === 'threads.net' || host.endsWith('.threads.net');
   if (!allowed) throw new Error('Threads 공개 게시물 URL만 사용할 수 있습니다.');
   if (!/\/post\//i.test(u.pathname)) throw new Error('Threads 게시물 주소(/post/...)를 입력해주세요.');
+
+  // /post/xxx/media 형태는 같은 게시물의 미디어 뷰이므로 canonical 게시물 URL로 통일한다.
+  u.pathname = u.pathname.replace(/\/media\/?$/i, '').replace(/\/+$/, '');
+  u.search = '';
   u.hash = '';
   return u.toString();
 }
@@ -60,7 +64,7 @@ function isAllowedMediaUrl(raw) {
 
 function pushCandidate(out, raw) {
   const decoded = decodeEscapedUrl(raw);
-  if (!decoded || !isAllowedMediaUrl(decoded)) return;
+  if (!decoded || decoded.startsWith('blob:') || !isAllowedMediaUrl(decoded)) return;
   if (!out.includes(decoded)) out.push(decoded);
 }
 
@@ -119,7 +123,7 @@ async function extractCandidatesWithBrowser(sourceUrl) {
   try {
     playwright = require('playwright');
   } catch {
-    return { videos: [], poster: '', title: '', unavailable: true };
+    return { videos: [], poster: '', title: '', requestHeaders: {}, unavailable: true };
   }
 
   const videos = [];
@@ -127,12 +131,16 @@ async function extractCandidatesWithBrowser(sourceUrl) {
   try {
     browser = await playwright.chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--autoplay-policy=no-user-gesture-required'],
     });
+    const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36';
     const context = await browser.newContext({
       locale: 'ko-KR',
       viewport: { width: 1280, height: 1600 },
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
+      userAgent,
+      extraHTTPHeaders: {
+        'accept-language': 'ko-KR,ko;q=0.9,en;q=0.8',
+      },
     });
     const page = await context.newPage();
     page.setDefaultTimeout(BROWSER_TIMEOUT_MS);
@@ -140,7 +148,7 @@ async function extractCandidatesWithBrowser(sourceUrl) {
     const inspectUrl = raw => {
       if (!raw) return;
       const s = String(raw);
-      if (/\.mp4(?:\?|$)/i.test(s) || /video/i.test(s)) pushCandidate(videos, s);
+      if (/\.mp4(?:\?|$)/i.test(s) || /video/i.test(s) || /bytestart|byteend/i.test(s)) pushCandidate(videos, s);
     };
 
     page.on('request', request => inspectUrl(request.url()));
@@ -148,7 +156,8 @@ async function extractCandidatesWithBrowser(sourceUrl) {
       const url = response.url();
       inspectUrl(url);
       try {
-        const type = String(response.headers()['content-type'] || '').toLowerCase();
+        const headers = await response.allHeaders().catch(() => ({}));
+        const type = String(headers['content-type'] || '').toLowerCase();
         if (type.startsWith('video/') || type.includes('application/octet-stream')) pushCandidate(videos, url);
       } catch {}
     });
@@ -156,28 +165,55 @@ async function extractCandidatesWithBrowser(sourceUrl) {
     await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT_MS });
     await page.waitForTimeout(3500);
 
-    // 실제 video 요소가 만들어졌다면 재생을 한번 시도해 CDN 요청을 발생시킨다.
+    // Threads가 뷰포트 진입 후 영상을 로드하는 경우를 위해 미디어 영역까지 스크롤한다.
+    try {
+      const video = page.locator('video').first();
+      if (await video.count()) await video.scrollIntoViewIfNeeded();
+    } catch {}
+
+    // 실제 video 요소가 만들어졌다면 재생을 시도해 CDN range 요청을 발생시킨다.
     try {
       await page.locator('video').first().evaluate(video => {
         video.muted = true;
+        video.autoplay = true;
+        video.playsInline = true;
         const p = video.play();
         if (p && typeof p.catch === 'function') p.catch(() => {});
       });
     } catch {}
-    await page.waitForTimeout(4500);
 
-    // DOM 속성과 Performance API에 남은 영상 URL도 추가 수집한다.
+    // 재생 버튼 오버레이 때문에 video.play()가 막히는 페이지도 있어 버튼 클릭을 한 번 시도한다.
+    try {
+      const playButton = page.getByRole('button', { name: /play|재생/i }).first();
+      if (await playButton.count()) await playButton.click({ timeout: 2000 }).catch(() => {});
+    } catch {}
+
+    await page.waitForTimeout(5000);
+
+    // DOM 속성, 메타 태그, Performance API에 남은 영상 URL도 추가 수집한다.
     try {
       const domUrls = await page.evaluate(() => {
         const out = [];
-        document.querySelectorAll('video, source').forEach(el => {
-          for (const key of ['src', 'currentSrc']) {
-            const value = el[key] || el.getAttribute?.(key);
-            if (value) out.push(value);
-          }
+        const add = value => {
+          const s = String(value || '').trim();
+          if (s && !out.includes(s)) out.push(s);
+        };
+        document.querySelectorAll('video').forEach(video => {
+          add(video.currentSrc);
+          add(video.src);
+          add(video.getAttribute('src'));
+          for (const key of ['data-src', 'data-video-url', 'data-url']) add(video.getAttribute(key));
+          video.querySelectorAll('source[src]').forEach(source => add(source.src || source.getAttribute('src')));
         });
+        document.querySelectorAll('source[src]').forEach(source => add(source.src || source.getAttribute('src')));
+        for (const selector of [
+          'meta[property="og:video"]',
+          'meta[property="og:video:url"]',
+          'meta[property="og:video:secure_url"]',
+          'meta[name="twitter:player:stream"]',
+        ]) add(document.querySelector(selector)?.content);
         for (const entry of performance.getEntriesByType('resource')) {
-          if (entry && entry.name) out.push(entry.name);
+          if (entry && entry.name) add(entry.name);
         }
         return out;
       });
@@ -195,10 +231,25 @@ async function extractCandidatesWithBrowser(sourceUrl) {
       title = meta.title || '';
     } catch {}
 
+    // CDN은 브라우저 세션 쿠키/Referer가 없으면 403 또는 HTML을 반환하는 경우가 있어
+    // 동일 브라우저의 쿠키를 다운로드 요청에 전달한다.
+    let cookieHeader = '';
+    try {
+      const cookies = await context.cookies();
+      cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    } catch {}
+
+    const requestHeaders = {
+      'user-agent': userAgent,
+      referer: sourceUrl,
+      'accept-language': 'ko-KR,ko;q=0.9,en;q=0.8',
+    };
+    if (cookieHeader) requestHeaders.cookie = cookieHeader;
+
     await context.close();
-    return { videos, poster, title, unavailable: false };
+    return { videos, poster, title, requestHeaders, unavailable: false };
   } catch (err) {
-    return { videos, poster: '', title: '', unavailable: false, error: err };
+    return { videos, poster: '', title: '', requestHeaders: {}, unavailable: false, error: err };
   } finally {
     if (browser) {
       try { await browser.close(); } catch {}
@@ -206,7 +257,7 @@ async function extractCandidatesWithBrowser(sourceUrl) {
   }
 }
 
-async function downloadCandidate(videoUrl, outputDir) {
+async function downloadCandidate(videoUrl, outputDir, requestHeaders = {}) {
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
   const filename = `threads-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.mp4`;
   const filepath = path.join(outputDir, filename);
@@ -219,8 +270,11 @@ async function downloadCandidate(videoUrl, outputDir) {
       maxRedirects: 5,
       responseType: 'stream',
       headers: {
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
-        referer: 'https://www.threads.com/',
+        'user-agent': requestHeaders['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
+        referer: requestHeaders.referer || 'https://www.threads.com/',
+        'accept-language': requestHeaders['accept-language'] || 'ko-KR,ko;q=0.9,en;q=0.8',
+        ...(requestHeaders.cookie ? { cookie: requestHeaders.cookie } : {}),
+        accept: 'video/*,*/*;q=0.8',
       },
       validateStatus: status => status >= 200 && status < 400,
     });
@@ -257,14 +311,15 @@ async function downloadCandidate(videoUrl, outputDir) {
   }
 }
 
-async function tryDownloadCandidates(candidates, outputDir) {
+async function tryDownloadCandidates(candidates, outputDir, requestHeaders = {}) {
   let lastError = null;
-  for (const candidate of candidates.slice(0, 12)) {
+  for (const candidate of candidates.slice(0, 20)) {
     try {
-      const file = await downloadCandidate(candidate, outputDir);
+      const file = await downloadCandidate(candidate, outputDir, requestHeaders);
       return { file, mediaUrl: candidate };
     } catch (err) {
       lastError = err;
+      console.warn(`[Threads import] candidate download failed: ${err.message}`);
     }
   }
   return { file: null, mediaUrl: '', lastError };
@@ -287,7 +342,7 @@ async function importThreadsVideo({ url, outputDir }) {
   }
 
   if (direct.videos.length) {
-    const saved = await tryDownloadCandidates(direct.videos, outputDir);
+    const saved = await tryDownloadCandidates(direct.videos, outputDir, { referer: sourceUrl });
     if (saved.file) {
       return {
         ...saved.file,
@@ -300,10 +355,10 @@ async function importThreadsVideo({ url, outputDir }) {
     }
   }
 
-  // HTML에서 영상 주소가 안 보이면 실제 Chromium으로 게시물을 열고 네트워크에서 영상 CDN 요청을 감지한다.
+  // HTML에서 영상 주소가 안 보이거나 직접 다운로드가 실패하면 실제 Chromium 세션을 사용한다.
   const browserFound = await extractCandidatesWithBrowser(sourceUrl);
   if (browserFound.videos.length) {
-    const saved = await tryDownloadCandidates(browserFound.videos, outputDir);
+    const saved = await tryDownloadCandidates(browserFound.videos, outputDir, browserFound.requestHeaders || { referer: sourceUrl });
     if (saved.file) {
       return {
         ...saved.file,
@@ -324,7 +379,7 @@ async function importThreadsVideo({ url, outputDir }) {
     throw new Error(`Threads 브라우저 추출에도 실패했습니다: ${browserFound.error.message}`);
   }
 
-  throw new Error('Threads 페이지를 실제 브라우저로 열어봤지만 영상 주소를 찾지 못했습니다. 비공개 게시물, 로그인 제한 또는 Meta의 추가 차단일 수 있습니다.');
+  throw new Error('Threads 페이지에서 영상 게시물은 확인했지만 재생 가능한 영상 주소를 찾지 못했습니다. 로그인 제한 또는 Meta CDN 차단 가능성이 있습니다.');
 }
 
 module.exports = {
