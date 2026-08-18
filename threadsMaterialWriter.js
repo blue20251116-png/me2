@@ -52,7 +52,9 @@ function sanitizeAuthorReplies(authorReplies) {
 }
 
 function sanitizeGeneratedComment(value) {
-  let s = stripAffiliateNoise(value, { preserveLines: true });
+  let s = String(value || '');
+  s = s.replace(/\\n/g, '\n');
+  s = stripAffiliateNoise(s, { preserveLines: true });
   if (!s) return '';
   s = s.replace(/\b(?:쿠파스|쿠팡)\s*링크\b\s*:?/gi, '').replace(/\n{3,}/g, '\n\n').trim();
   return s;
@@ -60,7 +62,9 @@ function sanitizeGeneratedComment(value) {
 
 // 모델이 줄바꿈 지시를 무시하고 한 문단으로 반환해도 최종 출력에서 Threads용 호흡을 강제한다.
 function formatThreadsBody(value) {
-  let s = stripAffiliateNoise(value, { preserveLines: true }).trim();
+  let s = String(value || '');
+  s = s.replace(/\\n/g, '\n');
+  s = stripAffiliateNoise(s, { preserveLines: true }).trim();
   if (!s) return '';
 
   // 이미 충분히 줄바꿈되어 있으면 문단 공백만 정리한다.
