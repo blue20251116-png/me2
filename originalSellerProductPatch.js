@@ -23,64 +23,98 @@ function canonicalProductUrl(raw){
   try{
     const u=new URL(raw);
     if(!/(^|\.)coupang\.com$/i.test(u.hostname)) return '';
-    if(!/\/vp\/products\/\d+/i.test(u.pathname)) return '';
-    const out=new URL(`${u.origin}${u.pathname}`);
+    const m=u.pathname.match(/\/vp\/products\/(\d+)/i);
+    if(!m)return '';
+    const out=new URL(`https://www.coupang.com/vp/products/${m[1]}`);
     for(const key of ['itemId','vendorItemId']){
       const v=u.searchParams.get(key);
-      if(v) out.searchParams.set(key,v);
+      if(v)out.searchParams.set(key,v);
     }
     return out.toString();
   }catch{return '';}
+}
+function productIdFromUrl(raw){
+  try{return new URL(raw).pathname.match(/\/vp\/products\/(\d+)/i)?.[1]||'';}catch{return '';}
 }
 async function resolveOriginalSelectedProduct(link){
   const playwright=require('playwright');
   let browser,context;
   try{
     browser=await playwright.chromium.launch({headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu']});
-    context=await browser.newContext({locale:'ko-KR',viewport:{width:1200,height:1600},userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36'});
+    context=await browser.newContext({locale:'ko-KR',viewport:{width:1280,height:1800},userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36'});
     const page=await context.newPage();
-    page.setDefaultTimeout(18000);
-    await page.goto(link,{waitUntil:'domcontentloaded',timeout:18000});
-    await page.waitForTimeout(1800);
-    for(let i=0;i<3;i++){await page.mouse.wheel(0,700);await page.waitForTimeout(250);}
-    const finalUrl=page.url();
+    page.setDefaultTimeout(22000);
+    const seen=[];
+    page.on('request',req=>{
+      const u=req.url();
+      if(/coupang\.com\/vp\/products\/\d+/i.test(u)&&!seen.includes(u))seen.push(u);
+    });
+    page.on('response',res=>{
+      const u=res.url();
+      if(/coupang\.com\/vp\/products\/\d+/i.test(u)&&!seen.includes(u))seen.push(u);
+    });
+    await page.goto(link,{waitUntil:'domcontentloaded',timeout:22000});
+    await page.waitForTimeout(2200);
+
+    // A short-link that redirects directly to a product is the strongest signal.
+    let direct=canonicalProductUrl(page.url());
+    if(direct){
+      const meta=await page.evaluate(()=>({
+        title:String(document.querySelector('meta[property="og:title"]')?.content||document.querySelector('h1')?.innerText||document.title||'').replace(/\s+/g,' ').trim().slice(0,240),
+        image:document.querySelector('meta[property="og:image"]')?.content||''
+      })).catch(()=>({title:'',image:''}));
+      console.log(`[ORIGINAL COUPANG] redirect resolve 성공 productId=${productIdFromUrl(direct)} canonical=${direct}`);
+      return{url:direct,name:clean(meta.title)||'원본 작성자 선택 상품',image:clean(meta.image),selected:true,direct:true,sourceLink:link};
+    }
+
+    // Some affiliate landing pages reveal the selected product after scripts/scroll.
+    for(let i=0;i<5;i++){await page.mouse.wheel(0,700);await page.waitForTimeout(350);}
     const data=await page.evaluate(()=>{
       const clean=s=>String(s||'').replace(/\s+/g,' ').trim();
-      const productAnchors=()=>[...document.querySelectorAll('a[href*="/vp/products/"]')];
-      const pickFromRoot=root=>{
-        if(!root)return null;
-        const a=root.matches?.('a[href*="/vp/products/"]')?root:root.querySelector?.('a[href*="/vp/products/"]');
+      const anchors=[...document.querySelectorAll('a[href*="/vp/products/"]')];
+      const toData=(a,selected=false)=>{
         if(!a)return null;
-        const img=a.querySelector?.('img')||root.querySelector?.('img');
-        const title=clean(a.getAttribute('title')||a.innerText||root.innerText||img?.alt||'').slice(0,220);
-        return{href:a.href,title,image:img?.currentSrc||img?.src||''};
+        const root=a.closest('li,article,[class*="product"],[class*="Product"],[class*="item"],[class*="Item"]')||a.parentElement||a;
+        const img=a.querySelector('img')||root?.querySelector?.('img');
+        const title=clean(a.getAttribute('title')||img?.alt||root?.innerText||a.innerText||'').slice(0,240);
+        return{href:a.href,title,image:img?.currentSrc||img?.src||'',selected};
       };
-      const all=[...document.querySelectorAll('body *')].filter(el=>clean(el.textContent)==='선택한 상품'||clean(el.innerText)==='선택한 상품');
-      for(const badge of all){
+      const badges=[...document.querySelectorAll('body *')].filter(el=>/^(선택한 상품|추천 상품)$/i.test(clean(el.textContent||el.innerText)));
+      for(const badge of badges){
         let node=badge;
-        for(let i=0;i<7&&node;i++,node=node.parentElement){
-          const picked=pickFromRoot(node);
-          if(picked)return{...picked,selected:true};
+        for(let i=0;i<9&&node;i++,node=node.parentElement){
+          const a=node.matches?.('a[href*="/vp/products/"]')?node:node.querySelector?.('a[href*="/vp/products/"]');
+          if(a)return toData(a,true);
         }
       }
-      const direct=/\/vp\/products\/\d+/i.test(location.pathname);
-      if(direct){
-        const title=clean(document.querySelector('meta[property="og:title"]')?.content||document.querySelector('h1')?.innerText||document.title).slice(0,220);
-        const image=document.querySelector('meta[property="og:image"]')?.content||'';
-        return{href:location.href,title,image,selected:true,direct:true};
+      // Prefer a unique product link. Do not blindly take the first when many products exist.
+      const uniq=[];
+      const ids=new Set();
+      for(const a of anchors){
+        const m=a.href.match(/\/vp\/products\/(\d+)/i); if(!m||ids.has(m[1]))continue;
+        ids.add(m[1]); uniq.push(a);
       }
-      const first=productAnchors()[0];
-      if(first){
-        const root=first.closest('li,article,[class*="product"],[class*="Product"]')||first.parentElement||first;
-        const picked=pickFromRoot(root)||pickFromRoot(first);
-        if(picked)return{...picked,selected:false,fallbackFirst:true};
-      }
+      if(uniq.length===1)return toData(uniq[0],true);
       return null;
-    });
-    if(!data?.href)return null;
-    const url=canonicalProductUrl(data.href)||canonicalProductUrl(finalUrl);
-    if(!url)return null;
-    return{url,name:clean(data.title)||'원본 작성자 선택 상품',image:clean(data.image),selected:!!data.selected,fallbackFirst:!!data.fallbackFirst,sourceLink:link};
+    }).catch(()=>null);
+
+    if(data?.href){
+      const url=canonicalProductUrl(data.href);
+      if(url){
+        console.log(`[ORIGINAL COUPANG] landing 선택상품 resolve 성공 productId=${productIdFromUrl(url)} canonical=${url}`);
+        return{url,name:clean(data.title)||'원본 작성자 선택 상품',image:clean(data.image),selected:true,sourceLink:link};
+      }
+    }
+
+    // Last reliable signal: exactly one product id observed in network traffic.
+    const uniqueNetwork=[...new Map(seen.map(u=>[productIdFromUrl(u),canonicalProductUrl(u)])).entries()].filter(([id,u])=>id&&u);
+    if(uniqueNetwork.length===1){
+      const url=uniqueNetwork[0][1];
+      console.log(`[ORIGINAL COUPANG] network resolve 성공 productId=${uniqueNetwork[0][0]} canonical=${url}`);
+      return{url,name:'원본 작성자 선택 상품',image:'',selected:true,network:true,sourceLink:link};
+    }
+    console.warn(`[ORIGINAL COUPANG] 링크는 열렸지만 단일 상품 식별 실패 final=${page.url()} productCandidates=${uniqueNetwork.length}`);
+    return null;
   }catch(err){
     console.warn(`[ORIGINAL COUPANG] 링크 해석 실패 link=${String(link).slice(0,120)} reason="${err.message}"`);
     return null;
@@ -98,29 +132,28 @@ engine.buildThreadsFirstAutopilot=async function originalSellerProductBuild(acco
     const details=await benchmark.collectPostDetails(result.sourceUrl,username);
     const links=extractCoupangLinks(details);
     if(!links.length){
-      console.log(`[ORIGINAL COUPANG] 작성자 쿠팡 링크 없음 → 기존 정확매칭 유지 source=${result.sourceUrl}`);
+      console.log(`[ORIGINAL COUPANG] 작성자 쿠팡 링크 없음 source=${result.sourceUrl}`);
       return result;
     }
     console.log(`[ORIGINAL COUPANG] 작성자 쿠팡 링크 ${links.length}개 발견 source=${result.sourceUrl}`);
     let resolved=null;
     for(const link of links){
       const p=await resolveOriginalSelectedProduct(link);
-      if(!p)continue;
-      resolved=p;
-      if(p.selected)break;
+      if(p){resolved=p;break;}
     }
     if(!resolved){
-      console.warn('[ORIGINAL COUPANG] 상품을 확정하지 못해 기존 정확매칭 유지');
+      console.warn('[ORIGINAL COUPANG] 원작성자 동일상품 식별 실패 → 정확매칭 fallback 사용');
       return result;
     }
-    result.product={...(result.product||{}),name:resolved.name,url:resolved.url,image:''};
+    result.product={...(result.product||{}),productId:productIdFromUrl(resolved.url)||result.product?.productId,name:resolved.name,url:resolved.url,image:resolved.image||''};
     result.productSearchTerm=resolved.name;
     result.originalSellerProduct=resolved;
-    console.log(`[ORIGINAL COUPANG] ${resolved.selected?'선택한 상품':'첫 상품 fallback'} 확정 product="${resolved.name}" canonical=${resolved.url}`);
+    result.originalSellerProductExact=true;
+    console.log(`[ORIGINAL COUPANG] 동일상품 확정 productId=${productIdFromUrl(resolved.url)} product="${resolved.name}" canonical=${resolved.url}`);
   }catch(err){
-    console.warn(`[ORIGINAL COUPANG] 원본상품 우선연결 실패 → 기존 정확매칭 유지 reason="${err.message}"`);
+    console.warn(`[ORIGINAL COUPANG] 원본상품 우선연결 실패 → 정확매칭 fallback reason="${err.message}"`);
   }
   return result;
 };
 
-console.log('[ORIGINAL COUPANG PATCH] 작성자 링크 → 선택한 상품 → 사용자 딥링크 재생성 우선 적용');
+console.log('[ORIGINAL COUPANG PATCH] 작성자 링크 redirect/landing/network 추적 → 동일상품 canonical URL 우선 적용');
