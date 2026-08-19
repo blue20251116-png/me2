@@ -12,13 +12,21 @@ Module._extensions['.js'] = function patchedJsLoader(mod, filename) {
   let source = fs.readFileSync(filename, 'utf8');
   let changed = 0;
 
-  // 새 댓글은 본문 발행 5분 뒤 pending 상태로 실행하고,
-  // 실패 댓글은 next_retry_at이 잡힌 경우에만 재시도한다.
-  // 과거 DB에 남은 내용 없는 failed/pending 행이 매분 반복 선택되는 것도 차단한다.
+  // 댓글은 본문 발행 5분 뒤 딱 1회만 실행한다.
+  // 실패한 댓글(status='failed')은 자동 재시도 대상에서 완전히 제외한다.
+  // 과거 DB에 남아 있는 failed 댓글도 다시 건드리지 않는다.
   const oldQuery = "AND comment_status='failed' AND comment_media_id IS NULL AND COALESCE(comment_retry_count,0)<3 AND (comment_next_retry_at IS NULL OR comment_next_retry_at<=?)";
-  const newQuery = "AND comment_status IN ('pending','failed') AND comment_media_id IS NULL AND COALESCE(comment_retry_count,0)<3 AND (NULLIF(TRIM(COALESCE(link,'')),'') IS NOT NULL OR NULLIF(TRIM(COALESCE(recipe_comment_text,'')),'') IS NOT NULL) AND comment_next_retry_at IS NOT NULL AND comment_next_retry_at<=?";
+  const newQuery = "AND comment_status='pending' AND comment_media_id IS NULL AND (NULLIF(TRIM(COALESCE(link,'')),'') IS NOT NULL OR NULLIF(TRIM(COALESCE(recipe_comment_text,'')),'') IS NOT NULL) AND comment_next_retry_at IS NOT NULL AND comment_next_retry_at<=?";
   if (source.includes(oldQuery)) {
     source = source.replace(oldQuery, newQuery);
+    changed++;
+  }
+
+  // pending 댓글을 처리할 때 기존 '재시도' 로그 대신 5분 지연 실행 로그로 표시한다.
+  const oldRetryLog = "console.log(`[댓글 재시도] account #${account.id} post #${post.id} retry=${Number(post.comment_retry_count||0)+1}/3`);";
+  const newRetryLog = "console.log(`[댓글 5분 지연 실행] account #${account.id} post #${post.id}`);";
+  if (source.includes(oldRetryLog)) {
+    source = source.replace(oldRetryLog, newRetryLog);
     changed++;
   }
 
@@ -29,10 +37,10 @@ Module._extensions['.js'] = function patchedJsLoader(mod, filename) {
     changed++;
   }
 
-  if (changed !== 2) {
-    console.warn(`[Comment][5MIN PATCH] scheduler 패치 일부 미적용 changed=${changed}/2`);
+  if (changed !== 3) {
+    console.warn(`[Comment][5MIN PATCH] scheduler 패치 일부 미적용 changed=${changed}/3`);
   } else {
-    console.log('[Comment][5MIN PATCH] 본문 발행 후 댓글 5분 지연 + 재시도 루프 방지 활성화');
+    console.log('[Comment][5MIN PATCH] 본문 발행 후 5분 뒤 댓글 1회만 실행 + 자동 재시도 비활성화');
   }
 
   mod._compile(source, filename);
