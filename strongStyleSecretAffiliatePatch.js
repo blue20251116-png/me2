@@ -58,6 +58,18 @@ async function findSecretAffiliateProduct(accountId, result){
   return null;
 }
 
+function appendSecretAffiliateBridge(commentLead, secretTerm){
+  const term = clean(secretTerm);
+  if (!term || isGenericSecret(term)) return stripTerminalPeriods(commentLead);
+
+  const base = stripTerminalPeriods(commentLead)
+    .replace(new RegExp(`\\n*여기\\s+${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+살짝[\\s\\S]*$`, 'i'), '')
+    .trim();
+
+  const bridge = `여기 ${term} 살짝 더해봐\n이게 진짜 킥이야ㅋㅋ`;
+  return [base, bridge].filter(Boolean).join('\n\n').trim();
+}
+
 engine.buildThreadsFirstAutopilot = async function strongStyleSecretAffiliateBuild(accountId, options){
   const result = await originalBuild(accountId, options);
   if (!result) return result;
@@ -71,6 +83,8 @@ engine.buildThreadsFirstAutopilot = async function strongStyleSecretAffiliateBui
       result.product = replacement.product;
       result.productSearchTerm = replacement.searchTerm;
       result.secretTerm = replacement.searchTerm;
+      result.commentLead = appendSecretAffiliateBridge(result.commentLead, replacement.searchTerm);
+      console.log(`[AutopilotV3][SECRET AFFILIATE] 댓글 연결문 추가 term="${replacement.searchTerm}"`);
     } else {
       console.warn(`[AutopilotV3][SECRET AFFILIATE] 비밀재료용 적합 상품을 못 찾아 기존 상품 유지 topic="${clean(result.topic)}"`);
     }
@@ -78,4 +92,4 @@ engine.buildThreadsFirstAutopilot = async function strongStyleSecretAffiliateBui
   return result;
 };
 
-console.log('[Autopilot][STRONG STYLE+SECRET AFFILIATE] 종결 마침표 제거 + 레시피 비밀재료 쿠팡 우선연결 활성화');
+console.log('[Autopilot][STRONG STYLE+SECRET AFFILIATE] 종결 마침표 제거 + 레시피 비밀재료 쿠팡 우선연결 + 자연스러운 링크 연결문 활성화');
