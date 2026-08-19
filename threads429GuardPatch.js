@@ -1,6 +1,7 @@
 // Threads 웹 직접 접근 429 완화 패치
 // - 동일 게시물 상세 결과 20분 캐시
 // - 429 감지 시 15분 전역 cooldown
+// - 영상 추출 패치와 같은 전역 cooldown 상태를 공유
 // - cooldown 동안 상세 페이지 재접근 대신 프로필 목록 fallback 사용
 // 발행 API/댓글 스케줄러는 건드리지 않는다.
 
@@ -9,7 +10,21 @@ const benchmark = require('./benchmarkAccounts');
 const CACHE_TTL_MS = 20 * 60 * 1000;
 const COOLDOWN_MS = 15 * 60 * 1000;
 const detailCache = new Map();
-let cooldownUntil = 0;
+
+const guard = global.__THREADS_WEB_GUARD__ || {
+  cooldownUntil: 0,
+  mark429(source = '') {
+    this.cooldownUntil = Math.max(this.cooldownUntil || 0, Date.now() + COOLDOWN_MS);
+    console.warn(`[Threads][429 GUARD] 429 감지 → 15분 cooldown 시작${source ? ` source=${source}` : ''}`);
+  },
+  isCooling() {
+    return Date.now() < Number(this.cooldownUntil || 0);
+  },
+  remainingMinutes() {
+    return Math.max(0, Math.ceil((Number(this.cooldownUntil || 0) - Date.now()) / 60000));
+  },
+};
+global.__THREADS_WEB_GUARD__ = guard;
 
 function canonical(raw) {
   try {
@@ -54,7 +69,7 @@ async function profileFallback(url, username) {
       webCooldownFallback: true,
     };
   } catch (err) {
-    if (is429(err)) cooldownUntil = Math.max(cooldownUntil, Date.now() + COOLDOWN_MS);
+    if (is429(err)) guard.mark429(`profile:${username || '-'}`);
     return null;
   }
 }
@@ -70,8 +85,8 @@ benchmark.collectPostDetails = async function guardedCollectPostDetails(url, use
   }
   if (cached) detailCache.delete(key);
 
-  if (Date.now() < cooldownUntil) {
-    const remain = Math.ceil((cooldownUntil - Date.now()) / 60000);
+  if (guard.isCooling()) {
+    const remain = guard.remainingMinutes();
     console.warn(`[Threads][429 GUARD] cooldown ${remain}분 남음 → 상세 직접접근 생략 @${username || '-'} url=${key}`);
     const fallback = await profileFallback(key, username);
     if (fallback?.sourceText) {
@@ -87,8 +102,7 @@ benchmark.collectPostDetails = async function guardedCollectPostDetails(url, use
     return result;
   } catch (err) {
     if (!is429(err)) throw err;
-    cooldownUntil = Date.now() + COOLDOWN_MS;
-    console.warn(`[Threads][429 GUARD] 429 감지 → ${COOLDOWN_MS / 60000}분 cooldown 시작 url=${key}`);
+    guard.mark429(key);
     const fallback = await profileFallback(key, username);
     if (fallback?.sourceText) {
       detailCache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, value: clone(fallback) });
@@ -103,4 +117,4 @@ setInterval(() => {
   for (const [key, item] of detailCache) if (!item || item.expiresAt <= now) detailCache.delete(key);
 }, 10 * 60 * 1000).unref?.();
 
-console.log('[Threads][429 GUARD] 상세 20분 캐시 + 429 발생 시 15분 cooldown 활성화');
+console.log('[Threads][429 GUARD] 상세 20분 캐시 + 429 발생 시 15분 전역 cooldown 활성화');
