@@ -14,6 +14,16 @@ const GRAPH_BASE='https://graph.threads.net/v1.0';
 const MEDIA_BUNDLE_PREFIX='__THREADS_MEDIA_BUNDLE__';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
+// Threads 본문은 발행 직전에 한 번 더 정리한다
+// 이미 DB에 저장된 예약글/대기글도 이 단계를 지나므로 생성 시점이 오래됐어도 마침표가 제거된다
+// 숫자 소수점(1.5)처럼 숫자 사이의 점은 보존한다
+function sanitizePublishedThreadsText(value){
+  return String(value||'')
+    .replace(/(^|[^\d])\.(?=\s|$)/g,'$1')
+    .replace(/[ \t]+\n/g,'\n')
+    .trim();
+}
+
 function logThreadsError(stage,err,extra={}){
   const apiErr=err.response?.data?.error||{},status=err.response?.status||'-';
   console.error(`[Threads][${stage}][ERROR] status=${status} type=${apiErr.type||'-'} code=${apiErr.code||'-'} subcode=${apiErr.error_subcode||'-'} message=${apiErr.message||err.message||'-'} `+Object.entries(extra).map(([k,v])=>`${k}=${v}`).join(' '));
@@ -138,6 +148,7 @@ function normalizeMediaItems(items){
 function decodeMediaBundle(value){const s=String(value||'');if(!s.startsWith(MEDIA_BUNDLE_PREFIX))return null;try{return normalizeMediaItems(JSON.parse(decodeURIComponent(s.slice(MEDIA_BUNDLE_PREFIX.length))));}catch{return null;}}
 
 async function publishPost(accountId,{text,imageUrl,videoUrl}){
+  text=sanitizePublishedThreadsText(text);
   const bundle=decodeMediaBundle(imageUrl);
   if(bundle?.length)return publishMediaItemsPost(accountId,{text,mediaItems:bundle});
   const account=getAccount(accountId);
@@ -180,6 +191,7 @@ async function createCarouselChildContainer(accountId,item,accessToken,{maxTries
 }
 
 async function createCarouselParent(accountId,text,children,accessToken,{maxTries=5}={}){
+  text=sanitizePublishedThreadsText(text);
   let lastError;const childIds=children.map(x=>x.id);
   for(let i=0;i<maxTries;i++){
     try{
@@ -193,6 +205,7 @@ async function createCarouselParent(accountId,text,children,accessToken,{maxTrie
 }
 
 async function publishMediaItemsPost(accountId,{text,mediaItems}){
+  text=sanitizePublishedThreadsText(text);
   const items=normalizeMediaItems(mediaItems);
   if(!items.length)return publishPost(accountId,{text});
   if(items.length===1){
