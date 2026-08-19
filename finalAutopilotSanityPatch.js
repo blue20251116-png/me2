@@ -49,6 +49,67 @@ function affiliateKickLabel(productName){
   return '';
 }
 
+function weakProductHook(text){
+  const t = String(text || '');
+  const lines = t.split('\n').map(x => x.trim()).filter(Boolean);
+  const first = lines[0] || '';
+  if (!first) return true;
+  if (/(작고|귀엽|기능이|기능도|기능은|엄청 많|다양한 기능|활용하기 좋|괜찮을 거야|찾는다면|추천|꿀템|좋더라|편하더라)/i.test(t)) return true;
+  if (/(음악|영상|전자책|카메라|스크롤|셔터|블루투스|기능)/i.test(first)) return true;
+  if (lines.length >= 4 && /(그리고|또|까지|여러모로|활용)/i.test(t)) return true;
+  if (/(찾는다면|추천해|추천할|괜찮을 거야|사도 될|장만|하나쯤)/i.test(lines[lines.length - 1] || '')) return true;
+  return false;
+}
+
+async function rewriteProductHook(accountId, result, detail){
+  const apiKey = getOpenAIKey(accountId);
+  if (!apiKey) return sanitizeBody(result.text);
+  const evidence = sourceEvidence(detail) || String(result.text || '');
+  const prompt = `너는 한국 Threads 바이럴 본문 최종 편집기다
+생활용품이나 신기한 제품 영상 본문을 사람처럼 짧게 다시 쓴다
+
+절대 규칙
+- 2~4줄만 쓴다
+- 첫 줄은 제품 설명이 아니라 궁금증 반전 의외성 공감 중 하나로 시작한다
+- 첫 줄에 제품명 기능 스펙을 설명하지 않는다
+- 기능은 많아도 본문에서는 가장 신기한 기능 1개만 언급한다
+- 기능 나열 금지
+- 장점 나열 금지
+- 마지막에 추천 구매권유 총평을 붙이지 않는다
+- '찾는다면 이거 괜찮을 거야' '하나 장만' '꿀템' '추천' 같은 문구 금지
+- '작고 귀여운데 기능이 많아' 같은 상품소개형 시작 금지
+- 실제로 확인되지 않은 구매 사용 경험을 만들지 않는다
+- ㅋㅋ는 필요하면 문장 끝에 최대 1번만 붙이고 단독 줄로 쓰지 않는다
+- 마침표와 쉼표를 쓰지 않는다
+- 자연스러운 반말만 쓴다
+- 영상이 보여주는 내용을 다 설명하지 말고 이게 뭐지 싶은 여백을 남긴다
+- 일반제품이면 재료 만드는 법 레시피 같은 말을 절대 쓰지 않는다
+JSON만 출력: {"text":""}`;
+  const user = `[원본 소재]\n${evidence.slice(0,6000)}\n\n[현재 본문]\n${String(result.text || '').slice(0,1200)}\n\n[판매대상 참고]\n${clean(result?.visionTarget?.soldObject) || clean(result?.topic) || '(없음)'}`;
+
+  try {
+    const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-4o-mini',
+      temperature: 0.72,
+      max_tokens: 600,
+      response_format: { type: 'json_object' },
+      messages: [{ role: 'system', content: prompt }, { role: 'user', content: user }],
+    }, {
+      headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      timeout: 45000,
+    });
+    const parsed = JSON.parse(r.data?.choices?.[0]?.message?.content || '{}');
+    const fixed = sanitizeBody(parsed.text || '');
+    if (fixed) {
+      console.log(`[AutopilotV3][FINAL HOOK] 제품 본문 재작성 완료 before="${sanitizeBody(result.text).replace(/\n/g,' / ')}" after="${fixed.replace(/\n/g,' / ')}"`);
+      return fixed;
+    }
+  } catch (e) {
+    console.warn(`[AutopilotV3][FINAL HOOK] 재작성 실패 reason="${e.response?.data?.error?.message || e.message}"`);
+  }
+  return sanitizeBody(result.text);
+}
+
 async function rewriteRecipeFromExactSource(accountId, result, detail){
   const apiKey = getOpenAIKey(accountId);
   if (!apiKey) return String(result.commentLead || '').trim();
@@ -101,33 +162,36 @@ engine.buildThreadsFirstAutopilot = async function finalAutopilotSanityBuild(acc
 
   result.text = sanitizeBody(result.text);
 
-  if (result.mode === 'recipe' && result.sourceUrl && result.sourceUsername) {
+  let detail = null;
+  if (result.sourceUrl && result.sourceUsername) {
+    try { detail = await collectPostDetails(result.sourceUrl, result.sourceUsername); }
+    catch (e) { console.warn(`[AutopilotV3][FINAL SOURCE] 원문 재확인 실패 reason="${e.message}"`); }
+  }
+
+  if (result.mode === 'recipe' && detail) {
     try {
-      const detail = await collectPostDetails(result.sourceUrl, result.sourceUsername);
       result.commentLead = await rewriteRecipeFromExactSource(accountId, result, detail);
 
       const evidence = sourceEvidence(detail);
       const secret = clean(result.secretTerm);
       const secretIsGrounded = secret && evidence.includes(secret);
       const label = affiliateKickLabel(result?.product?.name);
-
-      // 원문에 정확한 비밀재료명이 없으면 AI가 추측한 secretTerm은 사용자에게 노출하지 않는다
       if (!secretIsGrounded) result.secretTerm = '';
-
-      // 링크 앞 추천 문구는 최종 연결 상품이 소스/기름/치즈처럼 요리에 자연스럽게 더할 수 있을 때만 붙인다
       if (label) {
         result.commentLead = `${String(result.commentLead || '').trim()}\n\n여기 마지막에 ${label} 살짝 더해봐\n이게 진짜 킥이야ㅋㅋ`.trim();
       }
-
       console.log(`[AutopilotV3][FINAL RECIPE GUARD] 원문 재검증 완료 source=${result.sourceUrl} kick=${label || 'none'}`);
     } catch (e) {
       console.warn(`[AutopilotV3][FINAL RECIPE GUARD] 원문 재확인 실패 reason="${e.response?.data?.error?.message || e.message}"`);
     }
   }
 
-  // 모든 모드에서 마지막으로 한 번 더 ㅋㅋ 단독줄과 문장부호를 정리한다
+  if (result.mode !== 'recipe' && weakProductHook(result.text)) {
+    result.text = await rewriteProductHook(accountId, result, detail);
+  }
+
   result.text = sanitizeBody(result.text);
   return result;
 };
 
-console.log('[Autopilot][FINAL SANITY] 본문 2~4줄 정리 + 단독 ㅋㅋ 제거 + 레시피 원문 재검증 활성화');
+console.log('[Autopilot][FINAL SANITY] 본문 2~4줄 + 단독 ㅋㅋ 제거 + 약한 제품후킹 최종 재작성 + 레시피 원문 재검증 활성화');
