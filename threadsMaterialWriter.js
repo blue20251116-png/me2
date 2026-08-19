@@ -57,8 +57,6 @@ function sanitizeGeneratedComment(value) {
   return s.replace(/\b(?:쿠파스|쿠팡)\s*링크\b\s*:?/gi, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-// Threads 본문은 마침표와 쉼표를 쓰지 않는다
-// 숫자 사이 소수점은 보존한다
 function cleanBodyPunctuation(value) {
   return String(value || '')
     .replace(/,/g, '')
@@ -67,13 +65,19 @@ function cleanBodyPunctuation(value) {
     .join('\n');
 }
 
-function formatThreadsBody(value) {
+function stripRecipeLanguageFromProductBody(value) {
+  const banned = /(재료(?:랑|와|하고)?\s*(?:만드는\s*법|만드는법)|만드는\s*법|만드는법|레시피|요리법|조리법)/i;
+  let lines = String(value || '').split('\n').map(x => x.trim()).filter(Boolean);
+  lines = lines.filter(line => !banned.test(line));
+  return lines.join('\n').trim();
+}
+
+function formatThreadsBody(value, { isRecipe = false } = {}) {
   let s = cleanBodyPunctuation(stripAffiliateNoise(value, { preserveLines: true }).trim());
   if (!s) return '';
+  if (!isRecipe) s = stripRecipeLanguageFromProductBody(s);
 
   let lines = s.split(/\n/).map(x => x.trim()).filter(Boolean);
-
-  // ㅋㅋ/ㅎㅎ/ㄷㄷ 같은 반응만 단독 줄로 생성되면 앞 문장에 붙인다
   const merged = [];
   for (const line of lines) {
     if (/^(?:ㅋ{1,4}|ㅎ{1,4}|ㄷㄷ|ㅠ{1,3}|ㅜ{1,3})[!?]*$/.test(line) && merged.length) {
@@ -82,10 +86,7 @@ function formatThreadsBody(value) {
       merged.push(line);
     }
   }
-  lines = merged;
-
-  // 본문은 최대 4개의 실제 문장만 남긴다
-  lines = lines.slice(0, 4);
+  lines = merged.slice(0, 4);
   return cleanBodyPunctuation(lines.join('\n')).replace(/\n{3,}/g, '\n\n').trim();
 }
 
@@ -122,108 +123,30 @@ async function generateFromThreadsMaterial(accountId, { keyword, sourceText, aut
 - 강한 감탄이나 평가는 한 게시물에서 최대 1회만 쓴다
 - 마지막에 억지 총평을 붙이지 않는다
 - 구매 권유를 하지 않는다
-- '무조건 사야 해' '꼭 사' '강추' '필수템' '인생템' '꿀템' '추천해' '쟁여둬'를 쓰지 않는다
 - 확인되지 않은 개인 경험을 만들지 않는다
-- '키 작은 나한테' '내가 써봤는데' '붙여놨는데' '사봤는데'처럼 실제 사용자 경험이 확인되지 않은 1인칭 경험을 지어내지 않는다
-- 자연스러운 반말을 사용하고 음슴체(~함/~임/~됨)는 쓰지 않는다
-- 본문에는 마침표(.)를 쓰지 않는다
-- 본문에는 쉼표(,)도 쓰지 않는다
-- 문장을 나눌 때는 쉼표 대신 줄바꿈을 사용한다
-- 물음표 느낌표 ㅋㅋ ㄷㄷ은 자연스러울 때만 사용한다
+- 자연스러운 반말을 사용하고 음슴체는 쓰지 않는다
+- 본문에는 마침표와 쉼표를 쓰지 않는다
+- 문장을 나눌 때는 줄바꿈을 사용한다
 - 입력 자료의 광고 고지 링크 작성자 UI 정보는 출력하지 않는다
 - text와 comment 어디에도 URL을 출력하지 않는다
-- 5개 버전은 시작과 전개를 확실히 다르게 한다
-- 발견형 공감형 의문형 짧은 반응형을 섞는다
-- 모든 버전을 같은 문장 수와 같은 구조로 만들지 않는다
 `;
 
   const system = isRecipe
-    ? `${styleRules}
-레시피/음식 소재다
-[본문]
-- 2~4줄의 짧은 Threads 반응글만 쓴다
-- 레시피 전체를 본문에 나열하지 않는다
-- 음식 이름과 장점을 설명하기보다 첫 반응 비교 궁금증 중 하나만 잡는다
-- 맛있다 대박 최고 무조건 같은 평가를 연속으로 쓰지 않는다
-- 사진이 비주얼을 보여주면 본문에서 반복 설명하지 않는다
-- 꼭 만들어봐 추천해 같은 권유를 붙이지 않는다
-[댓글 - 형식 강제]
-댓글은 반드시 아래 순서를 지킨다
-🥘 재료
-- 재료를 한 줄에 하나씩 작성
-- 원문/작성자댓글에 실제 있는 재료와 계량을 우선 사용
+    ? `${styleRules}\n레시피/음식 소재다\n[본문]\n- 2~4줄의 짧은 Threads 반응글만 쓴다\n- 레시피 전체를 본문에 나열하지 않는다\n[댓글 - 형식 강제]\n🥘 재료\n- 재료를 한 줄에 하나씩 작성\n\n🍳 만드는 법\n1. 한 단계씩 줄바꿈\n2. 실제로 따라갈 수 있게 순서대로 정리\n- 원문에 없는 재료를 임의 추가하지 않는다\n반드시 JSON만 출력: {\"items\":[{\"text\":\"본문\",\"comment\":\"댓글\"}, ...]} 정확히 5개`
+    : `${styleRules}\n생활/제품 일반소재다\n[본문]\n- 2~4줄만 쓴다\n- 하나의 불편 발견 의외성 반응 중 하나만 선택한다\n- 제품 특징은 최대 1개만 쓴다\n- 영상 보고 사람이 친구한테 한마디 하듯 끝낸다\n- 재료 만드는 법 만드는법 레시피 요리법 조리법이라는 단어를 절대 쓰지 않는다\n- 댓글에 재료나 만드는 법을 적어준다는 CTA를 절대 쓰지 않는다\n- 댓글을 보라고 유도하는 문장을 본문에 넣지 않는다\n[댓글 - 형식 강제]\n댓글은 반드시 아래 형식으로만 작성한다\n✅ 핵심만\n- 원문에서 확인되는 핵심 포인트 1\n- 원문에서 확인되는 핵심 포인트 2\n- 필요하면 핵심 포인트 3\n- 재료 만드는 법 레시피 요리법 조리법을 쓰지 않는다\n- 링크와 광고고지는 쓰지 않는다\n반드시 JSON만 출력: {\"items\":[{\"text\":\"본문\",\"comment\":\"댓글\"}, ...]} 정확히 5개`;
 
-🍳 만드는 법
-1. 한 단계씩 줄바꿈
-2. 실제로 따라갈 수 있게 순서대로 정리
-3. 원문/작성자댓글에 있는 시간/온도/양은 정확히 유지
-필요한 경우 마지막에 짧은 팁 1개만 추가할 수 있다
-- 광고 문구 제휴 고지 URL 쿠팡 링크는 절대 쓰지 않는다
-- 모든 재료를 한 줄에 몰아쓰지 않는다
-- 만드는 법도 한 문장에 번호 여러 개를 몰아쓰지 않는다
-- 댓글은 반드시 실제 줄바꿈을 사용한다
-- 원문에 없는 재료를 임의 추가하지 않는다
-반드시 JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}, ...]} 정확히 5개`
-    : `${styleRules}
-생활/제품 소재다
-[본문]
-- 2~4줄만 쓴다
-- 하나의 불편 발견 의외성 반응 중 하나만 선택한다
-- 제품 특징은 최대 1개만 쓴다
-- 특징을 말했으면 그 뒤에 장점 설명을 더 붙이지 않아도 된다
-- 제품명을 첫 줄부터 상품 소개처럼 설명하지 않는다
-- 확인되지 않은 구매 사용 설치 경험을 만들지 않는다
-- '편해' '깔끔해' '좋아' 같은 결론을 습관적으로 붙이지 않는다
-- 영상 보고 사람이 친구한테 한마디 하듯 끝낸다
-[좋은 길이 예시]
-머리핀은 꼭 필요할 때 안 보임ㅋㅋ
-근데 저렇게 붙여놓는 건
-생각도 못했네
-
-상부장이 내려오는 건 처음 봄ㅋㅋ
-저 높이를 어떻게 쓰나 했는데
-아예 내려버리네
-[댓글 - 형식 강제]
-댓글은 반드시 아래 형식으로만 작성한다
-✅ 핵심만
-- 원문에서 확인되는 핵심 포인트 1
-- 원문에서 확인되는 핵심 포인트 2
-- 필요하면 핵심 포인트 3
-- 링크와 광고고지는 쓰지 않는다
-- 링크 자리표시자도 쓰지 않는다
-- 핵심 포인트를 한 줄에 몰아쓰지 않는다
-- 반드시 실제 줄바꿈을 사용한다
-반드시 JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}, ...]} 정확히 5개`;
-
-  const user = `키워드: ${String(keyword || '').trim()}
-
-[원 게시물 - 정제된 사실 자료 A]
-${cleanedSource.slice(0, 5000)}
-
-[같은 작성자의 추가 설명/댓글 - 정제된 사실 자료 B]
-${cleanedReplies.slice(0, 5000) || '(추가 설명 없음)'}
-
-A/B의 광고 고지와 외부 링크는 이미 제거되어 있다
-출력에서 광고문구나 링크를 복원하거나 추측하지 말 것
-A와 B에 있는 사실만 사용하고 문장은 새로 작성할 것
-text 본문은 반드시 2~4줄로 작성할 것
-본문에 마침표와 쉼표를 사용하지 말 것
-ㅋㅋ를 단독 줄로 쓰지 말 것
-한 게시물에는 하나의 생각만 담고 장점과 총평을 덧붙여 길게 설명하지 말 것`;
+  const user = `키워드: ${String(keyword || '').trim()}\n\n[원 게시물 - 정제된 사실 자료 A]\n${cleanedSource.slice(0, 5000)}\n\n[같은 작성자의 추가 설명/댓글 - 정제된 사실 자료 B]\n${cleanedReplies.slice(0, 5000) || '(추가 설명 없음)'}\n\nA와 B에 있는 사실만 사용하고 문장은 새로 작성할 것\ntext 본문은 반드시 2~4줄로 작성할 것\n본문에 마침표와 쉼표를 사용하지 말 것\nㅋㅋ를 단독 줄로 쓰지 말 것\n${isRecipe ? '' : '일반소재이므로 재료 만드는 법 레시피 요리법 조리법 관련 문구와 댓글 유도 문구를 절대 쓰지 말 것'}`;
 
   const res = await axios.post('https://api.openai.com/v1/chat/completions', {
-    model: 'gpt-4o-mini',
-    temperature: isRecipe ? 0.32 : 0.82,
-    max_tokens: isRecipe ? 4200 : 3000,
-    response_format: { type: 'json_object' },
-    messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
+    model: 'gpt-4o-mini', temperature: isRecipe ? 0.32 : 0.82, max_tokens: isRecipe ? 4200 : 3000,
+    response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
   }, { headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, timeout: 45000 });
 
   const raw = res.data?.choices?.[0]?.message?.content;
   if (!raw) throw new Error('AI 글 생성 결과가 비어 있습니다.');
   const parsed = JSON.parse(raw);
   const items = Array.isArray(parsed.items)
-    ? parsed.items.map(x => ({ text: formatThreadsBody(x?.text || ''), comment: sanitizeGeneratedComment(x?.comment) })).filter(x => x.text).slice(0, 5)
+    ? parsed.items.map(x => ({ text: formatThreadsBody(x?.text || '', { isRecipe }), comment: sanitizeGeneratedComment(x?.comment) })).filter(x => x.text).slice(0, 5)
     : [];
   if (!items.length) throw new Error('AI 글 생성 결과를 읽지 못했습니다.');
 
@@ -235,7 +158,7 @@ text 본문은 반드시 2~4줄로 작성할 것
         : `✅ 핵심만\n- ${fallbackSource ? fallbackSource.slice(0, 180) : '원문에서 확인되는 핵심 정보를 참고해주세요'}`;
     }
     item.comment = sanitizeGeneratedComment(item.comment);
-    item.text = formatThreadsBody(item.text);
+    item.text = formatThreadsBody(item.text, { isRecipe });
   }
 
   return { mode: isRecipe ? 'recipe' : 'product', items, texts: items.map(x => x.text), comments: items.map(x => x.comment) };
