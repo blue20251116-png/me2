@@ -78,17 +78,33 @@ async function extractPlayableVideoUrls(postUrl) {
       page.on('request', request => add(request.url()));
       page.on('response', async response => {
         try {
+          const status = response.status();
+          const url = response.url();
+          const request = response.request();
+          const resourceType = request.resourceType();
           const headers = await response.allHeaders().catch(() => ({}));
           const type = String(headers['content-type'] || '').toLowerCase();
-          if (type.startsWith('video/') || type.includes('octet-stream') || isHttpVideoUrl(response.url())) add(response.url());
-        } catch {}
+
+          if (status === 429) {
+            console.warn(`[Threads][429 TRACE] stage=subresponse status=429 resource=${resourceType || '-'} url=${url} retryAfter=${headers['retry-after'] || '-'} contentType=${type || '-'}`);
+            webGuard()?.mark429?.(`video-response:${resourceType || '-'}:${url}`);
+            return;
+          }
+
+          if (type.startsWith('video/') || type.includes('octet-stream') || isHttpVideoUrl(url)) add(url);
+        } catch (err) {
+          console.warn(`[Threads][429 TRACE ERROR] stage=subresponse reason="${err.message}"`);
+        }
       });
 
       try {
         const response = await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 16000 });
         const status=response?.status?.()??0;
+        const headers = response ? await response.allHeaders().catch(() => ({})) : {};
+        console.log(`[Threads][VIDEO PAGE] status=${status || '-'} url=${targetUrl} retryAfter=${headers['retry-after'] || '-'} server=${headers['server'] || '-'}`);
         if(status===429){
-          webGuard()?.mark429?.(`video:${targetUrl}`);
+          console.warn(`[Threads][429 TRACE] stage=page-goto status=429 resource=document url=${targetUrl} retryAfter=${headers['retry-after'] || '-'} contentType=${headers['content-type'] || '-'}`);
+          webGuard()?.mark429?.(`video-page:${targetUrl}`);
           console.warn(`[Threads][VIDEO EXTRACT SCAN] status=429 url=${targetUrl} → cooldown 시작, /media 추가호출 생략`);
           return false;
         }
@@ -193,4 +209,4 @@ benchmark.collectPostDetails = async function patchedCollectPostDetails(url, use
   return { ...details, videos, hasVideo: details?.hasVideo || videos.length > 0 };
 };
 
-console.log('[Threads][VIDEO PATCH] 영상 추출 + 429 전역 cooldown 연동 + /media 재시도 활성화');
+console.log('[Threads][VIDEO PATCH] 영상 추출 + 429 상세 TRACE + 전역 cooldown 연동 + /media 재시도 활성화');
