@@ -14,6 +14,25 @@ function hasCoupangLink(text) {
   return coupangLinks(text).length > 0;
 }
 
+function ensureCoupangDisclosureFirst(text) {
+  const raw = String(text || '').replace(/\r/g, '').trim();
+  if (!raw) return raw;
+
+  const lines = raw.split('\n');
+  const disclosureIndex = lines.findIndex(line => /쿠팡\s*파트너스\s*활동의\s*일환/i.test(line));
+  if (disclosureIndex < 0) return raw;
+
+  const disclosure = lines[disclosureIndex].trim();
+  const rest = lines
+    .filter((_, index) => index !== disclosureIndex)
+    .join('\n')
+    .replace(/^\s+/, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return rest ? `${disclosure}\n\n${rest}` : disclosure;
+}
+
 function normalizeBaseUrl(value) {
   const raw = String(value || '').trim().replace(/\/$/, '');
   if (!raw) return '';
@@ -73,9 +92,6 @@ async function publishCreatedReply(creationId, accessToken) {
 }
 
 async function createNoPreviewReply({ accountId, parentMediaId, text, accessToken, sinkUrl }) {
-  // Threads API 문서상 TEXT에 link_attachment가 없으면 text의 첫 URL을 자동 미리보기로 사용한다
-  // 그래서 쿠팡 URL은 text에 그대로 두되 link_attachment는 미리보기 정보가 없는 text/plain sink로 명시한다
-  // 목적: 쿠팡 링크는 클릭 가능하게 유지하면서 쿠팡 상품 OG 카드가 자동 생성되는 것을 막는다
   const params = {
     media_type: 'TEXT',
     text,
@@ -95,6 +111,13 @@ async function createNoPreviewReply({ accountId, parentMediaId, text, accessToke
 }
 
 threadsApi.publishReply = async function publishReplyNoPreview(accountId, parentMediaId, text) {
+  const before = String(text || '').trim();
+  text = ensureCoupangDisclosureFirst(before);
+
+  if (text !== before) {
+    console.log(`[Threads][COUPANG DISCLOSURE FIRST] account=${accountId} parentMediaId=${parentMediaId}`);
+  }
+
   if (!hasCoupangLink(text)) return originalPublishReply(accountId, parentMediaId, text);
 
   const account = db.getAccount(accountId);
@@ -122,4 +145,4 @@ threadsApi.publishReply = async function publishReplyNoPreview(accountId, parent
   }
 };
 
-console.log('[Threads][REPLY NO-PREVIEW PATCH] 쿠팡 URL은 text에 유지 + 별도 text/plain sink를 link_attachment로 지정');
+console.log('[Threads][REPLY NO-PREVIEW PATCH] 쿠팡 고지문 첫줄 고정 + 쿠팡 URL text 유지 + 별도 sink link_attachment');
