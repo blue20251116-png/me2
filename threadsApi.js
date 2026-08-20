@@ -24,6 +24,24 @@ function sanitizePublishedThreadsText(value){
     .trim();
 }
 
+// Threads는 TEXT 댓글의 첫 URL을 자동으로 링크 카드로 잡는 경우가 있다
+// Coupang 댓글에 URL이 하나뿐이면 같은 목적지의 두 번째 URL을 fragment 변형으로 추가해
+// "URL 2개" 형태로 발행한다. fragment는 서버 요청에 전달되지 않으므로 목적지는 동일하다
+// 이 처리는 댓글에만 적용하며 일반 본문은 건드리지 않는다
+function applyCoupangReplyPreviewGuard(value){
+  const text=sanitizePublishedThreadsText(value);
+  const matches=[...text.matchAll(/https?:\/\/link\.coupang\.com\/[^\s]+/gi)];
+  if(matches.length!==1)return{text,guardApplied:false,urlCount:matches.length};
+
+  const original=matches[0][0];
+  const alternate=original.includes('#')?`${original}preview2`:`${original}#preview2`;
+  return{
+    text:`${text}\n${alternate}`.trim(),
+    guardApplied:true,
+    urlCount:2
+  };
+}
+
 function logThreadsError(stage,err,extra={}){
   const apiErr=err.response?.data?.error||{},status=err.response?.status||'-';
   console.error(`[Threads][${stage}][ERROR] status=${status} type=${apiErr.type||'-'} code=${apiErr.code||'-'} subcode=${apiErr.error_subcode||'-'} message=${apiErr.message||err.message||'-'} `+Object.entries(extra).map(([k,v])=>`${k}=${v}`).join(' '));
@@ -254,9 +272,12 @@ async function publishCarouselPost(accountId,{text,imageUrls}){return publishMed
 
 async function publishReply(accountId,parentMediaId,text){
   const account=getAccount(accountId);if(!account)throw new Error('존재하지 않는 계정입니다');if(!account.threads_access_token)throw new Error('스레드 Access Token이 없습니다');const accessToken=account.threads_access_token;
+  const guarded=applyCoupangReplyPreviewGuard(text);
+  text=guarded.text;
+  console.log(`[Threads][REPLY_PREVIEW_GUARD] account=${accountId} parentMediaId=${parentMediaId} applied=${guarded.guardApplied?'yes':'no'} coupangUrls=${guarded.urlCount} text=${JSON.stringify(text)}`);
   let creationId;
-  try{const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params:{media_type:'TEXT',text,reply_to_id:parentMediaId,access_token:accessToken},timeout:20000});creationId=createRes.data?.id;if(!creationId)throw new Error('Threads 댓글 컨테이너 생성 응답에 id가 없습니다');}catch(err){logThreadsError('REPLY_CREATE',err,{accountId,parentMediaId});throw err;}
-  return publishContainer(creationId,accessToken,5,2000);
+  try{const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params:{media_type:'TEXT',text,reply_to_id:parentMediaId,access_token:accessToken},timeout:20000});creationId=createRes.data?.id;if(!creationId)throw new Error('Threads 댓글 컨테이너 생성 응답에 id가 없습니다');console.log(`[Threads][REPLY_CREATE] 성공 account=${accountId} parentMediaId=${parentMediaId} creationId=${creationId}`);}catch(err){logThreadsError('REPLY_CREATE',err,{accountId,parentMediaId});throw err;}
+  return publishContainer(creationId,accessToken,3,2000);
 }
 
 async function getMediaInsights(accountId,mediaId){
