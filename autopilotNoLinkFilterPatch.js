@@ -32,11 +32,10 @@ require.extensions['.js'] = function patchedJsLoader(mod, filename) {
   // confidence가 0~1 또는 0~100 어느 형식으로 와도 0~1로 환산한다.
   source = source.replace(
     /function purchasableTerm\(term\)\{/,
-    `function confidence01(v){const n=Number(v)||0;return n>1?Math.min(1,n/100):Math.max(0,n);}\nfunction purchasableTerm(term){`
+    `function confidence01(v){const n=Number(v)||0;return n>1?Math.min(1,n/100):Math.max(0,n);}\nfunction productMatchOk(vision,product){const sold=clean(vision?.soldObject);const name=clean(product?.name);if(!sold||!name)return true;const stop=new Set(['도구','제품','상품','아이템','용품','만들기','재료','요리']);const tokens=sold.split(/\\s+/).map(normalized).filter(x=>x.length>=2&&!stop.has(x));const n=normalized(name);if(tokens.length&&tokens.some(t=>n.includes(t)))return true;const soldFood=/(떡볶이|김밥|라면|롤케이크|빵|케이크|수육|고기|한우|치킨|닭|커피|무스|오이무침)/i.test(sold);const productAddon=/(소스|양념|분말|가루|시즈닝|믹스|띠지|포장|용기)/i.test(name);if(soldFood&&productAddon&&!/(소스|양념|분말|가루|시즈닝|믹스)/i.test(sold))return false;return tokens.length===0;}\nfunction purchasableTerm(term){`
   );
 
   // 영상이 있다고 수집 단계에서 확인했지만 실제 playable URL을 못 얻은 소재는 이미지로 강등하지 않는다.
-  // 429/cooldown 때문에 영상 추출이 실패한 경우 다음 소재로 넘긴다.
   source = source.replace(
     /console\.log\(`\[AutopilotV3\]\[TRY\] \$\{idx\+1\}\/\$\{materials\.length\} @\$\{material\.username\|\|'-'\} source=\$\{material\.url\}`\);/,
     `console.log(\`[AutopilotV3][TRY] \${idx+1}/\${materials.length} @\${material.username||'-'} source=\${material.url}\`);\n      const sourceClaimsVideo=!!material.hasVideo||Number(material.videoCount||0)>0;\n      const playableVideos=Array.isArray(material.videos)?material.videos.filter(Boolean):[];\n      if(sourceClaimsVideo&&!playableVideos.length){\n        lastError=new Error('원본 영상 존재 확인됨 · 현재 영상 URL 추출 실패');\n        console.log(\`[AutopilotV3][VIDEO QUALITY SKIP] @\${material.username||'-'} hasVideo=yes playable=0 → 이미지 강등 금지 · 다음 소재\`);\n        markUsedPost(material.url);\n        continue;\n      }`
@@ -48,23 +47,27 @@ require.extensions['.js'] = function patchedJsLoader(mod, filename) {
     `const vision=await identifyCommerceTarget(accountId,material);\n      const conf=confidence01(vision?.confidence);\n      if(conf<0.5){\n        lastError=new Error(\`판매 대상 신뢰도 부족 confidence=\${vision?.confidence??0}\`);\n        console.log(\`[AutopilotV3][CONFIDENCE SKIP] @\${material.username||'-'} confidence=\${vision?.confidence??0} normalized=\${conf.toFixed(2)} → 상품 연결 금지 · 다음 소재\`);\n        markUsedPost(material.url);\n        continue;\n      }\n      const analysis=await analyzeMaterial(accountId,material,target,vision);`
   );
 
-  // 결과에도 원본 영상 존재 신호를 남겨 후속 패치가 이미지 대체를 하지 않도록 한다.
+  // 검색 결과가 원본 판매대상과 맞지 않으면 그대로 발행하지 않는다.
+  source = source.replace(
+    /if\(!found\.product\)\{([\s\S]*?)continue;\n      \}\n      const generated=/,
+    `if(!found.product){$1continue;\n      }\n      if(!productMatchOk(vision,found.product)){\n        lastError=new Error(\`쿠팡 상품 매칭 불일치 sold=\"\${vision?.soldObject||'-'}\" product=\"\${found.product.name||'-'}\"\`);\n        console.log(\`[AutopilotV3][PRODUCT MATCH SKIP] @\${material.username||'-'} sold=\"\${vision?.soldObject||'-'}\" product=\"\${found.product.name||'-'}\" → 다음 소재\`);\n        markUsedPost(material.url);\n        continue;\n      }\n      const generated=`
+  );
+
+  // 결과에도 원본 영상 존재 신호를 남긴다.
   source = source.replace(
     /referenceImage:material\.images\?\.\[0\]\|\|null,visionTarget:vision\}/,
     `referenceImage:material.images?.[0]||null,sourceHasVideo:!!material.hasVideo||Number(material.videoCount||0)>0,visionTarget:vision}`
   );
 
-  if (!removed) {
-    console.warn('[Autopilot][MATERIAL SAFETY] 경고: 링크 필수조건 패턴을 찾지 못함');
-  } else {
-    console.log(`[Autopilot][NO-LINK-FILTER] 링크 필수조건 제거 count=${removed}`);
-  }
+  if (!removed) console.warn('[Autopilot][MATERIAL SAFETY] 경고: 링크 필수조건 패턴을 찾지 못함');
+  else console.log(`[Autopilot][NO-LINK-FILTER] 링크 필수조건 제거 count=${removed}`);
 
   const confidenceGate = source.includes('[AutopilotV3][CONFIDENCE SKIP]');
   const videoGate = source.includes('[AutopilotV3][VIDEO QUALITY SKIP]');
-  console.log(`[Autopilot][MATERIAL SAFETY] confidence>=0.5=${confidenceGate?'ON':'FAIL'} video-downgrade-block=${videoGate?'ON':'FAIL'}`);
+  const productGate = source.includes('[AutopilotV3][PRODUCT MATCH SKIP]');
+  console.log(`[Autopilot][MATERIAL SAFETY] confidence>=0.5=${confidenceGate?'ON':'FAIL'} video-downgrade-block=${videoGate?'ON':'FAIL'} product-match=${productGate?'ON':'FAIL'}`);
 
   mod._compile(source, filename);
 };
 
-console.log('[Autopilot][NO-LINK-FILTER] 링크 선택사항 + 저신뢰/영상강등 안전장치 활성화');
+console.log('[Autopilot][NO-LINK-FILTER] 링크 선택사항 + 저신뢰/영상강등/상품매칭 안전장치 활성화');
