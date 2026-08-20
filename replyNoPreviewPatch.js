@@ -14,6 +14,32 @@ function hasCoupangLink(text) {
   return coupangLinks(text).length > 0;
 }
 
+function normalizeBaseUrl(value) {
+  const raw = String(value || '').trim().replace(/\/$/, '');
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `https://${raw}`;
+}
+
+function resolvePreviewSinkUrl(account) {
+  const explicit = normalizeBaseUrl(process.env.PUBLIC_BASE_URL || process.env.APP_URL);
+  if (explicit) return `${explicit}/threads-preview-sink.txt`;
+
+  const railway = normalizeBaseUrl(process.env.RAILWAY_PUBLIC_DOMAIN);
+  if (railway) return `${railway}/threads-preview-sink.txt`;
+
+  const shared = typeof db.getSystemApiSettings === 'function' ? db.getSystemApiSettings() : null;
+  const redirect = String(shared?.threads_redirect_uri || account?.threads_redirect_uri || process.env.THREADS_REDIRECT_URI || '').trim();
+  if (redirect) {
+    try {
+      const u = new URL(redirect);
+      return `${u.protocol}//${u.host}/threads-preview-sink.txt`;
+    } catch {}
+  }
+
+  return '';
+}
+
 function isRetryablePublishError(err) {
   const apiErr = err?.response?.data?.error || {};
   const status = Number(err?.response?.status || 0);
@@ -24,9 +50,9 @@ function isRetryablePublishError(err) {
 
 async function publishCreatedReply(creationId, accessToken) {
   let lastError;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 3; i++) {
     try {
-      console.log(`[Threads][REPLY NO-PREVIEW][PUBLISH] creationId=${creationId} try=${i + 1}/5`);
+      console.log(`[Threads][REPLY NO-PREVIEW][PUBLISH] creationId=${creationId} try=${i + 1}/3`);
       const res = await axios.post(`${GRAPH_BASE}/me/threads_publish`, null, {
         params: { creation_id: creationId, access_token: accessToken },
         timeout: 20000,
@@ -38,51 +64,33 @@ async function publishCreatedReply(creationId, accessToken) {
     } catch (err) {
       lastError = err;
       const apiErr = err?.response?.data?.error || {};
-      console.warn(`[Threads][REPLY NO-PREVIEW][PUBLISH ERROR] status=${err?.response?.status || '-'} code=${apiErr.code || '-'} subcode=${apiErr.error_subcode || '-'} message=${apiErr.message || err?.message || '-'} try=${i + 1}/5`);
-      if (!isRetryablePublishError(err) || i === 4) throw err;
-      await sleep(Math.min(2000 + i * 2000, 10000));
+      console.warn(`[Threads][REPLY NO-PREVIEW][PUBLISH ERROR] status=${err?.response?.status || '-'} code=${apiErr.code || '-'} subcode=${apiErr.error_subcode || '-'} message=${apiErr.message || err?.message || '-'} try=${i + 1}/3`);
+      if (!isRetryablePublishError(err) || i === 2) throw err;
+      await sleep(Math.min(2000 + i * 2000, 6000));
     }
   }
   throw lastError;
 }
 
-async function createNoPreviewReply({ accountId, parentMediaId, text, accessToken, duplicateBlankAttachment = false }) {
-  // Meta API의 link_attachment는 공식적으로 단일 필드지만
-  // 쿠팡 링크를 두 번 넣는 댓글에서는 앱 UI의 미리보기 제거 동작에 최대한 가깝게
-  // 빈 link_attachment를 URL-encoded 파라미터로 링크 개수만큼 반복 전송해 본다
-  // API가 중복 필드를 거부하면 호출부에서 단일 빈 필드 방식으로 안전하게 재시도한다
-  if (duplicateBlankAttachment) {
-    const body = new URLSearchParams();
-    body.append('media_type', 'TEXT');
-    body.append('text', text);
-    body.append('reply_to_id', String(parentMediaId));
-    body.append('link_attachment', '');
-    body.append('link_attachment', '');
-    body.append('access_token', accessToken);
-
-    const res = await axios.post(`${GRAPH_BASE}/me/threads`, body, {
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      timeout: 20000,
-    });
-    const creationId = res.data?.id;
-    if (!creationId) throw new Error('Threads 댓글 컨테이너 생성 응답에 id가 없습니다');
-    console.log(`[Threads][REPLY NO-PREVIEW][DOUBLE] 링크 2개 → 빈 link_attachment 2회 전송 성공 account=${accountId} creationId=${creationId}`);
-    return creationId;
-  }
+async function createNoPreviewReply({ accountId, parentMediaId, text, accessToken, sinkUrl }) {
+  // Threads API 문서상 TEXT에 link_attachment가 없으면 text의 첫 URL을 자동 미리보기로 사용한다
+  // 그래서 쿠팡 URL은 text에 그대로 두되 link_attachment는 미리보기 정보가 없는 text/plain sink로 명시한다
+  // 목적: 쿠팡 링크는 클릭 가능하게 유지하면서 쿠팡 상품 OG 카드가 자동 생성되는 것을 막는다
+  const params = {
+    media_type: 'TEXT',
+    text,
+    reply_to_id: parentMediaId,
+    link_attachment: sinkUrl,
+    access_token: accessToken,
+  };
 
   const createRes = await axios.post(`${GRAPH_BASE}/me/threads`, null, {
-    params: {
-      media_type: 'TEXT',
-      text,
-      reply_to_id: parentMediaId,
-      link_attachment: '',
-      access_token: accessToken,
-    },
+    params,
     timeout: 20000,
   });
   const creationId = createRes.data?.id;
   if (!creationId) throw new Error('Threads 댓글 컨테이너 생성 응답에 id가 없습니다');
-  console.log(`[Threads][REPLY NO-PREVIEW][SINGLE] 빈 link_attachment 컨테이너 생성 성공 account=${accountId} creationId=${creationId}`);
+  console.log(`[Threads][REPLY NO-PREVIEW][CREATE] account=${accountId} creationId=${creationId} coupangUrls=${coupangLinks(text).length} sink=${sinkUrl}`);
   return creationId;
 }
 
@@ -92,45 +100,26 @@ threadsApi.publishReply = async function publishReplyNoPreview(accountId, parent
   const account = db.getAccount(accountId);
   if (!account?.threads_access_token) return originalPublishReply(accountId, parentMediaId, text);
 
-  const accessToken = account.threads_access_token;
-  const linkCount = coupangLinks(text).length;
-  let creationId;
-
-  // 링크가 2개 이상이면 먼저 빈 attachment 2회 전송을 실험한다
-  if (linkCount >= 2) {
-    try {
-      creationId = await createNoPreviewReply({
-        accountId,
-        parentMediaId,
-        text,
-        accessToken,
-        duplicateBlankAttachment: true,
-      });
-    } catch (err) {
-      const apiErr = err?.response?.data?.error || {};
-      console.warn(`[Threads][REPLY NO-PREVIEW][DOUBLE FALLBACK] 중복 빈 attachment 거부 → 단일 빈 attachment 재시도 status=${err?.response?.status || '-'} code=${apiErr.code || '-'} message=${apiErr.message || err?.message || '-'}`);
-    }
+  const sinkUrl = resolvePreviewSinkUrl(account);
+  if (!sinkUrl) {
+    console.warn('[Threads][REPLY NO-PREVIEW][FALLBACK] 공개 sink URL을 만들 수 없어 기존 댓글 방식 사용');
+    return originalPublishReply(accountId, parentMediaId, text);
   }
 
-  // 링크가 1개이거나 2회 전송이 실패했으면 기존 단일 빈 attachment 방식
-  if (!creationId) {
-    try {
-      creationId = await createNoPreviewReply({
-        accountId,
-        parentMediaId,
-        text,
-        accessToken,
-        duplicateBlankAttachment: false,
-      });
-    } catch (err) {
-      const apiErr = err?.response?.data?.error || {};
-      console.warn(`[Threads][REPLY NO-PREVIEW][FALLBACK] 빈 link_attachment 거부 → 기존 API 댓글 방식 사용 status=${err?.response?.status || '-'} code=${apiErr.code || '-'} message=${apiErr.message || err?.message || '-'}`);
-      return originalPublishReply(accountId, parentMediaId, text);
-    }
+  try {
+    const creationId = await createNoPreviewReply({
+      accountId,
+      parentMediaId,
+      text,
+      accessToken: account.threads_access_token,
+      sinkUrl,
+    });
+    return await publishCreatedReply(creationId, account.threads_access_token);
+  } catch (err) {
+    const apiErr = err?.response?.data?.error || {};
+    console.warn(`[Threads][REPLY NO-PREVIEW][FALLBACK] sink attachment 방식 실패 → 기존 API 댓글 방식 사용 status=${err?.response?.status || '-'} code=${apiErr.code || '-'} message=${apiErr.message || err?.message || '-'}`);
+    return originalPublishReply(accountId, parentMediaId, text);
   }
-
-  // 컨테이너 생성이 성공한 뒤에는 중복 댓글 위험 때문에 다른 방식으로 재생성하지 않는다
-  return publishCreatedReply(creationId, accessToken);
 };
 
-console.log('[Threads][REPLY NO-PREVIEW PATCH] 쿠파스 링크 2개면 빈 link_attachment 2회 실험 → 실패 시 단일 방식 fallback');
+console.log('[Threads][REPLY NO-PREVIEW PATCH] 쿠팡 URL은 text에 유지 + 별도 text/plain sink를 link_attachment로 지정');
