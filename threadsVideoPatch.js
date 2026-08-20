@@ -46,11 +46,6 @@ async function fallbackFromProfile(url, username) {
 }
 
 async function extractPlayableVideoUrls(postUrl) {
-  const guard=webGuard();
-  if(guard?.isCooling?.()){
-    console.warn(`[Threads][VIDEO EXTRACT] 429 cooldown ${guard.remainingMinutes?.()||'-'}분 남음 → 영상 상세접근 생략 url=${postUrl}`);
-    return [];
-  }
   const playwright = require('playwright');
   let browser;
   const found = [];
@@ -71,27 +66,46 @@ async function extractPlayableVideoUrls(postUrl) {
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
     });
 
-    const scan = async targetUrl => {
-      if(webGuard()?.isCooling?.()) return false;
+    const scan = async (targetUrl, { allow429Fallback = false } = {}) => {
       const page = await context.newPage();
       page.setDefaultTimeout(16000);
       page.on('request', request => add(request.url()));
       page.on('response', async response => {
         try {
+          const status = response.status();
+          const url = response.url();
+          const request = response.request();
+          const resourceType = request.resourceType();
           const headers = await response.allHeaders().catch(() => ({}));
           const type = String(headers['content-type'] || '').toLowerCase();
-          if (type.startsWith('video/') || type.includes('octet-stream') || isHttpVideoUrl(response.url())) add(response.url());
-        } catch {}
+
+          if (status === 429) {
+            console.warn(`[Threads][429 TRACE] stage=subresponse status=429 resource=${resourceType || '-'} url=${url} retryAfter=${headers['retry-after'] || '-'} contentType=${type || '-'}`);
+            return;
+          }
+
+          if (type.startsWith('video/') || type.includes('octet-stream') || isHttpVideoUrl(url)) add(url);
+        } catch (err) {
+          console.warn(`[Threads][429 TRACE ERROR] stage=subresponse reason="${err.message}"`);
+        }
       });
 
       try {
         const response = await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 16000 });
         const status=response?.status?.()??0;
+        const headers = response ? await response.allHeaders().catch(() => ({})) : {};
+        console.log(`[Threads][VIDEO PAGE] status=${status || '-'} url=${targetUrl} retryAfter=${headers['retry-after'] || '-'} server=${headers['server'] || '-'}`);
+
         if(status===429){
-          webGuard()?.mark429?.(`video:${targetUrl}`);
-          console.warn(`[Threads][VIDEO EXTRACT SCAN] status=429 url=${targetUrl} → cooldown 시작, /media 추가호출 생략`);
-          return false;
+          console.warn(`[Threads][429 TRACE] stage=page-goto status=429 resource=document url=${targetUrl} retryAfter=${headers['retry-after'] || '-'} contentType=${headers['content-type'] || '-'}`);
+          if (allow429Fallback) {
+            console.warn(`[Threads][VIDEO EXTRACT SCAN] status=429 url=${targetUrl} → 이 게시물만 /media 1회 fallback 시도`);
+            return { ok:false, status:429 };
+          }
+          console.warn(`[Threads][VIDEO EXTRACT SCAN] status=429 url=${targetUrl} → 해당 소재만 실패 처리`);
+          return { ok:false, status:429 };
         }
+
         await page.waitForTimeout(2200);
         for (let i = 0; i < 3; i++) {
           await page.mouse.wheel(0, 650);
@@ -150,14 +164,19 @@ async function extractPlayableVideoUrls(postUrl) {
 
         const domVideoCount = await page.locator('video').count().catch(() => 0);
         console.log(`[Threads][VIDEO EXTRACT SCAN] status=${status || '-'} url=${targetUrl} domVideos=${domVideoCount} playable=${found.length}`);
-        return true;
+        return { ok:true, status };
       } finally {
         try { await page.close(); } catch {}
       }
     };
 
-    const firstOk=await scan(canonical(postUrl));
-    if (firstOk && !found.length && !webGuard()?.isCooling?.()) await scan(mediaView(postUrl));
+    const primary = await scan(canonical(postUrl), { allow429Fallback:true });
+    if (!found.length && (primary?.status === 429 || primary?.ok)) {
+      const mediaUrl = mediaView(postUrl);
+      console.log(`[Threads][VIDEO MEDIA FALLBACK] start url=${mediaUrl} reason=${primary?.status === 429 ? 'primary-429' : 'primary-no-playable'}`);
+      const media = await scan(mediaUrl, { allow429Fallback:false });
+      console.log(`[Threads][VIDEO MEDIA FALLBACK] done status=${media?.status || '-'} playable=${found.length} url=${mediaUrl}`);
+    }
     await context.close();
   } catch (err) {
     console.warn(`[Threads][VIDEO EXTRACT] fallback 실패 url=${postUrl} reason="${err.message}"`);
@@ -184,13 +203,9 @@ benchmark.collectPostDetails = async function patchedCollectPostDetails(url, use
   if (existing.length) return { ...details, videos: existing, hasVideo: true };
   if (!details?.hasVideo) return details;
 
-  if(webGuard()?.isCooling?.()){
-    console.warn(`[Threads][VIDEO EXTRACT] @${username || '-'} hasVideo=yes지만 429 cooldown 중 → 이미지 fallback 유지`);
-    return { ...details, videos: [], hasVideo: true };
-  }
   const videos = await extractPlayableVideoUrls(url);
   console.log(`[Threads][VIDEO EXTRACT] @${username || '-'} detected=${details?.hasVideo ? 'yes' : 'no'} playable=${videos.length}`);
   return { ...details, videos, hasVideo: details?.hasVideo || videos.length > 0 };
 };
 
-console.log('[Threads][VIDEO PATCH] 영상 추출 + 429 전역 cooldown 연동 + /media 재시도 활성화');
+console.log('[Threads][VIDEO PATCH] 게시물 429 시 /media 1회 fallback + 게시물별 실패 격리 + 영상 직접 추출 활성화');
