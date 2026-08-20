@@ -11,6 +11,12 @@ require.extensions['.js'] = function patchedJsLoader(mod, filename) {
   let source = fs.readFileSync(filename, 'utf8');
   let removed = 0;
 
+  // 소재 수집량과 실제 상세 후보를 줄여 Threads 직접 접근량을 낮춘다.
+  source = source.replace(/collectBenchmarkMaterials\(\{limit:60\}\)/g, 'collectBenchmarkMaterials({limit:10})');
+  source = source.replace(/async function collectQualifiedThreadsMaterials\(maxQualified=6\)/g, 'async function collectQualifiedThreadsMaterials(maxQualified=3)');
+  source = source.replace(/for\(const candidate of candidates\.slice\(0,60\)\)/g, 'for(const candidate of candidates.slice(0,10))');
+  source = source.replace(/collectQualifiedThreadsMaterials\(6\)/g, 'collectQualifiedThreadsMaterials(3)');
+
   // 작성자 댓글 쇼핑링크는 선택사항으로 유지한다.
   const patterns = [
     /if\s*\(\s*!hasAffiliateLink\(authorReplies\)\s*\)\s*throw new Error\(['"]작성자 댓글에 쿠팡\/네이버 쇼핑 링크가 없는 소재['"]\)\s*;?/g,
@@ -53,7 +59,6 @@ require.extensions['.js'] = function patchedJsLoader(mod, filename) {
     `if(!found.product){$1continue;\n      }\n      if(!productMatchOk(vision,found.product)){\n        lastError=new Error(\`쿠팡 상품 매칭 불일치 sold=\"\${vision?.soldObject||'-'}\" product=\"\${found.product.name||'-'}\"\`);\n        console.log(\`[AutopilotV3][PRODUCT MATCH SKIP] @\${material.username||'-'} sold=\"\${vision?.soldObject||'-'}\" product=\"\${found.product.name||'-'}\" → 다음 소재\`);\n        markUsedPost(material.url);\n        continue;\n      }\n      const generated=`
   );
 
-  // 결과에도 원본 영상 존재 신호를 남긴다.
   source = source.replace(
     /referenceImage:material\.images\?\.\[0\]\|\|null,visionTarget:vision\}/,
     `referenceImage:material.images?.[0]||null,sourceHasVideo:!!material.hasVideo||Number(material.videoCount||0)>0,visionTarget:vision}`
@@ -62,12 +67,14 @@ require.extensions['.js'] = function patchedJsLoader(mod, filename) {
   if (!removed) console.warn('[Autopilot][MATERIAL SAFETY] 경고: 링크 필수조건 패턴을 찾지 못함');
   else console.log(`[Autopilot][NO-LINK-FILTER] 링크 필수조건 제거 count=${removed}`);
 
+  const pool10 = source.includes('collectBenchmarkMaterials({limit:10})');
+  const candidates3 = source.includes('collectQualifiedThreadsMaterials(3)');
   const confidenceGate = source.includes('[AutopilotV3][CONFIDENCE SKIP]');
   const videoGate = source.includes('[AutopilotV3][VIDEO QUALITY SKIP]');
   const productGate = source.includes('[AutopilotV3][PRODUCT MATCH SKIP]');
-  console.log(`[Autopilot][MATERIAL SAFETY] confidence>=0.5=${confidenceGate?'ON':'FAIL'} video-downgrade-block=${videoGate?'ON':'FAIL'} product-match=${productGate?'ON':'FAIL'}`);
+  console.log(`[Autopilot][MATERIAL SAFETY] pool10=${pool10?'ON':'FAIL'} candidates3=${candidates3?'ON':'FAIL'} confidence>=0.5=${confidenceGate?'ON':'FAIL'} video-downgrade-block=${videoGate?'ON':'FAIL'} product-match=${productGate?'ON':'FAIL'}`);
 
   mod._compile(source, filename);
 };
 
-console.log('[Autopilot][NO-LINK-FILTER] 링크 선택사항 + 저신뢰/영상강등/상품매칭 안전장치 활성화');
+console.log('[Autopilot][NO-LINK-FILTER] 10개 수집 + 후보 3개 + 저신뢰/영상강등/상품매칭 안전장치 활성화');
