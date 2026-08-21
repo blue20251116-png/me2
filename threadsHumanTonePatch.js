@@ -29,6 +29,7 @@ function basicReject(text) {
   if (/실물\s*(?:보니까|봤)|써\s*보니까|사용해\s*보니까|사\s*봤|추가\s*구매|재구매/i.test(t)) return true;
   if (/인싸\s*가능성|유용할\s*줄\s*몰랐|없으면\s*아쉬|완전\s*추천/i.test(t)) return true;
   if (/확실히|공간\s*차지|깔끔해짐|걱정\s*없|장점이야|활용도|효율적|편리하|정리가\s*되고/i.test(t)) return true;
+  if (/(?:한\s*번|한번)\s*(?:먹어|써|사용해|사|해)\s*(?:봐야|봐|보자)|(?:먹어|써|사용해|사|해)\s*봐야\s*(?:해|겠다)|꼭\s*(?:먹어|써|사용해|사|해)\s*봐|강추|놓치면\s*후회|진짜\s*최고야|완전\s*최고야/i.test(t)) return true;
   const lines = t.split('\n').map(x => x.trim()).filter(Boolean);
   if (lines.length > 5) return true;
   if (lines.some(x => x.length > 38)) return true;
@@ -44,8 +45,8 @@ async function rewriteBatch(accountId, sourceText, mode, items) {
   const originals = items.map((x, i) => `${i + 1}. ${String(x.text || '').replace(/\n/g, ' / ')}`).join('\n');
 
   const examples = isRecipe
-    ? `이거 알려준 스치니 어딨어ㅜㅠ\n와 이건 진짜 생각도 못했어ㅋㅋ\n이렇게 하면 되는 거였네\n재료는 댓글에 적어둘게\n\n30년 식당하신 이모한테 알아낸 건데\n미역국 끓일 때 이거 반 스푼 넣으면\n진짜 국물이 확 달라짐ㅋㅋ\n\n이거 알려준 사람 어디갔어ㅠㅠ\n휴게소 감자보다 맛있어 보이는데\n이건 저장해놔야겠다ㅋㅋ`
-    : `이거 누가 생각한 거야ㅋㅋ\n바지 겹쳐놓는 거 은근 짜증났는데\n이렇게 걸어버리면 끝이네\n\n직관 갔다가 이거 보고 빵터짐ㅋㅋ\n우산이 이렇게까지 커질 일이야?\n근데 비 올 땐 진짜 탐난다\n\n와 이거 좀 신기한데\n애들 여기 넣어두면 한참 놀 것 같아ㅋㅋ\n생각보다 괜찮아 보임\n\n이거 알려준 스치니 어디갔어ㅠㅠ\n이런 방법이 있는 줄 처음 알았네ㅋㅋ\n나도 저장해둠`;
+    ? `이거 알려준 스치니 어딨어ㅜㅠ\n와 이건 진짜 생각도 못했어ㅋㅋ\n이렇게 하면 되는 거였네\n재료는 댓글에 적어둘게\n\n30년 식당하신 이모한테 알아낸 건데\n미역국 끓일 때 이거 반 스푼 넣으면\n국물 느낌 확 달라지네ㅋㅋ\n\n이거 알려준 사람 어디갔어ㅠㅠ\n휴게소 감자 생각나는 비주얼인데\n이건 좀 궁금하다ㅋㅋ`
+    : `이거 누가 생각한 거야ㅋㅋ\n바지 겹쳐놓는 거 은근 짜증났는데\n이렇게 걸어버리면 끝이네\n\n직관 갔다가 이거 보고 빵터짐ㅋㅋ\n우산이 이렇게까지 커질 일이야?\n근데 비 올 때는 좀 탐난다\n\n와 이거 좀 신기한데\n애들 여기 넣어두면 한참 놀 것 같아ㅋㅋ\n이런 게 있었네\n\n이거 알려준 스치니 어디갔어ㅠㅠ\n이런 방법이 있는 줄 처음 알았네ㅋㅋ\n나만 이제 본 건가`;
 
   try {
     const r = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -65,6 +66,8 @@ async function rewriteBatch(accountId, sourceText, mode, items) {
 - 발견 → 짧은 반응 → 제일 강한 포인트 하나 정도면 충분하다
 - 모든 기능을 설명하지 않는다
 - 문장을 매끈하게 완성하려고 하지 않는다
+- 마지막에 결론이나 행동 권유를 붙이지 않는다
+- 자연스럽게 말이 끝났으면 거기서 바로 끝낸다
 - 조금 덜 정돈돼도 실제 Threads 말투가 우선이다
 
 절대 규칙
@@ -83,6 +86,11 @@ async function rewriteBatch(accountId, sourceText, mode, items) {
 - 실물 보니까 써보니까 사용해보니까 사봤다 추가 구매 재구매 금지
 - 확실히 정리가 되고 공간 차지도 안 하고 활용도가 좋다 효율적이다 편리하다 장점이다 같은 리뷰/AI 문장 금지
 - 이거 하나면 걱정 없다 이제 걱정 없겠다 같은 광고 결론 금지
+- 한 번 먹어봐야 해 한번 먹어봐 써봐야 해 한번 써봐 사봐야 해 한번 사봐 해봐야 해 같은 행동 권유형 문장 금지
+- 꼭 먹어봐 꼭 써봐 꼭 사봐 추천해 강추 놓치면 후회 같은 CTA 금지
+- 진짜 최고야 완전 최고야처럼 제품을 총평하면서 끝내는 문장 금지
+- 독자에게 구매 사용 섭취 저장 공유를 요구하지 않는다
+- 마지막 줄은 반응 궁금증 놀람 관찰 중 하나로 자연스럽게 끝낸다
 - 첫 문장을 매번 와 대박으로 시작하지 않는다
 - 스치니를 매번 쓰지 않는다
 - ㅋㅋ ㅎㅎ ㅠㅠ ㅜㅜ ㄷㄷ는 글마다 0~2개 정도 자연스럽게 허용한다
@@ -99,7 +107,7 @@ JSON만 출력한다
         },
         {
           role: 'user',
-          content: `[원문 사실 자료]\n${source}\n\n[현재 생성문]\n${originals}\n\n현재 생성문의 설명체를 버리고 원문 사실 안에서 짧은 Threads 반응글로 다시 써줘`,
+          content: `[원문 사실 자료]\n${source}\n\n[현재 생성문]\n${originals}\n\n현재 생성문의 설명체와 행동 권유형 마무리를 버리고 원문 사실 안에서 짧은 Threads 반응글로 다시 써줘`,
         },
       ],
     }, {
@@ -134,4 +142,4 @@ writer.generateFromThreadsMaterial = async function patchedGenerate(accountId, a
   return result;
 };
 
-console.log('[Threads][HUMAN TONE] 실제 Threads 반응형 말투 v2 활성화');
+console.log('[Threads][HUMAN TONE] 실제 Threads 반응형 말투 v3 CTA차단 활성화');
