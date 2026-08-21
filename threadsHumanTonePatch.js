@@ -33,6 +33,7 @@ function basicReject(text) {
   const lines = t.split('\n').map(x => x.trim()).filter(Boolean);
   if (lines.length > 5) return true;
   if (lines.some(x => x.length > 38)) return true;
+  if (lines.some(x => /(모습이|느낌이|생각이|제품이|장면이|부분이|점이)$/.test(x))) return true;
   return false;
 }
 
@@ -46,25 +47,28 @@ async function rewriteBatch(accountId, sourceText, mode, items) {
 
   const examples = isRecipe
     ? `이거 알려준 스치니 어딨어ㅜㅠ\n와 이건 진짜 생각도 못했어ㅋㅋ\n이렇게 하면 되는 거였네\n재료는 댓글에 적어둘게\n\n30년 식당하신 이모한테 알아낸 건데\n미역국 끓일 때 이거 반 스푼 넣으면\n국물 느낌 확 달라지네ㅋㅋ\n\n이거 알려준 사람 어디갔어ㅠㅠ\n휴게소 감자 생각나는 비주얼인데\n이건 좀 궁금하다ㅋㅋ`
-    : `이거 누가 생각한 거야ㅋㅋ\n바지 겹쳐놓는 거 은근 짜증났는데\n이렇게 걸어버리면 끝이네\n\n직관 갔다가 이거 보고 빵터짐ㅋㅋ\n우산이 이렇게까지 커질 일이야?\n근데 비 올 때는 좀 탐난다\n\n와 이거 좀 신기한데\n애들 여기 넣어두면 한참 놀 것 같아ㅋㅋ\n이런 게 있었네\n\n이거 알려준 스치니 어디갔어ㅠㅠ\n이런 방법이 있는 줄 처음 알았네ㅋㅋ\n나만 이제 본 건가`;
+    : `이거 왜 이제 알았지ㅋㅋ\n새 방석 바꿔줬더니 하루 종일 여기서 안 나옴\n그냥 쏙 들어가서 자는데\n저 다리 나온 거 너무 웃겨ㅋㅋ\n\n이거 누가 생각한 거야ㅋㅋ\n바지 겹쳐놓는 거 은근 짜증났는데\n이렇게 걸어버리면 끝이네\n\n직관 갔다가 이거 보고 빵터짐ㅋㅋ\n우산이 이렇게까지 커질 일이야?\n근데 비 올 때는 좀 탐난다\n\n와 이거 좀 신기한데\n애들 여기 넣어두면 한참 놀 것 같아ㅋㅋ\n이런 게 있었네\n\n이거 알려준 스치니 어디갔어ㅠㅠ\n이런 방법이 있는 줄 처음 알았네ㅋㅋ\n나만 이제 본 건가`;
 
   try {
     const r = await axios.post('https://api.openai.com/v1/chat/completions', {
       model: 'gpt-4o-mini',
-      temperature: 0.82,
+      temperature: 0.84,
       max_tokens: 1800,
       response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
           content: `한국 Threads 글을 사람이 직접 쓴 것처럼 최종 편집한다
-광고 카피라이터처럼 설명하지 말고 친구한테 방금 본 걸 말하듯 쓴다
+광고 카피라이터처럼 설명하지 말고 친구한테 방금 본 사진이나 영상을 말하듯 쓴다
 
 가장 중요한 방향
+- 제품 설명보다 화면에서 제일 먼저 눈에 들어오는 장면을 잡는다
+- 사진이나 영상 속 웃긴 모습 이상한 장면 귀여운 행동 의외성을 먼저 쓴다
 - 정보 전달문이 아니라 반응글이다
 - 첫 줄부터 감정이나 상황으로 바로 들어간다
-- 발견 → 짧은 반응 → 제일 강한 포인트 하나 정도면 충분하다
+- 발견 → 짧은 상황 → 화면에서 보이는 행동 → 한마디 반응 순서를 우선한다
 - 모든 기능을 설명하지 않는다
+- 제품 장점을 설명하는 대신 영상에서 실제로 보이는 한 장면을 말한다
 - 문장을 매끈하게 완성하려고 하지 않는다
 - 마지막에 결론이나 행동 권유를 붙이지 않는다
 - 자연스럽게 말이 끝났으면 거기서 바로 끝낸다
@@ -91,6 +95,7 @@ async function rewriteBatch(accountId, sourceText, mode, items) {
 - 진짜 최고야 완전 최고야처럼 제품을 총평하면서 끝내는 문장 금지
 - 독자에게 구매 사용 섭취 저장 공유를 요구하지 않는다
 - 마지막 줄은 반응 궁금증 놀람 관찰 중 하나로 자연스럽게 끝낸다
+- 모습이 느낌이 생각이 제품이 장면이 부분이 점이처럼 문장이 덜 끝난 형태로 줄을 끝내지 않는다
 - 첫 문장을 매번 와 대박으로 시작하지 않는다
 - 스치니를 매번 쓰지 않는다
 - ㅋㅋ ㅎㅎ ㅠㅠ ㅜㅜ ㄷㄷ는 글마다 0~2개 정도 자연스럽게 허용한다
@@ -107,7 +112,7 @@ JSON만 출력한다
         },
         {
           role: 'user',
-          content: `[원문 사실 자료]\n${source}\n\n[현재 생성문]\n${originals}\n\n현재 생성문의 설명체와 행동 권유형 마무리를 버리고 원문 사실 안에서 짧은 Threads 반응글로 다시 써줘`,
+          content: `[원문 사실 자료]\n${source}\n\n[현재 생성문]\n${originals}\n\n현재 생성문의 설명체와 행동 권유형 마무리를 버리고 사진이나 영상에서 가장 눈에 띄는 장면을 먼저 잡아 짧은 Threads 반응글로 다시 써줘`,
         },
       ],
     }, {
@@ -142,4 +147,4 @@ writer.generateFromThreadsMaterial = async function patchedGenerate(accountId, a
   return result;
 };
 
-console.log('[Threads][HUMAN TONE] 실제 Threads 반응형 말투 v3 CTA차단 활성화');
+console.log('[Threads][HUMAN TONE] 실제 Threads 반응형 말투 v4 장면우선 활성화');
