@@ -22,10 +22,46 @@ function clean(text) {
     .trim();
 }
 
+// 의미가 이어지는 줄을 글자 수 때문에 억지로 쪼갠 경우 자동 복구한다.
+// 예: "기분도\n좋고 완전 좋아" → "기분도 좋고 완전 좋아"
+// 예: "못 살 것\n같아" → "못 살 것 같아"
+function mergeAwkwardLineBreaks(text) {
+  const raw = clean(text);
+  if (!raw) return raw;
+
+  const source = raw.split('\n');
+  const out = [];
+  const danglingEnd = /(은|는|이|가|을|를|도|만|에|의|와|과|로|으로|부터|까지|해서|하고|는데|니까|면|지만|다가|거나|처럼|보다|정도|기분도|생각도|마음도)$/;
+  const fragmentStart = /^(같아|같네|같아서|같으니까|좋고|좋아|있어|없어|했어|돼|되고|해서|하고|보여|보이고|느껴|느낌이|때문에|정도라|정도고)/;
+
+  for (let i = 0; i < source.length; i++) {
+    const line = source[i].trim();
+    if (!line) {
+      if (out.length && out[out.length - 1] !== '') out.push('');
+      continue;
+    }
+
+    let prevIndex = out.length - 1;
+    while (prevIndex >= 0 && out[prevIndex] === '') prevIndex--;
+    const prev = prevIndex >= 0 ? out[prevIndex] : '';
+
+    if (prev && (danglingEnd.test(prev) || fragmentStart.test(line))) {
+      out[prevIndex] = `${prev} ${line}`.trim();
+      // 중간에 있던 빈 줄은 의미 단위가 이어지는 경우 제거
+      out.splice(prevIndex + 1);
+      continue;
+    }
+
+    out.push(line);
+  }
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // 문단은 품질 실패 사유가 아니라 표시 형식이다.
 // 빈 줄이 하나도 없으면 의미 있는 줄을 유지한 채 2줄 단위로 문단만 만든다.
 function ensureParagraphs(text) {
-  const t = clean(text);
+  const t = mergeAwkwardLineBreaks(text);
   if (!t || /\n\s*\n/.test(t)) return t;
   const lines = t.split('\n').map(x => x.trim()).filter(Boolean);
   if (lines.length < 3) return t;
@@ -35,7 +71,7 @@ function ensureParagraphs(text) {
 }
 
 function rejectReasons(text) {
-  const t = clean(text);
+  const t = mergeAwkwardLineBreaks(text);
   const reasons = [];
   const lines = t.split('\n').map(x => x.trim()).filter(Boolean);
 
@@ -43,8 +79,7 @@ function rejectReasons(text) {
   if (lines.length < 3 || lines.length > 7) reasons.push('line-count');
   if (lines.some(x => x.length > 30)) reasons.push('long-line');
 
-  // 고아 줄: "같아" "ㅋㅋ"처럼 의미가 끊겨 혼자 떨어진 줄
-  if (lines.some(x => x.length <= 4)) reasons.push('orphan-line');
+  // 자동 병합 후에도 남아 있는 진짜 고아 조각만 차단
   if (lines.some(x => /^(?:같아|같네|같음|ㅋㅋ+|ㅎㅎ+|ㅠ+|ㅜ+|ㄷㄷ+|추천해|적을게|남길게)$/i.test(x))) reasons.push('orphan-fragment');
 
   if (/(?:입니다|합니다|됩니다|하세요|해보세요|추천드립니다|수 있습니다)/.test(t)) reasons.push('formal-tone');
@@ -102,7 +137,9 @@ function promptFor(mode) {
 - 긴 문장을 중간에서 잘라 줄 길이만 맞추지 않는다
 - 처음부터 짧은 문장으로 다시 쓴다
 - 1~2줄 뒤 빈 줄 하나 정도를 자연스럽게 둔다
-- '같아' 'ㅋㅋ' 같은 1~4글자 조각을 혼자 한 줄로 떨어뜨리지 않는다
+- 조사나 연결어 뒤에서 줄을 끊지 않는다
+- '기분도 / 좋고' '못 살 것 / 같아'처럼 의미가 이어지는 조각을 절대 분리하지 않는다
+- '같아' 'ㅋㅋ' 같은 조각을 혼자 한 줄로 떨어뜨리지 않는다
 
 [금지]
 - 완전 짱이야 육즙 폭발 풍미 완벽한 조화 한층 더 매력적인 메뉴
@@ -156,11 +193,12 @@ engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutop
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const rewritten = await rewriteOnce(apiKey, current, result.mode, attempt);
-      const nextReasons = rejectReasons(rewritten);
-      console.log(`[AutopilotV3][HUMAN FINAL] attempt=${attempt} reasons=${nextReasons.join(',') || 'PASS'} preview="${rewritten.slice(0,100).replace(/\n/g,' / ')}"`);
-      if (rewritten && nextReasons.length === 0) return { ...result, text: rewritten };
-      if (rewritten) current = rewritten;
+      const rewritten = rewriteOnce ? await rewriteOnce(apiKey, current, result.mode, attempt) : current;
+      const fixed = ensureParagraphs(rewritten);
+      const nextReasons = rejectReasons(fixed);
+      console.log(`[AutopilotV3][HUMAN FINAL] attempt=${attempt} reasons=${nextReasons.join(',') || 'PASS'} preview="${fixed.slice(0,100).replace(/\n/g,' / ')}"`);
+      if (fixed && nextReasons.length === 0) return { ...result, text: fixed };
+      if (fixed) current = fixed;
       reasons = nextReasons;
     } catch (e) {
       console.warn(`[AutopilotV3][HUMAN FINAL] attempt=${attempt} rewrite error=${e.response?.data?.error?.message || e.message}`);
@@ -170,4 +208,4 @@ engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutop
   throw new Error(`[AUTOPILOT HUMAN TONE HARD REJECT] 최종 말투 검수 실패 reasons=${(reasons || []).join(',') || 'unknown'}`);
 };
 
-console.log('[AutopilotV3][HUMAN FINAL] v3 natural-daebak-allowed loaded');
+console.log('[AutopilotV3][HUMAN FINAL] v4 orphan-line-auto-merge loaded');
