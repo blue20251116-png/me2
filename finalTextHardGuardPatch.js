@@ -25,7 +25,7 @@ function hardSanitize(text) {
     out.push(line);
   }
 
-  return out.slice(0, 6).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return out.slice(0, 6).join('\n').replace(/\n{2,}/g, '\n').trim();
 }
 
 function hasAwkwardLineBreak(text) {
@@ -54,8 +54,10 @@ function badStyleReasons(text) {
   if (/추천|장만|괜찮을 거야|필수템|꿀템/i.test(t)) reasons.push('구매권유');
   if (/^(?:ㅋ{1,8}|ㅎ{1,8}|ㄷㄷ)[!?]*$/m.test(t)) reasons.push('단독반응');
   if (hasAwkwardLineBreak(t)) reasons.push('어색한줄바꿈');
-  if (lines.some(line => line.length > 58)) reasons.push('긴줄');
+  if (lines.some(line => line.length > 38)) reasons.push('긴줄');
   if (/(효과가|효과는|사용하면|사용해주면|관리해주니까|기능이|장점은|특징은).*(효과|기능|장점|특징|좋아|편해)/i.test(t)) reasons.push('설명형');
+  if (/(실물\s*(?:보니까|봤는데)|직접\s*(?:보니까|써보니까|사용해보니까)|써보니까|사용해보니까|사봤는데|구매했는데|재구매|추가\s*구매|요즘\s*쓰는\s*중)/i.test(t)) reasons.push('확인안된경험');
+  if (/(인싸\s*가능성|유용할\s*줄\s*몰랐|없으면\s*아쉬울|완전\s*추천|진짜\s*좋아|더\s*재밌을\s*것\s*같아)/i.test(t)) reasons.push('AI총평');
 
   return [...new Set(reasons)];
 }
@@ -69,8 +71,6 @@ function fallbackRewrite(text) {
   ];
   for (const [re, to] of pairs) s = s.replace(re, to);
 
-  // 더라체는 기계적으로 어미 일부만 바꾸면 문장이 깨질 수 있으므로
-  // 최소한 자주 나오는 형태만 자연스러운 종결로 바꾼다
   s = s
     .replace(/달라지더라/g, '확실히 달라')
     .replace(/좋더라/g, '좋아')
@@ -83,8 +83,6 @@ function fallbackRewrite(text) {
     .replace(/더라고/g, '')
     .replace(/더라/g, '');
 
-  // ~냐 반말 질문형은 최종 발행에서 금지한다
-  // AI 재작성 실패 시에도 자주 나오는 형태를 최소한 자연스럽게 정리한다
   s = s
     .replace(/뭐냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '뭐지')
     .replace(/거냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '건가')
@@ -108,8 +106,8 @@ async function rewriteIfNeeded(accountId, text, mode) {
   try {
     const r = await axios.post('https://api.openai.com/v1/chat/completions', {
       model: 'gpt-4o-mini',
-      temperature: 0.55,
-      max_tokens: 550,
+      temperature: 0.45,
+      max_tokens: 500,
       response_format: { type: 'json_object' },
       messages: [
         {
@@ -119,16 +117,19 @@ async function rewriteIfNeeded(accountId, text, mode) {
 
 절대 규칙
 - 자연스러운 반말
+- 일반 상품 글은 2~3줄 우선 레시피 본문은 2~4줄
+- 각 줄은 그 줄만 읽어도 뜻이 끝나는 짧고 완결된 문장이나 반응으로 쓴다
+- 글자 수 맞추려고 문장 중간을 끊지 않는다
+- 긴 문장은 줄바꿈으로 해결하지 말고 문장 자체를 짧게 다시 쓴다
+- 조사 연결어 수식어 뒤에서 줄바꿈하지 않는다
+- 한 줄은 38자를 넘기지 않도록 짧게 다시 쓴다
+- 빈 줄을 넣지 않는다
 - ~냐 형태의 반말 질문 어미 전부 금지 예: 없냐 맞냐 해봤냐 먹어봤냐 뭐냐
 - 질문이 필요하면 ~나 ~지 ~인가 같은 더 부드러운 표현을 쓰거나 평서문으로 바꾼다
-- 3~5줄 권장 필요하면 2~6줄
-- 한 줄에는 하나의 생각만 쓴다
-- 한 문장을 중간에서 어색하게 쪼개지 않는다
-- 조사나 연결어 앞에서 줄바꿈하지 않는다
-- 한 줄을 너무 길게 쓰지 않는다
 - 설명보다 반응이 앞서야 한다
 - 영상 속 행동 순서나 제품 사용법을 다시 설명하지 않는다
 - 기능 장점 효과를 여러 개 나열하지 않는다
+- 한 게시물에서 제품 특징은 최대 1개만 남긴다
 - 제품명 직접 언급은 꼭 필요할 때만 한다
 - 음슴체 금지
 - 더라 하더라 했더라 더라고 하더라고 했더라고 전부 금지
@@ -136,7 +137,8 @@ async function rewriteIfNeeded(accountId, text, mode) {
 - 마침표와 쉼표 금지
 - ㅋㅋ는 필요할 때 최대 1회만 쓰고 단독 줄 금지
 - 추천 구매권유 꿀템 필수템 장만 같은 광고 문구 금지
-- 확인되지 않은 구매 사용 경험을 새로 만들지 않는다
+- 원문에서 확인되지 않은 실물 경험 구매 사용 재구매 추가구매 경험을 새로 만들지 않는다
+- 인싸 가능성 유용할 줄 몰랐어 없으면 아쉬워 완전 추천 같은 AI식 총평 금지
 - 설명을 늘리지 않는다
 - 마지막에 친절한 총평이나 추천 결론을 붙이지 않는다
 JSON만 출력: {"text":""}`,
@@ -180,4 +182,4 @@ engine.buildThreadsFirstAutopilot = async function finalTextHardGuardBuild(accou
   return result;
 };
 
-console.log('[Autopilot][TEXT HARD GUARD] 반응형 호흡·더라체·음슴체·냐체·줄바꿈·긴줄·설명형 최종 강제검사 활성화');
+console.log('[Autopilot][TEXT HARD GUARD] 짧은문장·완결줄바꿈·더라체·음슴체·냐체·허위경험·AI총평 최종 강제검사 활성화');
