@@ -25,125 +25,119 @@ function clean(text) {
 function basicReject(text) {
   const t = String(text || '');
 
+  // 사용자가 싫어하는 말투
   if (/[가-힣]+냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) return true;
-
-  // 음슴체 계열 강하게 차단
   if (/(?:했|됐|왔|갔|봤|먹었|썼|샀|미쳤|좋았|괜찮았|편했|많았|적었|컸|작았|있었|없었|겠|있|없|좋|편)음(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) return true;
 
-  if (/실물\s*(?:보니까|봤)|써\s*보니까|사용해\s*보니까|사\s*봤|추가\s*구매|재구매/i.test(t)) return true;
-  if (/인싸\s*가능성|유용할\s*줄\s*몰랐|없으면\s*아쉬|완전\s*추천/i.test(t)) return true;
-  if (/확실히|공간\s*차지|깔끔해짐|걱정\s*없|장점이야|활용도|효율적|편리하|정리가\s*되고/i.test(t)) return true;
-  if (/간편하게\s*(?:마시|먹|사용|쓰)|맛이\s*(?:배로|두\s*배로)\s*(?:더해|살아)|여름에\s*(?:완전\s*)?(?:좋겠|좋을\s*것)|겨울에\s*(?:완전\s*)?(?:좋겠|좋을\s*것)|활용하기\s*좋|사용하기\s*좋|먹기\s*좋|마시기\s*좋/i.test(t)) return true;
-  if (/(?:한\s*번|한번)\s*(?:먹어|써|사용해|사|해)\s*(?:봐야|봐|보자)|(?:먹어|써|사용해|사|해)\s*봐야\s*(?:해|겠다)|꼭\s*(?:먹어|써|사용해|사|해)\s*봐|강추|놓치면\s*후회|진짜\s*최고야|완전\s*최고야/i.test(t)) return true;
-  if (/추천(?:해|함|한다|하고|할)|구매(?:해|하자|각)|써보면|먹어보면|사용하면\s*좋/i.test(t)) return true;
+  // AI 후기/광고 상투어 강제 탈락
+  if (/완전\s*짱|육즙(?:이)?\s*폭발|풍미|완벽한\s*조화|한층\s*더|매력적인|특별한\s*(?:메뉴|식사|한\s*끼)|입맛을\s*사로잡|감칠맛을\s*더해/i.test(t)) return true;
+  if (/이거\s*없(?:인|이는|으면)\s*못\s*살|없(?:인|이는)\s*못\s*살겠|난리(?:야|났|남)|대박이다(?=$|\s|[!?~ㅋㅎㅠㅜ])/i.test(t)) return true;
+  if (/기대\s*안\s*했는데|한입\s*먹자마자|순삭|무조건\s*(?:추천|사|먹|써)|최고(?:야|다)|강추|놓치면\s*후회/i.test(t)) return true;
+  if (/간편하게|활용도|실용적|효율적|편리하|장점(?:이야|이다)|확실히|공간\s*차지|깔끔해짐/i.test(t)) return true;
+  if (/여름에\s*(?:완전\s*)?(?:좋겠|좋을)|겨울에\s*(?:완전\s*)?(?:좋겠|좋을)|활용하기\s*좋|사용하기\s*좋|먹기\s*좋|마시기\s*좋/i.test(t)) return true;
+  if (/(?:한\s*번|한번)\s*(?:먹어|써|사용해|사|해)\s*(?:봐야|봐|보자)|꼭\s*(?:먹어|써|사용해|사|해)\s*봐|추천(?:해|함|한다)|구매(?:해|하자|각)/i.test(t)) return true;
+
+  // 허구 경험 유도에 자주 붙는 문구도 차단
+  if (/애들이\s*(?:이거|이걸).*?(?:난리|못\s*살|계속\s*해달)|남편이.*?(?:난리|사달|좋아)|친구가.*?(?:난리|사달|좋아)/i.test(t)) return true;
 
   const allLines = t.split('\n');
   const lines = allLines.map(x => x.trim()).filter(Boolean);
   const blankLines = allLines.filter(x => !x.trim()).length;
 
-  // 모바일에서 자동 줄바꿈되기 전에 문장 자체를 짧게 만들기
-  if (lines.length < 3 || lines.length > 6) return true;
-  if (lines.some(x => x.length > 26)) return true;
-
-  // 최소 한 번은 문단을 끊어서 한 덩어리 글 방지
+  if (lines.length < 3 || lines.length > 7) return true;
+  if (lines.some(x => x.length > 28)) return true;
   if (lines.length >= 4 && blankLines < 1) return true;
-
   if (lines.some(x => /(모습이|느낌이|생각이|제품이|장면이|부분이|점이)$/.test(x))) return true;
+
   return false;
 }
 
 function getExamples(isRecipe) {
   return isRecipe
-    ? `이거 진짜 미쳤다ㅋㅋ\n자몽허니블랙티 만들어봤는데\n스벅에서 먹던 그 맛이랑 거의 똑같아\n\n얼음 왕창 넣으니까 개맛있네ㅋㅋ\n비밀 재료는 댓글에 적어둘게\n\n이거 알려준 스치니 어딨어ㅜㅠ\n와 대박 집에서 호텔 냄새 나!!\n\n이거 하나면 비싼 디퓨저 필요 없어\n신기해 재료는 댓글에 적어둘게`
-    : `이거 왜 이제 알았지ㅋㅋ\n새 방석 바꿔줬더니 여기서 안 나와\n\n그냥 쏙 들어가서 자는데\n저 다리 나온 거 너무 웃겨ㅋㅋ\n\n이 가방 뭐야ㅋㅋ\n크로스백이랑 백팩 둘 다 된다는데\n\n수납공간 왜 이렇게 많아\n사진 보니까 은근 탐나네ㅋㅋ\n\n직관 갔다가 이거 보고 빵터짐ㅋㅋ\n우산이 이렇게까지 커질 일이야?\n\n근데 비 오니까 갑자기 개탐남ㅋㅋ`;
+    ? `와 ㅁㅊ 이거 뭐야ㅋㅋ\n토마토 안에 크림치즈 넣었는데\n이게 왜 이렇게 맛있어ㅠㅠ\n\n간식으로 먹기 시작했는데\n계속 손 가네ㅋㅋ\n\n이거 진짜 미쳤다ㅋㅋ\n자몽허니블랙티 만들어봤는데\n스벅에서 먹던 맛이랑 거의 똑같아\n\n얼음 왕창 넣으니까 개맛있네ㅋㅋ\n비밀 재료는 댓글에 적어둘게\n\n이거 알려준 스치니 어딨어ㅜㅠ\n이 조합 생각한 사람 누구야ㅋㅋ\n\n별거 없어 보이는데\n왜 이렇게 맛있어ㅠㅠ`
+    : `이거 왜 이제 알았지ㅋㅋ\n새 방석 바꿔줬더니 여기서 안 나와\n\n그냥 쏙 들어가서 자는데\n저 다리 나온 거 너무 웃겨ㅋㅋ\n\n아니 이거 뭐야ㅋㅋ\n크로스백이랑 백팩 둘 다 된다는데\n\n사진 보니까 은근 탐나네\n수납칸 왜 이렇게 많아ㅋㅋ\n\n직관 갔다가 이거 보고 빵터짐ㅋㅋ\n우산이 이렇게까지 커질 일이야?\n\n근데 비 오니까 좀 탐난다ㅋㅋ`;
 }
 
 function systemPrompt(isRecipe) {
-  return `한국 Threads 글을 실제 사람이 즉흥적으로 쓴 것처럼 최종 편집한다
-목표는 광고문이나 상품평이 아니라 친구가 방금 본 걸 툭 올린 듯한 반응글이다
+  return `너는 한국 Threads에서 실제 사람이 폰으로 바로 올리는 글만 만드는 최종 말투 편집기다
+잘 쓴 광고문 후기문 블로그문을 만들면 실패다
+친구한테 카톡하듯 짧고 날것으로 써라
 
-[가장 중요한 줄바꿈 규칙]
-- 모바일 화면에서 한 문장이 자동으로 두 줄로 꺾이지 않게 문장 자체를 짧게 쓴다
-- 한 줄은 가능하면 12~22자 정도로 쓰고 절대 26자를 넘기지 않는다
-- 긴 문장을 중간에서 억지로 자르지 말고 처음부터 짧은 문장으로 다시 쓴다
-- 한 줄에는 한 생각만 쓴다
-- 1~2줄 쓴 다음 빈 줄 하나를 넣는다
-- 보통 3~5문장으로 끝낸다
-- 보통 2~3문단으로 만든다
-- 글 전체를 한 덩어리로 붙이지 않는다
+[최우선 스타일]
+- 첫 반응이 먼저 튀어나와야 한다
+- '와 ㅁㅊ 이거 뭐야ㅋㅋ' '아니 이거 뭐야ㅋㅋ' '이거 왜 이제 알았지ㅋㅋ' 같은 강한 실제 반응을 자연스럽게 허용한다
+- '미친'보다 자연스러우면 'ㅁㅊ'을 우선 허용한다
+- ㅋㅋ ㅋㅋㅋ ㅠㅠ ㅜㅠ ;; ?! ㄷㄷ 같은 실제 SNS 표현을 허용한다
+- 단 한 글에 강한 축약 표현은 1~2개 정도면 충분하다
+- 모든 글을 같은 후킹으로 시작하지 않는다
+- 제품 장점을 설명하지 말고 눈앞 장면이나 맛이나 행동 하나만 잡는다
+- 정보 전달보다 반응이 먼저다
 
-좋은 호흡 예시
-이거 진짜 미쳤다ㅋㅋ
-자몽허니블랙티 만들어봤는데
-스벅에서 먹던 그 맛이랑 거의 똑같아
+[문장과 줄바꿈]
+- 3~6개 실제 문장
+- 한 줄은 보통 8~22자
+- 최대 28자를 넘지 않는다
+- 한 줄에 한 생각만 쓴다
+- 1~2줄 쓴 뒤 빈 줄 하나
+- 보통 2~3문단
+- 긴 문장을 화면 폭에 맞춰 억지로 자르지 말고 처음부터 짧은 문장으로 다시 쓴다
 
-얼음 왕창 넣으니까 개맛있네ㅋㅋ
-비밀 재료는 댓글에 적어둘게
+[절대 금지하는 AI 말투]
+- 완전 짱이야
+- 육즙이 폭발하는 느낌이야
+- 풍미가 살아나 풍미가 배가돼
+- 완벽한 조화 특별한 메뉴 매력적인 메뉴 한층 더
+- 애들이 이거 없인 못 살겠다고 난리야
+- 기대 안 했는데 대박이다
+- 아침 메뉴로 완전 짱이야
+- 간편하게 활용하기 좋아
+- 실용적 효율적 편리하다 활용도 장점이다
+- 한 번 먹어봐야 해 꼭 먹어봐 추천해 강추
+- 무조건 사야 해 놓치면 후회
+- 이거 없으면 안 될 듯
+- 객관적인 상품평 총평 결론
 
-또 다른 예시
-이 가방 뭐야ㅋㅋ
-크로스백이랑 백팩 둘 다 된다는데
+[언어 규칙]
+- 마침표 금지
+- 쉼표 금지
+- ~냐 금지
+- 존댓말 금지
+- 음슴체 금지: 미쳤음 좋음 편함 했음 됐음 있음 없음 같은 끝맺음 금지
+- 'ㅁㅊ'은 음슴체가 아니라 인터넷 축약어이므로 허용
+- 원문에 없는 남편 친구 아이 회사 구매 사용 섭취 경험을 새로 만들지 않는다
+- 현재 생성문에 허구 경험이 있으면 삭제한다
+- 원문 사실 범위 안에서만 쓴다
 
-수납공간 왜 이렇게 많아
-사진 보니까 은근 탐나네ㅋㅋ
+[좋은 구조]
+반응 → 구체적인 장면 하나 → 다시 반응
+또는
+상황 → 발견 → 짧은 감정
 
-말투 규칙
-- 설명보다 반응을 먼저 쓴다
-- 상황 또는 발견 → 감정 → 구체적인 한 장면 → 짧은 반응 순서를 선호한다
-- 이거 진짜 미쳤다ㅋㅋ / 이거 왜 이제 알았지ㅋㅋ / 와 대박 / 너무 맛있어 / 너무 웃겨ㅋㅋ 같은 직접 반응을 자연스럽게 쓴다
-- ㅋㅋ ㅎㅎ ㅠㅠ ㅜㅠ ㄷㄷ 같은 SNS 표현을 자연스럽게 허용한다
-- 제품을 객관적으로 평가하거나 총평하지 않는다
-- 특징을 전부 설명하지 말고 강한 것 1~2개만 쓴다
-- 잘 쓴 문장보다 실제 사람이 급하게 올린 자연스러운 호흡을 우선한다
+${isRecipe ? `[레시피 추가 규칙]\n- 맛 표현은 '너무 맛있어' '개맛있네ㅋㅋ'처럼 직접적으로 가능하다\n- 레시피를 길게 설명하지 않는다\n- 자연스러울 때 마지막에 '비밀 재료는 댓글에 적어둘게' 또는 '재료는 댓글에 적어둘게' 사용 가능` : `[일반상품 추가 규칙]\n- 기능을 3개씩 나열하지 않는다\n- 억지 구매 권유 금지\n- 댓글 유도를 억지로 붙이지 않는다`}
 
-절대 금지
-- 간편하게 활용도 실용적 효율적 편리하다 장점이다 추천한다 같은 리뷰 문체
-- 여름에 좋겠다 활용하기 좋다 사용하기 좋다 먹기 좋다 마시기 좋다 같은 총평
-- 한 번 먹어봐야 해 한번 먹어봐 써봐야 해 한번 써봐 사봐야 해 같은 행동 권유
-- 꼭 먹어봐 꼭 써봐 꼭 사봐 추천해 강추 놓치면 후회 같은 CTA
-- 이거 없으면 안 될 듯 같은 과한 구매 결론
-- 쓸모가 엄청 많아 수납력도 미쳤음 같은 기능 나열
-- 음슴체 전부 금지: 미쳤음 좋음 편함 했음 됐음 없음 있음 같은 끝맺음
-- 독자에게 구매 사용 섭취 저장 공유를 요구하는 문장
-- 원문에 없는 남편 친구 가족 회사 구매 사용 경험을 새로 만드는 것
-- 마침표 쉼표
-- ~냐
-- 존댓말 설명체
-- 상품 소개서 같은 장점 나열
-- 문장을 모습이 느낌이 생각이 제품이 장면이 부분이 점이로 어색하게 끝내는 것
-
-작성 규칙
-- 원문에서 확인되는 사실만 사용한다
-- 현재 생성문에 허구 경험이 있으면 제거한다
-- 첫 문장을 매번 같은 표현으로 시작하지 않는다
-- 모든 글에 억지로 ㅋㅋ를 넣지는 않지만 감정이 살아나는 소재에는 과감하게 쓴다
-- 맞춤법보다 자연스러운 SNS 호흡을 우선하되 일부러 오타를 만들지 않는다
-- 수치와 스펙이 핵심이 아니면 빼도 된다
-${isRecipe ? '- 음식이나 레시피는 자연스러울 때 마지막에 비밀 재료는 댓글에 적어둘게 또는 재료는 댓글에 적어둘게처럼 끝낼 수 있다' : '- 일반 상품은 댓글 유도 문구를 억지로 붙이지 않는다'}
-
-추가 스타일 예시
+[스타일 기준 예시]
 ${getExamples(isRecipe)}
 
-예시 문장을 복사하지 말고 감정 강도 짧은 줄 문단 호흡만 따른다
+예시의 사실이나 문장을 복사하지 말고 말투 강도 호흡 줄바꿈 방식만 따라라
 JSON만 출력한다
 {"items":[{"index":1,"text":""}]}`;
 }
 
 async function callRewrite(apiKey, source, originals, isRecipe, retry = false) {
   const retryInstruction = retry
-    ? `\n\n[중요 재시도]\n직전 결과가 줄이 너무 길거나 광고문 리뷰문체 음슴체 때문에 탈락했다\n이번에는 각 줄을 26자 이하로 처음부터 짧게 다시 쓴다\n긴 문장을 중간에서 자르지 말고 짧은 문장 자체로 바꾼다\n1~2줄 뒤 반드시 빈 줄 하나를 넣는다\n좋겠다 추천한다 활용하기 좋다 미쳤음 같은 표현은 절대 쓰지 않는다`
+    ? `\n\n[재시도 강제 규칙]\n직전 결과는 AI 후기 말투라 탈락했다\n설명과 총평을 전부 버려라\n실제 Threads 사람이 바로 반응한 말투로 다시 써라\n필요하면 ㅁㅊ ㅋㅋ ㅠㅠ 같은 표현을 자연스럽게 사용해라\n완전 짱 육즙 폭발 풍미 기대 안 했는데 난리야 추천해 같은 상투어는 절대 쓰지 마라\n각 줄 최대 28자\n1~2줄 뒤 빈 줄 하나`
     : '';
 
   const r = await axios.post('https://api.openai.com/v1/chat/completions', {
     model: 'gpt-4o-mini',
-    temperature: retry ? 1.0 : 0.92,
+    temperature: retry ? 0.95 : 0.88,
     max_tokens: 1800,
     response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: systemPrompt(isRecipe) + retryInstruction },
       {
         role: 'user',
-        content: `[원문 사실 자료]\n${source}\n\n[현재 생성문]\n${originals}\n\n기계적인 설명문을 버리고 실제 Threads 사람이 쓴 것처럼 다시 써줘\n각 줄은 짧게 쓰고 긴 문장을 화면 폭에 맞춰 자르지 말고 문장 자체를 짧게 바꿔줘\n1~2줄마다 빈 줄 하나를 넣어서 문단 호흡도 만들어줘`,
+        content: `[원문 사실 자료]\n${source}\n\n[현재 생성문]\n${originals}\n\n광고 후기처럼 잘 쓰려고 하지 마\n실제 Threads에서 사람이 보고 바로 툭 쓴 것처럼 바꿔\n설명보다 반응을 먼저 쓰고 1~2줄마다 빈 줄을 넣어\n현재 글의 허구 경험이나 과장된 가족 반응은 원문 근거 없으면 반드시 제거해`,
       },
     ],
   }, {
@@ -175,7 +169,7 @@ async function rewriteBatch(accountId, sourceText, mode, items) {
 
     let retryMap = new Map();
     if (rejectedIndexes.length) {
-      console.log(`[Threads][HUMAN TONE] 1차 탈락 ${rejectedIndexes.length}건 → 짧은줄 사람말투 재시도 indexes=${rejectedIndexes.join(',')}`);
+      console.log(`[Threads][HUMAN TONE] 1차 탈락 ${rejectedIndexes.length}건 → 실제 스레드 말투 강제 재시도 indexes=${rejectedIndexes.join(',')}`);
       const retryOriginals = rejectedIndexes
         .map(i => `${i}. ${String(items[i - 1]?.text || '').replace(/\n/g, ' / ')}`)
         .join('\n');
@@ -186,16 +180,12 @@ async function rewriteBatch(accountId, sourceText, mode, items) {
     return items.map((item, idx) => {
       const index = idx + 1;
       const firstCandidate = firstMap.get(index);
-      if (firstCandidate && !basicReject(firstCandidate)) {
-        return { ...item, text: firstCandidate };
-      }
+      if (firstCandidate && !basicReject(firstCandidate)) return { ...item, text: firstCandidate };
 
       const retryCandidate = retryMap.get(index);
-      if (retryCandidate && !basicReject(retryCandidate)) {
-        return { ...item, text: retryCandidate };
-      }
+      if (retryCandidate && !basicReject(retryCandidate)) return { ...item, text: retryCandidate };
 
-      console.warn(`[Threads][HUMAN TONE] ${index}번 재작성 2회 탈락 → 원문 생성문 유지`);
+      console.warn(`[Threads][HUMAN TONE] ${index}번 재작성 2회 탈락 → 기존 생성문 유지`);
       return item;
     });
   } catch (e) {
@@ -212,8 +202,8 @@ writer.generateFromThreadsMaterial = async function patchedGenerate(accountId, a
   result.texts = result.items.map(x => x.text);
   result.comments = result.items.map(x => x.comment);
 
-  console.log(`[Threads][HUMAN TONE] 최종 사람말투 재작성 적용 mode=${result.mode} items=${result.items.length}`);
+  console.log(`[Threads][HUMAN TONE] 최종 실제 스레드 말투 적용 mode=${result.mode} items=${result.items.length}`);
   return result;
 };
 
-console.log('[Threads][HUMAN TONE] 실제 Threads 반응형 말투 v8 짧은줄+문단호흡 강화');
+console.log('[Threads][HUMAN TONE] v9 실제스레드축약어+AI후기상투어 강력차단');
