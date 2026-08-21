@@ -48,6 +48,7 @@ function badStyleReasons(text) {
 
   if (/(더라|하더라|했더라|더라고|하더라고|했더라고)/i.test(t)) reasons.push('더라체');
   if (/(?:^|\s)[가-힣A-Za-z0-9]+(?:함|됨|임|했음|있음|없음|좋음|편함|남다름|끝남|해결됨)(?=\s|$|[!?~ㅋㅎ])/m.test(t)) reasons.push('음슴체');
+  if (/[가-힣]+냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) reasons.push('냐체');
   if (/[,.]/.test(t.replace(/\d+\.\d+/g, ''))) reasons.push('마침표/쉼표');
   if (/필수인듯|좋은듯|괜찮은듯|되는듯|같은듯/i.test(t)) reasons.push('듯체');
   if (/추천|장만|괜찮을 거야|필수템|꿀템/i.test(t)) reasons.push('구매권유');
@@ -82,6 +83,17 @@ function fallbackRewrite(text) {
     .replace(/더라고/g, '')
     .replace(/더라/g, '');
 
+  // ~냐 반말 질문형은 최종 발행에서 금지한다
+  // AI 재작성 실패 시에도 자주 나오는 형태를 최소한 자연스럽게 정리한다
+  s = s
+    .replace(/뭐냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '뭐지')
+    .replace(/거냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '건가')
+    .replace(/없냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '없나')
+    .replace(/맞냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '맞나')
+    .replace(/했냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '했나')
+    .replace(/봤냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '봤나')
+    .replace(/냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '나');
+
   return hardSanitize(s);
 }
 
@@ -107,6 +119,8 @@ async function rewriteIfNeeded(accountId, text, mode) {
 
 절대 규칙
 - 자연스러운 반말
+- ~냐 형태의 반말 질문 어미 전부 금지 예: 없냐 맞냐 해봤냐 먹어봤냐 뭐냐
+- 질문이 필요하면 ~나 ~지 ~인가 같은 더 부드러운 표현을 쓰거나 평서문으로 바꾼다
 - 3~5줄 권장 필요하면 2~6줄
 - 한 줄에는 하나의 생각만 쓴다
 - 한 문장을 중간에서 어색하게 쪼개지 않는다
@@ -166,4 +180,4 @@ engine.buildThreadsFirstAutopilot = async function finalTextHardGuardBuild(accou
   return result;
 };
 
-console.log('[Autopilot][TEXT HARD GUARD] 반응형 호흡·더라체·음슴체·줄바꿈·긴줄·설명형 최종 강제검사 활성화');
+console.log('[Autopilot][TEXT HARD GUARD] 반응형 호흡·더라체·음슴체·냐체·줄바꿈·긴줄·설명형 최종 강제검사 활성화');
