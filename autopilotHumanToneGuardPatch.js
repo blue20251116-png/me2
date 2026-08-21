@@ -22,39 +22,39 @@ function clean(text) {
     .trim();
 }
 
+// 문단은 품질 실패 사유가 아니라 표시 형식이다.
+// 빈 줄이 하나도 없으면 의미 있는 줄을 유지한 채 2줄 단위로 문단만 만든다.
+function ensureParagraphs(text) {
+  const t = clean(text);
+  if (!t || /\n\s*\n/.test(t)) return t;
+  const lines = t.split('\n').map(x => x.trim()).filter(Boolean);
+  if (lines.length < 3) return t;
+  const groups = [];
+  for (let i = 0; i < lines.length; i += 2) groups.push(lines.slice(i, i + 2).join('\n'));
+  return groups.join('\n\n');
+}
+
 function rejectReasons(text) {
   const t = clean(text);
   const reasons = [];
-  const allLines = t.split('\n');
-  const lines = allLines.map(x => x.trim()).filter(Boolean);
-  const blankLines = allLines.filter(x => !x.trim()).length;
+  const lines = t.split('\n').map(x => x.trim()).filter(Boolean);
 
   if (!t) reasons.push('empty');
   if (lines.length < 3 || lines.length > 7) reasons.push('line-count');
   if (lines.some(x => x.length > 30)) reasons.push('long-line');
-  if (lines.length >= 4 && blankLines < 1) reasons.push('no-paragraph');
 
   // 고아 줄: "같아" "ㅋㅋ"처럼 의미가 끊겨 혼자 떨어진 줄
   if (lines.some(x => x.length <= 4)) reasons.push('orphan-line');
   if (lines.some(x => /^(?:같아|같네|같음|ㅋㅋ+|ㅎㅎ+|ㅠ+|ㅜ+|ㄷㄷ+|추천해|적을게|남길게)$/i.test(x))) reasons.push('orphan-fragment');
 
-  // 존댓말/정제된 설명체
   if (/(?:입니다|합니다|됩니다|하세요|해보세요|추천드립니다|수 있습니다)/.test(t)) reasons.push('formal-tone');
-
-  // AI 후기/광고 상투어
   if (/완전\s*짱|육즙(?:이)?\s*폭발|풍미|완벽한\s*조화|한층\s*더|매력적인|특별한\s*(?:메뉴|식사|한\s*끼)|입맛을\s*사로잡|감칠맛을\s*더해/i.test(t)) reasons.push('ai-review');
   if (/이거\s*없(?:인|으면).*못\s*살|없으면\s*안\s*될|놓치면\s*후회|강추|무조건\s*(?:사|먹|써|추천)|꼭\s*(?:사|먹|써).*봐/i.test(t)) reasons.push('cta-review');
   if (/간편하게|활용도|실용적|효율적|편리하|장점(?:이야|이다)|포인트인\s*듯|이런\s*거\s*찾던\s*사람|한번\s*(?:써|먹|사용)보면\s*좋을\s*것\s*같/i.test(t)) reasons.push('product-copy');
   if (/세정력\s*미쳤|통증이\s*사라|수술\s*없이.*관리|이게\s*실화야|대박!?[😲😂]?/i.test(t)) reasons.push('template-hype');
-
-  // 근거 없는 주변 사람 반응을 만드는 패턴 강하게 차단
   if (/(?:애들|엄마들|친구|남편|언니|주변\s*사람|다들).{0,45}(?:난리|바로\s*주문|사달|계속\s*해달|맛있다고|추천해줬|물어보)/i.test(t)) reasons.push('social-proof-story');
-
-  // 사용자가 금지한 말끝
   if (/[가-힣]+냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) reasons.push('nya-ending');
   if (/(?:했|됐|왔|갔|봤|먹었|썼|샀|좋았|괜찮았|편했|있었|없었|겠|있|없|좋|편)음(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) reasons.push('generic-eumseum');
-
-  // 단, 실제 스레드식 축약 "대박임" "딱임"은 허용
   return [...new Set(reasons)];
 }
 
@@ -131,7 +131,7 @@ async function rewriteOnce(apiKey, currentText, mode, attempt) {
   });
   const raw = r.data?.choices?.[0]?.message?.content;
   const parsed = raw ? JSON.parse(raw) : {};
-  return clean(parsed.text || '');
+  return ensureParagraphs(parsed.text || '');
 }
 
 engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutopilot(accountId, args = {}) {
@@ -140,23 +140,21 @@ engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutop
 
   const apiKey = getOpenAIKey(accountId);
   if (!apiKey) {
-    const reasons = rejectReasons(result.text);
+    const formatted = ensureParagraphs(result.text);
+    const reasons = rejectReasons(formatted);
     if (reasons.length) throw new Error(`[AUTOPILOT HUMAN TONE HARD REJECT] OpenAI key 없음 reasons=${reasons.join(',')}`);
-    return result;
+    return { ...result, text: formatted };
   }
 
-  let current = clean(result.text);
+  let current = ensureParagraphs(result.text);
   let reasons = rejectReasons(current);
 
-  // AutopilotV3 내부 검수가 통과했어도 항상 한 번 사람말투로 최종 재작성
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const rewritten = await rewriteOnce(apiKey, current, result.mode, attempt);
       const nextReasons = rejectReasons(rewritten);
       console.log(`[AutopilotV3][HUMAN FINAL] attempt=${attempt} reasons=${nextReasons.join(',') || 'PASS'} preview="${rewritten.slice(0,100).replace(/\n/g,' / ')}"`);
-      if (rewritten && nextReasons.length === 0) {
-        return { ...result, text: rewritten };
-      }
+      if (rewritten && nextReasons.length === 0) return { ...result, text: rewritten };
       if (rewritten) current = rewritten;
       reasons = nextReasons;
     } catch (e) {
@@ -164,8 +162,7 @@ engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutop
     }
   }
 
-  // 기존 AI 생성문으로 fallback하지 않는다. 품질검수 실패 글은 발행 차단.
   throw new Error(`[AUTOPILOT HUMAN TONE HARD REJECT] 최종 말투 검수 실패 reasons=${(reasons || []).join(',') || 'unknown'}`);
 };
 
-console.log('[AutopilotV3][HUMAN FINAL] v1 hard-guard loaded');
+console.log('[AutopilotV3][HUMAN FINAL] v2 paragraph-autoformat loaded');
