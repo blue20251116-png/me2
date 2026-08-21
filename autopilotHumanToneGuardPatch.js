@@ -51,7 +51,11 @@ function rejectReasons(text) {
   if (/완전\s*짱|육즙(?:이)?\s*폭발|풍미|완벽한\s*조화|한층\s*더|매력적인|특별한\s*(?:메뉴|식사|한\s*끼)|입맛을\s*사로잡|감칠맛을\s*더해/i.test(t)) reasons.push('ai-review');
   if (/이거\s*없(?:인|으면).*못\s*살|없으면\s*안\s*될|놓치면\s*후회|강추|무조건\s*(?:사|먹|써|추천)|꼭\s*(?:사|먹|써).*봐/i.test(t)) reasons.push('cta-review');
   if (/간편하게|활용도|실용적|효율적|편리하|장점(?:이야|이다)|포인트인\s*듯|이런\s*거\s*찾던\s*사람|한번\s*(?:써|먹|사용)보면\s*좋을\s*것\s*같/i.test(t)) reasons.push('product-copy');
-  if (/세정력\s*미쳤|통증이\s*사라|수술\s*없이.*관리|이게\s*실화야|대박!?[😲😂]?/i.test(t)) reasons.push('template-hype');
+
+  // "대박" 자체는 실제 Threads 반응어라 허용한다.
+  // 효능 단정이나 전형적인 AI 리액션 조합만 template-hype로 막는다.
+  if (/세정력\s*미쳤|통증이\s*사라|수술\s*없이.*관리|이게\s*실화야/i.test(t)) reasons.push('template-hype');
+
   if (/(?:애들|엄마들|친구|남편|언니|주변\s*사람|다들).{0,45}(?:난리|바로\s*주문|사달|계속\s*해달|맛있다고|추천해줬|물어보)/i.test(t)) reasons.push('social-proof-story');
   if (/[가-힣]+냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) reasons.push('nya-ending');
   if (/(?:했|됐|왔|갔|봤|먹었|썼|샀|좋았|괜찮았|편했|있었|없었|겠|있|없|좋|편)음(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) reasons.push('generic-eumseum');
@@ -68,6 +72,7 @@ function promptFor(mode) {
 - 첫 줄은 설명이 아니라 즉각적인 반응부터 시작한다
 - 자연스러우면 ㅁㅊ ㅋㅋ ㅠㅠ ㅜㅠ ;; ?! ㄷㄷ 같은 표현을 허용한다
 - '미친'처럼 정제해서 풀어쓰기보다 상황에 맞으면 'ㅁㅊ' 같은 실제 축약을 쓸 수 있다
+- '와 대박' '대박임;'처럼 자연스러운 대박 반응은 허용한다
 - 모든 글에 같은 자음이나 후킹을 억지로 넣지 않는다
 - 한 글에서 눈에 보이는 핵심 특징은 1개 정도만 잡는다
 - 장점 3개 나열 금지
@@ -165,4 +170,4 @@ engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutop
   throw new Error(`[AUTOPILOT HUMAN TONE HARD REJECT] 최종 말투 검수 실패 reasons=${(reasons || []).join(',') || 'unknown'}`);
 };
 
-console.log('[AutopilotV3][HUMAN FINAL] v2 paragraph-autoformat loaded');
+console.log('[AutopilotV3][HUMAN FINAL] v3 natural-daebak-allowed loaded');
