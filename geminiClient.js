@@ -39,15 +39,30 @@ function retryAfterMs(error) {
   return 30000;
 }
 
+function setCooldown(until) {
+  cooldownUntil = Math.max(cooldownUntil, Number(until) || 0);
+  global.__ME2_GEMINI_COOLDOWN_UNTIL = cooldownUntil;
+  return cooldownUntil;
+}
+
+function clearCooldown() {
+  cooldownUntil = 0;
+  delete global.__ME2_GEMINI_COOLDOWN_UNTIL;
+}
+
 function makeCooldownError(error, until) {
   error.isGeminiRateLimit = true;
   error.geminiCooldownUntil = until;
-  error.code = error.code || 'GEMINI_COOLDOWN';
+  error.code = 'GEMINI_COOLDOWN';
   return error;
 }
 
 function getCooldownUntil() {
-  return cooldownUntil > Date.now() ? cooldownUntil : 0;
+  const globalUntil = Number(global.__ME2_GEMINI_COOLDOWN_UNTIL || 0);
+  const until = Math.max(cooldownUntil, globalUntil);
+  if (until > Date.now()) return until;
+  if (until) clearCooldown();
+  return 0;
 }
 
 function getGeminiApiKey() {
@@ -88,7 +103,7 @@ async function generateJsonNow({ system = '', text = '', imageUrls = [], maxToke
   const activeCooldown = getCooldownUntil();
   if (activeCooldown) {
     const e = new Error(`Gemini cooldown active until ${new Date(activeCooldown).toISOString()}`);
-    console.log(`[Gemini][COOLDOWN SKIP] 호출하지 않고 즉시 계정 보충으로 넘김 · until=${new Date(activeCooldown).toISOString()}`);
+    console.log(`[Gemini][COOLDOWN SKIP] 기다리지 않고 즉시 계정 보충으로 넘김 · until=${new Date(activeCooldown).toISOString()}`);
     throw makeCooldownError(e, activeCooldown);
   }
 
@@ -106,26 +121,26 @@ async function generateJsonNow({ system = '', text = '', imageUrls = [], maxToke
     if (!is429(error)) throw error;
 
     const waitMs = retryAfterMs(error) + RETRY_BUFFER_MS;
-    cooldownUntil = Math.max(cooldownUntil, Date.now() + waitMs);
+    setCooldown(Date.now() + waitMs);
 
     if (waitMs <= MAX_INLINE_WAIT_MS) {
       console.warn(`[Gemini][429 QUICK RETRY] 같은 요청 1회만 짧게 재시도 · wait=${Math.ceil(waitMs / 1000)}s`);
       await sleep(waitMs);
       try {
         const result = await doRequest({ endpoint, apiKey, parts, maxTokens, temperature });
-        cooldownUntil = 0;
+        clearCooldown();
         return result;
       } catch (retryError) {
         if (!is429(retryError)) throw retryError;
         const retryWait = retryAfterMs(retryError) + RETRY_BUFFER_MS;
-        cooldownUntil = Math.max(cooldownUntil, Date.now() + retryWait);
-        console.warn(`[Gemini][429 DEFER] 짧은 재시도도 제한됨 → 현재 계정 즉시 보충대기로 전환 · wait=${Math.ceil(retryWait / 1000)}s`);
-        throw makeCooldownError(retryError, cooldownUntil);
+        setCooldown(Date.now() + retryWait);
+        console.warn(`[Gemini][429 DEFER] 짧은 재시도도 제한됨 → 기다리지 않고 계정 보충대기로 전환 · wait=${Math.ceil(retryWait / 1000)}s`);
+        throw makeCooldownError(retryError, getCooldownUntil());
       }
     }
 
-    console.warn(`[Gemini][429 DEFER] ${Math.ceil(waitMs / 1000)}초를 여기서 기다리지 않고 현재 계정 즉시 보충대기로 전환`);
-    throw makeCooldownError(error, cooldownUntil);
+    console.warn(`[Gemini][429 DEFER] ${Math.ceil(waitMs / 1000)}초를 여기서 기다리지 않고 계정 보충대기로 전환`);
+    throw makeCooldownError(error, getCooldownUntil());
   }
 }
 
