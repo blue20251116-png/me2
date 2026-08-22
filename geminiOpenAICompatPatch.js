@@ -5,7 +5,7 @@ const gemini = require('./geminiClient');
 const originalPost = axios.post.bind(axios);
 
 axios.post = async function(url, data, config) {
-  if (typeof url !== 'string' || !url.includes('api.openai.com/v1/chat/completions') || !process.env.GEMINI_API_KEY) {
+  if (typeof url !== 'string' || !url.includes('api.openai.com/v1/chat/completions') || !gemini.getGeminiApiKey()) {
     return originalPost(url, data, config);
   }
 
@@ -37,4 +37,4 @@ axios.post = async function(url, data, config) {
   return { data: { choices: [{ message: { content: JSON.stringify(result) } }] } };
 };
 
-console.log(`[GeminiCompat] 활성화 key=${process.env.GEMINI_API_KEY ? 'configured' : 'missing'} model=${gemini.MODEL}`);
+console.log(`[GeminiCompat] 활성화 key=${gemini.getGeminiApiKey() ? 'configured' : 'missing'} model=${gemini.MODEL}`);
