@@ -4,6 +4,18 @@ const axios = require('axios');
 
 const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
+function getGeminiApiKey() {
+  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
+  try {
+    const { getSystemApiSettings } = require('./db');
+    const settings = getSystemApiSettings();
+    // 관리자 페이지의 기존 공용 AI Key 저장 슬롯을 Gemini용으로 사용한다.
+    return settings.openai_api_key || '';
+  } catch {
+    return '';
+  }
+}
+
 function stripFence(value) {
   return String(value || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
 }
@@ -15,8 +27,8 @@ async function imagePart(url) {
 }
 
 async function generateJson({ system = '', text = '', imageUrls = [], maxTokens = 1800, temperature = 0.2 }) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY가 설정되지 않았습니다');
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) throw new Error('Gemini API Key가 설정되지 않았습니다. 관리자 페이지 > 서비스 공용 API 설정에서 입력해주세요');
 
   const parts = [{ text: `${system}\n\n${text}\n\n반드시 유효한 JSON 객체만 출력해.` }];
   for (const url of imageUrls.filter(Boolean).slice(0, 3)) {
@@ -35,4 +47,4 @@ async function generateJson({ system = '', text = '', imageUrls = [], maxTokens 
   return JSON.parse(stripFence(raw));
 }
 
-module.exports = { generateJson, MODEL };
+module.exports = { generateJson, getGeminiApiKey, MODEL };
