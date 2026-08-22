@@ -14,7 +14,7 @@ if (!global.__ME2_AUTOPILOT_RETRY_PATCHED__) {
 
     if (start < 0 || end < 0) {
       console.warn('[Autopilot][RETRY UNTIL SUCCESS PATCH] scheduler 함수 위치를 찾지 못해 적용하지 못했습니다');
-    } else if (source.includes('[완전자동화 실패→보충예약]')) {
+    } else if (source.includes('[완전자동화 실패→보충예약]') && source.includes('__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID')) {
       console.log('[Autopilot][RETRY UNTIL SUCCESS PATCH] 이미 적용됨');
     } else {
       const newFn = `function startAutopilotJob(){
@@ -43,6 +43,7 @@ if (!global.__ME2_AUTOPILOT_RETRY_PATCHED__) {
         }
       }
 
+      global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID=account.id;
       try{
         await runAutopilotOnce(account);
         const successNext=Date.now()+randomIntervalMinutes()*60*1000;
@@ -58,6 +59,8 @@ if (!global.__ME2_AUTOPILOT_RETRY_PATCHED__) {
           continue;
         }
         console.error(\`[완전자동화 실패→보충예약] account #\${account.id}:\`,err.response?.data||err.message,\`next=\${new Date(retryAt).toISOString()}\`);
+      }finally{
+        if(global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID===account.id)delete global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID;
       }
     }
   });
@@ -65,7 +68,7 @@ if (!global.__ME2_AUTOPILOT_RETRY_PATCHED__) {
 
       source = source.slice(0, start) + newFn + source.slice(end);
       fs.writeFileSync(schedulerPath, source, 'utf8');
-      console.log('[Autopilot][RETRY UNTIL SUCCESS PATCH] 런타임 scheduler 직접교체 완료 · 실패 시 5분 뒤 새소재 재시도 · 성공 시에만 정규주기');
+      console.log('[Autopilot][RETRY UNTIL SUCCESS PATCH] 런타임 scheduler 직접교체 완료 · 실패 시 5분 뒤 새소재 재시도 · 계정별 소재 컨텍스트 연결');
     }
   } catch (err) {
     console.error('[Autopilot][RETRY UNTIL SUCCESS PATCH] 적용 실패:', err.message);
