@@ -22,22 +22,3 @@
   function decorate(){userList.querySelectorAll('.user-card').forEach(card=>{if(card.querySelector('.custom-days-wrap'))return;const actions=card.querySelector('.user-actions');if(!actions)return;const anyBtn=actions.querySelector('[data-id]');if(!anyBtn)return;const userId=Number(anyBtn.dataset.id);if(!userId)return;const pendingApprove=actions.querySelector('[data-action="approve"]');if(pendingApprove){const replacement=pendingApprove.cloneNode(true);replacement.textContent='승인 3일';pendingApprove.replaceWith(replacement);replacement.onclick=async()=>{if(!confirm('이 회원을 3일 이용으로 승인할까요?'))return;try{await approveForDays(userId,3);await loadUsers();}catch(e){alert(e.message);}};}const wrap=document.createElement('div');wrap.className='custom-days-wrap';wrap.style.cssText='display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px;width:100%;';wrap.innerHTML=`<button type="button" data-quick3 style="font-size:11.5px;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);cursor:pointer;">${pendingApprove?'승인 3일':'3일 추가'}</button><input data-days type="number" min="1" max="3650" value="30" style="width:78px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);"><button type="button" data-apply-days style="font-size:11.5px;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);cursor:pointer;">${pendingApprove?'입력 일수로 승인':'입력 일수 추가'}</button>`;actions.appendChild(wrap);wrap.querySelector('[data-quick3]').onclick=async()=>{try{if(pendingApprove){if(!confirm('이 회원을 3일 이용으로 승인할까요?'))return;await approveForDays(userId,3);}else{if(!confirm('이 회원의 이용기간을 3일 추가할까요?'))return;await addDays(userId,3);}await loadUsers();}catch(e){alert(e.message);}};wrap.querySelector('[data-apply-days]').onclick=async()=>{const days=Math.trunc(Number(wrap.querySelector('[data-days]').value));if(!Number.isFinite(days)||days<1||days>3650){alert('1~3650일 사이로 입력해주세요.');return;}try{if(pendingApprove){if(!confirm(`${days}일 이용으로 승인할까요?`))return;await approveForDays(userId,days);}else{if(!confirm(`이용기간을 ${days}일 추가할까요?`))return;await addDays(userId,days);}await loadUsers();}catch(e){alert(e.message);}};});}
   new MutationObserver(decorate).observe(userList,{childList:true,subtree:true});setTimeout(decorate,0);
 })();
-
-// Gemini 전환: 기존 관리자 공용 AI 키 입력칸/저장 API를 그대로 사용해 별도 DB 마이그레이션 없이 운영한다.
-(() => {
-  const form=document.getElementById('systemApiForm');
-  if(!form)return;
-  const input=form.querySelector('input[name="openai_api_key"]');
-  if(input){
-    const label=input.closest('label');
-    if(label){label.childNodes[0].textContent='Google Gemini API Key';}
-    input.placeholder='Google AI Studio API Key';
-    input.autocomplete='new-password';
-  }
-  const status=document.getElementById('systemApiStatus');
-  if(status){
-    const obs=new MutationObserver(()=>{if(status.textContent.includes('OpenAI'))status.textContent=status.textContent.replace('OpenAI','Gemini');});
-    obs.observe(status,{childList:true,subtree:true,characterData:true});
-    setTimeout(()=>{status.textContent=status.textContent.replace('OpenAI','Gemini');},0);
-  }
-})();
