@@ -49,7 +49,7 @@ if (!global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__) {
 
     let source = fs.readFileSync(filename, 'utf8');
     const oldFns = "function markUsedPost(url) { if (url) db.prepare('INSERT OR IGNORE INTO threads_benchmark_used_posts (post_url) VALUES (?)').run(String(url)); }\nfunction isUsedPost(url) { return !!db.prepare('SELECT 1 FROM threads_benchmark_used_posts WHERE post_url=?').get(String(url)); }";
-    const newFns = "function currentMaterialAccountId(){return Number(global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID||0);}\nfunction markUsedPost(url) { const accountId=currentMaterialAccountId(); if (accountId&&url) db.prepare('INSERT OR IGNORE INTO threads_benchmark_used_posts (account_id,post_url) VALUES (?,?)').run(accountId,String(url)); }\nfunction isUsedPost(url) { const accountId=currentMaterialAccountId(); return !!(accountId&&url&&db.prepare('SELECT 1 FROM threads_benchmark_used_posts WHERE account_id=? AND post_url=?').get(accountId,String(url))); }";
+    const newFns = "function currentMaterialAccountId(){return Number(global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID||0);}\nfunction geminiCooldownActive(){return Number(global.__ME2_GEMINI_COOLDOWN_UNTIL||0)>Date.now();}\nfunction markUsedPost(url) { const accountId=currentMaterialAccountId(); if(geminiCooldownActive()){console.log('[Autopilot][ACCOUNT MATERIAL] Gemini cooldown 중 소재 사용처리 생략');return;} if (accountId&&url) db.prepare('INSERT OR IGNORE INTO threads_benchmark_used_posts (account_id,post_url) VALUES (?,?)').run(accountId,String(url)); }\nfunction isUsedPost(url) { const accountId=currentMaterialAccountId(); return !!(accountId&&url&&db.prepare('SELECT 1 FROM threads_benchmark_used_posts WHERE account_id=? AND post_url=?').get(accountId,String(url))); }";
 
     if (source.includes(oldFns)) {
       source = source.replace(oldFns, newFns);
@@ -57,7 +57,7 @@ if (!global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__) {
       throw new Error('[ACCOUNT MATERIAL] benchmark mark/is used 패턴을 찾지 못했습니다');
     }
 
-    console.log('[Autopilot][ACCOUNT MATERIAL] 계정별 소재 사용/버림/중복 분리 활성화 · benchmark pool shared · disk untouched');
+    console.log('[Autopilot][ACCOUNT MATERIAL] 계정별 소재 사용/버림/중복 분리 활성화 · Gemini 429 소재보존 · benchmark pool shared · disk untouched');
     mod._compile(source, filename);
   };
 }
