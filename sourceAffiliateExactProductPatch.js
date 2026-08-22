@@ -7,6 +7,11 @@ const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 function clean(v) {
   return String(v || '').replace(/\s+/g, ' ').trim();
 }
+function isBlockedTitle(v) {
+  const t=clean(v).toLowerCase();
+  return !t || /access denied|forbidden|robot check|captcha|쿠팡 로그인|로그인이 필요|페이지를 찾을 수 없|요청하신 페이지|error 403|403 forbidden/i.test(t);
+}
+function safeTitle(v){const t=clean(v);return isBlockedTitle(t)?'':t;}
 
 function extractCoupangLinks(authorReplies) {
   const text = Array.isArray(authorReplies) ? authorReplies.join('\n\n') : String(authorReplies || '');
@@ -34,9 +39,9 @@ function titleFromHtml(html) {
   const s = String(html || '');
   const og = s.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
     || s.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
-  if (og?.[1]) return decodeHtml(og[1]).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim();
+  if (og?.[1]) return safeTitle(decodeHtml(og[1]).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim());
   const t = s.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return t?.[1] ? decodeHtml(t[1]).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim() : '';
+  return t?.[1] ? safeTitle(decodeHtml(t[1]).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim()) : '';
 }
 
 function productIdFrom(value) {
@@ -99,7 +104,7 @@ async function resolveWithBrowser(sourceUrl) {
       sourceUrl,
       finalUrl,
       ...canonical,
-      title: clean(metaTitle || pageTitle).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim(),
+      title: safeTitle(clean(metaTitle || pageTitle).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim()),
       method: 'browser',
     };
   } finally {
@@ -132,7 +137,7 @@ function tokens(v) {
 }
 
 function candidateScore(candidate, detail, result, index) {
-  const title = clean(candidate?.title);
+  const title = safeTitle(candidate?.title);
   if (!title) return 1 - index * 0.01;
   const titleTokens = new Set(tokens(title));
   const evidence = [
@@ -171,11 +176,13 @@ async function findExactSourceProduct(result) {
 
   resolved.sort((a, b) => candidateScore(b, detail, result, b.index) - candidateScore(a, detail, result, a.index));
   const picked = resolved[0];
-  const name = clean(picked.title)
-    || clean(result?.visionTarget?.soldObject)
+  const parsedTitle = safeTitle(picked.title);
+  const fallbackName = clean(result?.visionTarget?.soldObject)
     || clean(result?.topic)
     || clean(result?.product?.name)
     || '원문 작성자 연결 상품';
+  const name = parsedTitle || fallbackName;
+  if (!parsedTitle) console.warn(`[AutopilotV3][SOURCE AFFILIATE] 차단/무효 제목 감지 → 기존 근거 상품명 유지 name="${name}"`);
 
   return {
     product: {
@@ -217,4 +224,4 @@ engine.buildThreadsFirstAutopilot = async function sourceAffiliateExactProductBu
   return result;
 };
 
-console.log('[Autopilot][SOURCE AFFILIATE EXACT PRODUCT] 작성자 댓글 C사 링크 실제 상품 우선 연결 활성화');
+console.log('[Autopilot][SOURCE AFFILIATE EXACT PRODUCT] 작성자 댓글 C사 링크 실제 상품 우선 연결 활성화 · Access Denied 제목 차단');
