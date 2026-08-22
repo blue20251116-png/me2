@@ -2,7 +2,7 @@
 
 const axios = require('axios');
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 
 function getGeminiApiKey() {
   if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
