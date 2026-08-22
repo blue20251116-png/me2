@@ -33,6 +33,16 @@ require.extensions['.js'] = function patchedJsLoader(mod, filename) {
     '본문·작성자 댓글·이미지/영상에서 실제 구매 가능한 대상을 최대한 구체적으로 추론하되 근거 없는 브랜드/모델은 만들지 않는다. 작성자 댓글에 쇼핑 링크가 없어도 정상 소재로 처리한다.'
   );
 
+  // OpenAI가 confidence를 0, 0~1, 0~100 등 제각각 반환해도 안전하게 0~100으로 통일한다.
+  source = source.replace(
+    /searchTerms는 쿠팡에서 실제 상품을 찾기 좋은 검색어 최대 2개다\. 단순 주제어\(예: 운동, 다이어트, 일상\)만 쓰지 말고 실제 구매 가능한 물건\/식품명이어야 한다\. JSON만 출력:/,
+    'searchTerms는 쿠팡에서 실제 상품을 찾기 좋은 검색어 최대 2개다. 단순 주제어(예: 운동, 다이어트, 일상)만 쓰지 말고 실제 구매 가능한 물건/식품명이어야 한다. confidence는 반드시 0~100 사이 정수로 쓰고, 판매 대상이 본문·작성자 댓글·이미지 중 둘 이상의 근거로 명확하면 70 이상을 준다. JSON만 출력:'
+  );
+  source = source.replace(
+    "confidence:Math.max(0,Math.min(100,Number(d?.confidence)||0)),evidence:clean(d?.evidence).slice(0,300)",
+    "confidence:(()=>{let n=Number(d?.confidence);if(Number.isFinite(n)&&n>0&&n<=1)n*=100;if(!Number.isFinite(n)||n<0)n=0;n=Math.min(100,n);if(n===0){const sold=clean(d?.soldObject),dish=clean(d?.dish),ingredient=clean(d?.promotedIngredient),terms=(Array.isArray(d?.searchTerms)?d.searchTerms:[]).map(clean).filter(Boolean);if(sold&&terms.length)n=75;else if(dish&&ingredient&&terms.length)n=70;else if((sold||dish)&&terms.length)n=60;}return n;})(),evidence:clean(d?.evidence).slice(0,300)"
+  );
+
   const visionHelper = [
     'async function prepareVisionImageUrls(imageUrls){',
     '  const out=[];',
@@ -108,14 +118,15 @@ require.extensions['.js'] = function patchedJsLoader(mod, filename) {
   const pool10 = source.includes('collectBenchmarkMaterials({limit:10})');
   const candidates3 = source.includes('collectQualifiedThreadsMaterials(3)');
   const confidenceGate = source.includes('[AutopilotV3][CONFIDENCE SKIP]');
+  const confidenceNormalize = source.includes('confidence는 반드시 0~100 사이 정수');
   const videoGate = source.includes('[AutopilotV3][VIDEO QUALITY SKIP]');
   const productGate = source.includes('[AutopilotV3][PRODUCT MATCH SKIP]');
   const visionCache = source.includes('[AutopilotV3][VISION CACHE]');
   const soldFirst = source.includes('[AutopilotV3][COUPANG SEARCH][SOLD-FIRST]');
   const coupang401 = source.includes('[Coupang][401] stage=search');
-  console.log(`[Autopilot][MATERIAL SAFETY] pool10=${pool10?'ON':'FAIL'} candidates3=${candidates3?'ON':'FAIL'} confidence>=0.5=${confidenceGate?'ON':'FAIL'} video-downgrade-block=${videoGate?'ON':'FAIL'} product-match=${productGate?'ON':'FAIL'} vision-cache=${visionCache?'ON':'FAIL'} sold-first=${soldFirst?'ON':'FAIL'} coupang401-log=${coupang401?'ON':'FAIL'}`);
+  console.log(`[Autopilot][MATERIAL SAFETY] pool10=${pool10?'ON':'FAIL'} candidates3=${candidates3?'ON':'FAIL'} confidence>=0.5=${confidenceGate?'ON':'FAIL'} confidence-normalize=${confidenceNormalize?'ON':'FAIL'} video-downgrade-block=${videoGate?'ON':'FAIL'} product-match=${productGate?'ON':'FAIL'} vision-cache=${visionCache?'ON':'FAIL'} sold-first=${soldFirst?'ON':'FAIL'} coupang401-log=${coupang401?'ON':'FAIL'}`);
 
   mod._compile(source, filename);
 };
 
-console.log('[Autopilot][NO-LINK-FILTER] 10개 수집 + 후보 3개 + 저신뢰/영상강등/상품매칭 + Vision 로컬캐시 + sold 우선검색 활성화');
+console.log('[Autopilot][NO-LINK-FILTER] 10개 수집 + 후보 3개 + confidence 보정 + 저신뢰/영상강등/상품매칭 + Vision 로컬캐시 + sold 우선검색 활성화');
