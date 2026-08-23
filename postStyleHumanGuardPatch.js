@@ -21,6 +21,7 @@ const RECIPE_CTA = /(?:재료(?:랑|와)?\s*(?:만드는\s*법|레시피)|만드
 const CANNED = /(?:신세계|신의\s*한\s*수|활용도(?:도)?\s*높|완전\s*유용|스트레스가\s*확\s*줄|완전\s*다른\s*세상|간편하게\s*사용|실용적이야|삶의\s*질|강력\s*추천|무조건\s*추천|꼭\s*써봐|놓치면\s*후회|나만\s*알기\s*아까워)/i;
 const UNVERIFIED_USE = /(?:바꿨는데|써봤는데|써보니까|사용해보니까|사봤는데|구매했는데|쓰니까|쓰고\s*나서|샀는데|고민\s*없이\s*샀|들고\s*나가야겠|찾다가\s*이거\s*발견)/i;
 const EUMSEUM = /(?:귀여움|멋짐|달라짐|폭발임|대박임|좋음|편함|유용함|했음|있음|없음|끝남|싶어짐|느껴짐|생각남|보임)(?=$|\s|[!?~ㅋㅎ])/m;
+const FATAL_REASONS = new Set(['wrong-recipe-cta','eumseum','nya','canned-ad-tone','unverified-use','health-effect','dangling-reaction']);
 
 function modeOf(result) { return String(result?.mode || result?.contentMode || result?.kind || '').toLowerCase(); }
 function isRecipe(result) { return modeOf(result) === 'recipe'; }
@@ -107,9 +108,7 @@ function mergeDanglingReactions(lines) {
     if (m && out.length) {
       out[out.length - 1] = `${out[out.length - 1]} ${m[1]}`.trim();
       if (m[2]) out.push(m[2].trim());
-    } else {
-      out.push(line);
-    }
+    } else out.push(line);
   }
   return out;
 }
@@ -118,11 +117,8 @@ function splitLines(text) {
   const source = clean(text).split('\n').map(x => x.trim()).filter(Boolean);
   const out = [];
   const SAFE_ANCHORS = [' 근데 ', ' 그래서 ', ' 아니 ', ' 이건 ', ' 그냥 ', ' 보면 ', ' 생각보다 ', ' 댓글에 ', ' 재료랑 ', ' 만드는 법', ' ㅋㅋ '];
-
   for (let line of source) {
     if (line.length <= 58) { out.push(line); continue; }
-
-    // 조사/어미 중간 절단 금지: 안전한 연결어가 있을 때만 나눈다.
     let rest = line;
     while (rest.length > 58) {
       let cut = -1;
@@ -136,7 +132,6 @@ function splitLines(text) {
     }
     if (rest) out.push(rest);
   }
-
   return mergeDanglingReactions(out).filter(x => x.length > 1).slice(0, 7).join('\n');
 }
 
@@ -149,7 +144,6 @@ function addThreadsRhythm(text, result) {
   let h = 0;
   for (const ch of key) h = ((h << 5) - h + ch.charCodeAt(0)) | 0;
   const bucket = Math.abs(h) % 10;
-
   if (!native) {
     if (bucket === 0) lines.unshift('와 이거 대박이야ㅋㅋ');
     else if (bucket === 1) lines.unshift('이거 진짜 미쳤다ㅋㅋ');
@@ -165,7 +159,6 @@ function finalize(text, result) {
   let t = clean(text);
   t = stripWrongCta(t, result);
   t = stripHealth(t, result);
-
   for (let pass = 0; pass < 3; pass++) {
     t = t.split('\n').map(x => rewriteLine(x, result)).filter(Boolean).join('\n');
     t = splitLines(t);
@@ -173,24 +166,51 @@ function finalize(text, result) {
     t = t.replace(REACTION, m => (++count <= 3 ? m : ''));
     if (!inspect(t, result).length) break;
   }
-
   t = addThreadsRhythm(t, result);
   t = splitLines(t);
   return clean(t);
 }
 
+function enforceFatalPass(text, result) {
+  let t = clean(text);
+  for (let pass = 0; pass < 3; pass++) {
+    t = stripWrongCta(t, result);
+    t = stripHealth(t, result);
+    t = t.split('\n').map(x => rewriteLine(x, result)).filter(Boolean).join('\n');
+    t = splitLines(t);
+    const fatal = inspect(t, result).filter(r => FATAL_REASONS.has(r));
+    if (!fatal.length) return clean(t);
+  }
+
+  // 최후 방어: 치환으로도 해결되지 않은 위험 줄만 제거한다.
+  const kept = clean(t).split('\n').filter(line => {
+    if (!isRecipe(result) && RECIPE_CTA.test(line)) return false;
+    if (EUMSEUM.test(line)) return false;
+    if (/[가-힣]+냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(line)) return false;
+    if (CANNED.test(line)) return false;
+    if (!isRecipe(result) && UNVERIFIED_USE.test(line)) return false;
+    if (isHealth(result) && HEALTH_EFFECT.test(line)) return false;
+    if (/^(?:ㅋㅋ+|ㅎㅎ+|ㅠㅠ+|ㅜㅜ+)\s+/.test(line)) return false;
+    return true;
+  });
+  return clean(kept.join('\n'));
+}
+
 engine.buildThreadsFirstAutopilot = async function(accountId, args = {}) {
   const result = await originalBuild(accountId, args);
   if (!result?.text) return result;
-
   const before = clean(result.text);
   const reasons = inspect(before, result);
-  const fixed = finalize(before, result);
+  let fixed = finalize(before, result);
+  fixed = enforceFatalPass(fixed, result);
   const remaining = inspect(fixed, result);
-
-  console.log(`[AutopilotV3][POST STYLE GUARD v7] mode=${modeOf(result)||'-'} reasons=${reasons.join(',')||'none'} remaining=${remaining.join(',')||'PASS'} preview="${fixed.slice(0,220).replace(/\n/g,' / ')}"`);
+  const fatalRemaining = remaining.filter(r => FATAL_REASONS.has(r));
+  console.log(`[AutopilotV3][POST STYLE GUARD v8] mode=${modeOf(result)||'-'} reasons=${reasons.join(',')||'none'} remaining=${remaining.join(',')||'PASS'} fatal=${fatalRemaining.join(',')||'PASS'} preview="${fixed.slice(0,220).replace(/\n/g,' / ')}"`);
+  if (fatalRemaining.length) {
+    throw new Error(`최종 Threads 문체 검사 실패: ${fatalRemaining.join(',')}`);
+  }
   return { ...result, text: fixed };
 };
 
-console.log('[AutopilotV3][POST STYLE GUARD] v7 음슴체 완전정리 + 가짜구매경험 제거 + 안전 줄바꿈 + 강한 Threads 반응 유지 · AI추가호출 없음');
-module.exports = { inspect, clean, finalize };
+console.log('[AutopilotV3][POST STYLE GUARD] v8 최종 fail-closed · 음슴체/가짜경험/잘못된CTA/건강효과 잔존 시 예약 차단 · 강한 Threads 반응 유지 · AI추가호출 없음');
+module.exports = { inspect, clean, finalize, enforceFatalPass };
