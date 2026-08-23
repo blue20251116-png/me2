@@ -3,7 +3,7 @@
 // If Meta accepts a VIDEO carousel child but later marks it ERROR/EXPIRED,
 // normalize the local MP4 to a Meta-friendly H.264/AAC faststart file and
 // recreate the child with the NEW public URL. This also rescues already-
-// reserved posts that point at older imported MP4 files.
+// reserved posts when the original MP4 still exists on persistent storage.
 
 const fs = require('fs');
 const path = require('path');
@@ -18,15 +18,13 @@ if (!global.__ME2_THREADS_VIDEO_PUBLISH_RETRY_PATCH__) {
     if (source.includes('[Threads][CAROUSEL_VIDEO_NORMALIZE]')) {
       console.log('[Threads][VIDEO PUBLISH RETRY] normalize retry already applied');
     } else {
-      // Inject helpers into threadsApi.js runtime source. videoEditor already
-      // ships with ffmpeg/ffprobe support and writes H.264/yuv420p/AAC/faststart.
       const importAnchor = "const { getAccount, getSystemApiSettings } = require('./db');";
       if (!source.includes(importAnchor)) throw new Error('threadsApi import anchor missing');
       source = source.replace(importAnchor, `${importAnchor}\nconst __me2Fs = require('fs');\nconst __me2Path = require('path');\nconst { editVideo: __me2EditVideo } = require('./videoEditor');`);
 
       const sleepAnchor = "const sleep=ms=>new Promise(r=>setTimeout(r,ms));";
       if (!source.includes(sleepAnchor)) throw new Error('threadsApi sleep anchor missing');
-      source = source.replace(sleepAnchor, `${sleepAnchor}\n\nasync function __me2NormalizeCarouselVideoUrl(rawUrl){\n  try{\n    const u=new URL(String(rawUrl||''));\n    const marker='/uploads/';\n    const idx=u.pathname.indexOf(marker);\n    if(idx<0)throw new Error('로컬 uploads URL이 아닙니다');\n    const relative=decodeURIComponent(u.pathname.slice(idx+marker.length));\n    const uploadsRoot=__me2Path.resolve(__dirname,'uploads');\n    const inputPath=__me2Path.resolve(uploadsRoot,relative);\n    if(!inputPath.startsWith(uploadsRoot+__me2Path.sep)&&inputPath!==uploadsRoot)throw new Error('잘못된 uploads 경로입니다');\n    if(!__me2Fs.existsSync(inputPath))throw new Error('원본 영상 파일이 서버에 없습니다');\n    const normalized=await __me2EditVideo({inputPath,outputDir:uploadsRoot,start:0,end:null,mute:false});\n    const nextUrl=\`\${u.protocol}//\${u.host}/uploads/\${encodeURIComponent(normalized.filename)}\`;\n    console.log(\`[Threads][CAROUSEL_VIDEO_NORMALIZE] success old=\${rawUrl} new=\${nextUrl} size=\${normalized.size} duration=\${Number(normalized.duration||0).toFixed(2)}s\`);\n    return nextUrl;\n  }catch(err){\n    console.error(\`[Threads][CAROUSEL_VIDEO_NORMALIZE] failed url=\${rawUrl} reason=\"\${err.message}\"\`);\n    return String(rawUrl||'');\n  }\n}`);
+      source = source.replace(sleepAnchor, `${sleepAnchor}\n\nasync function __me2NormalizeCarouselVideoUrl(rawUrl){\n  try{\n    const u=new URL(String(rawUrl||''));\n    const marker='/uploads/';\n    const idx=u.pathname.indexOf(marker);\n    if(idx<0)throw new Error('로컬 uploads URL이 아닙니다');\n    const relative=decodeURIComponent(u.pathname.slice(idx+marker.length));\n    const uploadsRoot=__me2Path.resolve(__dirname,'db','uploads');\n    const inputPath=__me2Path.resolve(uploadsRoot,relative);\n    if(!inputPath.startsWith(uploadsRoot+__me2Path.sep)&&inputPath!==uploadsRoot)throw new Error('잘못된 uploads 경로입니다');\n    if(!__me2Fs.existsSync(inputPath))throw new Error('원본 영상 파일이 영속 저장소에 없습니다');\n    const normalized=await __me2EditVideo({inputPath,outputDir:uploadsRoot,start:0,end:null,mute:false});\n    const nextUrl=\`\${u.protocol}//\${u.host}/uploads/\${encodeURIComponent(normalized.filename)}\`;\n    console.log(\`[Threads][CAROUSEL_VIDEO_NORMALIZE] success old=\${rawUrl} new=\${nextUrl} size=\${normalized.size} duration=\${Number(normalized.duration||0).toFixed(2)}s\`);\n    return nextUrl;\n  }catch(err){\n    console.error(\`[Threads][CAROUSEL_VIDEO_NORMALIZE] failed url=\${rawUrl} reason=\"\${err.message}\"\`);\n    return String(rawUrl||'');\n  }\n}`);
 
       const targetBlock = /  const readyChildren=\[\];const failedChildren=\[\];\n  for\(const child of children\)\{[\s\S]*?\n  \}\n  if\(failedChildren\.length\)/;
 
@@ -67,7 +65,7 @@ if (!global.__ME2_THREADS_VIDEO_PUBLISH_RETRY_PATCH__) {
       } else {
         source = source.replace(targetBlock, newBlock);
         fs.writeFileSync(target, source, 'utf8');
-        console.log('[Threads][VIDEO PUBLISH RETRY] VIDEO processing fail → ffmpeg normalize → recreate with new URL → abort only if normalized retry fails');
+        console.log('[Threads][VIDEO PUBLISH RETRY] VIDEO processing fail → persistent ffmpeg normalize → recreate with new URL');
       }
     }
   } catch (err) {
