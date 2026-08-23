@@ -18,7 +18,8 @@ const REACTION = /(?:ㅋㅋ+|ㅎㅎ+|ㅁㅊ|ㄷㄷ+|;;+|ㅠㅠ+|ㅜㅜ+|😆|�
 const HEALTH_TOPIC = /(?:유산균|프로바이오틱|영양제|건강기능식품|비타민|루테인|오메가|밀크씨슬|아르기닌|콜라겐|효소|홍삼|마그네슘|철분|칼슘|다이어트|혈당|장건강|간건강)/i;
 const HEALTH_EFFECT = /(?:챙겨\s*먹기\s*시작|먹기\s*시작|먹고\s*나서|복용하고\s*나서|섭취하고\s*나서|화장실|배변|확실히\s*달라|효과\s*(?:봤|있|좋)|체감|몸이\s*(?:가벼|좋)|피로가\s*(?:줄|덜)|잠이\s*(?:잘|푹)|살이\s*빠|붓기가\s*빠)/i;
 const RECIPE_CTA = /(?:재료(?:랑|와)?\s*(?:만드는\s*법|레시피)|만드는\s*법|레시피(?:는|가)?).*?(?:댓글|적어둘게|적어놨어)|(?:재료|만드는\s*법|레시피).*?댓글/i;
-const CANNED = /(?:신세계|신의\s*한\s*수|완전\s*대박|진짜\s*대박|완전\s*깔끔|진작\s*알았으면|활용도(?:도)?\s*높|완전\s*유용|스트레스가\s*확\s*줄|완전\s*다른\s*세상|간편하게\s*사용|실용적이야)/i;
+// 짧은 인간 감탄은 허용한다. 차단 대상은 광고/후기 상투어와 과장 총평이다.
+const CANNED = /(?:신세계|신의\s*한\s*수|활용도(?:도)?\s*높|완전\s*유용|스트레스가\s*확\s*줄|완전\s*다른\s*세상|간편하게\s*사용|실용적이야|삶의\s*질|강력\s*추천|무조건\s*추천|꼭\s*써봐|놓치면\s*후회)/i;
 const UNVERIFIED_USE = /(?:바꿨는데|써봤는데|써보니까|사용해보니까|사봤는데|구매했는데|쓰니까|쓰고\s*나서|샀는데)/i;
 
 function modeOf(result) { return String(result?.mode || result?.contentMode || result?.kind || '').toLowerCase(); }
@@ -36,7 +37,7 @@ function inspect(text, result) {
   if (isHealth(result) && HEALTH_EFFECT.test(t)) reasons.push('health-effect');
   if (t.split('\n').some(x => x.length > 38)) reasons.push('long-line');
   const reactions = t.match(REACTION) || [];
-  if (reactions.length > 2) reasons.push('reaction-overuse');
+  if (reactions.length > 3) reasons.push('reaction-overuse');
   return [...new Set(reasons)];
 }
 
@@ -44,7 +45,6 @@ function stripWrongCta(text, result) {
   if (isRecipe(result)) return text;
   return clean(clean(text).split('\n').filter(x => !RECIPE_CTA.test(x)).join('\n'));
 }
-
 function stripHealth(text, result) {
   if (!isHealth(result)) return text;
   return clean(clean(text).split('\n').filter(x => !HEALTH_EFFECT.test(x)).join('\n'));
@@ -55,17 +55,14 @@ function rewriteLine(line, result) {
   if (!isRecipe(result)) {
     s = s
       .replace(/([가-힣A-Za-z0-9 ]+?)\s*바꿨는데/g, '$1 보니까')
-      .replace(/써봤는데|써보니까|사용해보니까|사봤는데|구매했는데/g, '보니까')
+      .replace(/써봤는데|써보니까|사용해보니까|사봤는데|구매했는데|샀는데/g, '보니까')
       .replace(/쓰니까/g, '보면');
   }
   s = s
-    .replace(/이거\s*진짜\s*신세계다?/g, '아니 이건 좀 괜찮다')
-    .replace(/신세계(?:다|야|임)?/g, '이건 좀 새롭네')
+    // 짧은 감탄은 살린다: 와 이거 대박이야ㅋㅋ / 이거 진짜 미쳤다ㅋㅋ / 아니 이거 뭐야ㅋㅋ
+    .replace(/이거\s*진짜\s*신세계다?/g, '와 이거 좀 신기한데ㅋㅋ')
+    .replace(/신세계(?:다|야|임)?/g, '이건 좀 신기하네')
     .replace(/신의\s*한\s*수(?:임|야)?/g, '이건 좀 괜찮네')
-    .replace(/이거\s*진짜\s*대박(?:임|이야)?/g, '이건 좀 눈에 들어오네')
-    .replace(/진짜\s*대박(?:임|이야)?/g, '은근 눈에 들어오네')
-    .replace(/완전\s*대박/g, '이건 좀 괜찮네')
-    .replace(/완전\s*깔끔해/g, '보기는 깔끔하네')
     .replace(/진작\s*알았으면\s*좋았을\s*텐데/g, '이런 방식도 있네')
     .replace(/완전\s*유용(?:함|해)?/g, '이건 좀 쓸 만해')
     .replace(/유용함/g, '쓸 만해')
@@ -77,7 +74,9 @@ function rewriteLine(line, result) {
     .replace(/없음/g, '없어')
     .replace(/냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '나')
     .replace(/활용도(?:도)?\s*높[^!?\n]*/g, '')
-    .replace(/스트레스가\s*확\s*줄[^!?\n]*/g, '');
+    .replace(/스트레스가\s*확\s*줄[^!?\n]*/g, '')
+    .replace(/삶의\s*질[^!?\n]*/g, '')
+    .replace(/강력\s*추천|무조건\s*추천|꼭\s*써봐|놓치면\s*후회/g, '');
   return s.replace(/\s{2,}/g, ' ').trim();
 }
 
@@ -105,15 +104,19 @@ function addThreadsRhythm(text, result) {
   let lines = clean(text).split('\n').filter(Boolean);
   if (!lines.length) return '';
   const joined = lines.join(' ');
-  const native = /(?:스치니|치니들|ㅋㅋ|ㅠㅠ|ㅁㅊ|ㄷㄷ|아니\s*근데|이건\s*좀|은근)/.test(joined);
+  const native = /(?:스치니|치니들|ㅋㅋ|ㅠㅠ|ㅁㅊ|ㄷㄷ|아니\s*근데|이건\s*좀|은근|대박|미쳤|뭐야)/.test(joined);
   const key = `${result?.sourceUrl || result?.source || ''}|${result?.topic || ''}|${result?.accountId || ''}`;
   let h = 0;
   for (const ch of key) h = ((h << 5) - h + ch.charCodeAt(0)) | 0;
   const bucket = Math.abs(h) % 10;
-  if (!native && bucket <= 2) {
-    if (bucket === 0) lines[0] = `아니 근데 ${lines[0]}`;
-    else if (bucket === 1) lines[0] = `이건 좀 ${lines[0]}`;
-    else if (bucket === 2) lines.push('이거 아는 스치니 있어?');
+  if (!native) {
+    // 약 절반은 사람 같은 즉흥 첫 반응을 허용하고 나머지는 원래 장면/생활 시작을 유지한다.
+    if (bucket === 0) lines[0] = `와 이거 대박이야ㅋㅋ\n${lines[0]}`;
+    else if (bucket === 1) lines[0] = `이거 진짜 미쳤다ㅋㅋ\n${lines[0]}`;
+    else if (bucket === 2) lines[0] = `아니 이거 뭐야ㅋㅋ\n${lines[0]}`;
+    else if (bucket === 3) lines[0] = `와 이런 게 있었네ㅋㅋ\n${lines[0]}`;
+    else if (bucket === 4) lines[0] = `아니 근데 이건 좀 괜찮다\n${lines[0]}`;
+    else if (bucket === 5) lines.push('이거 아는 스치니 있어?');
   }
   return clean(lines.join('\n'));
 }
@@ -126,7 +129,7 @@ function finalize(text, result) {
     t = t.split('\n').map(x => rewriteLine(x, result)).filter(Boolean).join('\n');
     t = splitLines(t);
     let count = 0;
-    t = t.replace(REACTION, m => (++count <= 2 ? m : ''));
+    t = t.replace(REACTION, m => (++count <= 3 ? m : ''));
     if (!inspect(t, result).length) break;
   }
   t = addThreadsRhythm(t, result);
@@ -141,9 +144,9 @@ engine.buildThreadsFirstAutopilot = async function(accountId, args = {}) {
   const reasons = inspect(before, result);
   const fixed = finalize(before, result);
   const remaining = inspect(fixed, result);
-  console.log(`[AutopilotV3][POST STYLE GUARD v5] mode=${modeOf(result)||'-'} reasons=${reasons.join(',')||'none'} remaining=${remaining.join(',')||'PASS'} preview="${fixed.slice(0,180).replace(/\n/g,' / ')}"`);
+  console.log(`[AutopilotV3][POST STYLE GUARD v6] mode=${modeOf(result)||'-'} reasons=${reasons.join(',')||'none'} remaining=${remaining.join(',')||'PASS'} preview="${fixed.slice(0,180).replace(/\n/g,' / ')}"`);
   return { ...result, text: fixed };
 };
 
-console.log('[AutopilotV3][POST STYLE GUARD] v5 Threads 피드형 말투 · 광고상투어/가짜사용경험/잘못된CTA 최종제거 · AI추가호출 없음');
+console.log('[AutopilotV3][POST STYLE GUARD] v6 인간적인 강한 감탄 유지 + 광고상투어/가짜경험/잘못된CTA 제거 + Threads 피드호흡 · AI추가호출 없음');
 module.exports = { inspect, clean, finalize };
