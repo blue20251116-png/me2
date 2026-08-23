@@ -1,7 +1,6 @@
 'use strict';
 
 const engine = require('./autopilotMaterialEngine');
-
 const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 
 function cleanBody(text) {
@@ -9,9 +8,8 @@ function cleanBody(text) {
     .replace(/\r/g, '')
     .replace(/,/g, '')
     .replace(/(^|[^0-9])\.(?![0-9])/g, '$1')
-    .split('\n')
-    .map((line) => line.trim())
-    .join('\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -36,37 +34,41 @@ function localBodyCleanup(text) {
     .replace(/\b실용적(?:이야|이다|인)?\b/g, '')
     .replace(/\b효율적(?:이야|이다|인)?\b/g, '')
     .replace(/\b활용도(?:가)?\b/g, '')
-    .replace(/\s{2,}/g, ' ');
+    .replace(/[ \t]{2,}/g, ' ');
 
-  const lines = body.split('\n').map((x) => x.trim()).filter(Boolean);
-  const merged = [];
+  const blocks = body.split(/\n\n+/);
+  const cleanedBlocks = [];
+  let total = 0;
   const dangling = /(은|는|이|가|을|를|도|만|에|의|와|과|로|으로|부터|까지|해서|하고|는데|니까|면|지만|다가|거나|처럼|보다|정도)$/;
   const weak = /^(진짜|그냥|근데|그래서|그리고|이거)$/;
 
-  for (const line of lines) {
-    if (!merged.length) {
-      merged.push(line);
-      continue;
+  for (const block of blocks) {
+    const lines = block.split('\n').map(x => x.trim()).filter(Boolean);
+    const merged = [];
+    for (const line of lines) {
+      if (total >= 8) break;
+      if (!merged.length) merged.push(line);
+      else {
+        const prev = merged[merged.length - 1];
+        if (weak.test(line) || dangling.test(prev)) merged[merged.length - 1] = `${prev} ${line}`.trim();
+        else merged.push(line);
+      }
+      total = cleanedBlocks.reduce((n,b)=>n+b.length,0) + merged.length;
     }
-    const prev = merged[merged.length - 1];
-    if (weak.test(line) || dangling.test(prev)) merged[merged.length - 1] = `${prev} ${line}`.trim();
-    else merged.push(line);
+    if (merged.length) cleanedBlocks.push(merged);
+    if (total >= 8) break;
   }
 
-  return merged.slice(0, 6).join('\n').trim();
+  return cleanedBlocks.map(lines => lines.join('\n')).join('\n\n').replace(/\n{3,}/g,'\n\n').trim();
 }
 
 engine.buildThreadsFirstAutopilot = async function(accountId, args = {}) {
   const result = await originalBuild(accountId, args);
   if (!result?.text) return result;
-
   const current = localBodyCleanup(result.text);
-  if (needsNaturalRewrite(current)) {
-    console.log(`[AutopilotV3][BODY TONE] local-only cleanup preview="${current.slice(0, 160).replace(/\n/g, ' / ')}"`);
-  }
+  if (needsNaturalRewrite(current)) console.log(`[AutopilotV3][BODY TONE] paragraph-preserving cleanup preview="${current.slice(0,160).replace(/\n/g, ' / ')}"`);
   return { ...result, text: current };
 };
 
-console.log('[AutopilotV3][BODY TONE] AI 호출 제거 · 로컬 정리 전용');
-
+console.log('[AutopilotV3][BODY TONE] v11 빈줄/Threads 호흡 보존 · 로컬 정리 전용');
 module.exports = { needsNaturalRewrite, cleanBody, localBodyCleanup };
