@@ -17,7 +17,7 @@ const dbMod = require('./db');
 const { db, getAccount, getUserById } = dbMod;
 
 const BUFFER = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BUFFER || 3));
-const BATCH = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BATCH || 1));
+const BATCH = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BATCH || 2));
 const REFILL_CRON = String(process.env.AUTOPILOT_TIMED_REFILL_CRON || '*/10 * * * *');
 const REBALANCE_SAFETY_MINUTES = Math.max(10, Number(process.env.AUTOPILOT_REBALANCE_SAFETY_MINUTES || 15));
 const runningAccounts = new Set();
@@ -216,8 +216,11 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
             await exp.runAutopilotOnce(account, slot.toISOString());
             console.log(`[Autopilot][TIMED PREFILL] RESERVED account #${accountId} scheduled=${slot.toISOString()}`);
           } catch (err) {
+            const msg=String(err?.response?.data?.error?.message||err?.message||err||'');
             console.error(`[Autopilot][TIMED PREFILL] generation failed account #${accountId}:`, err?.response?.data || err?.message || err);
-            break;
+            if(err?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED'||err?.__openAiNoRetry||/no credits remaining|OPENAI_HOURLY_BUDGET_EXCEEDED/i.test(msg)) break;
+            console.log(`[Autopilot][TIMED PREFILL] account #${accountId} 실패 1건은 건너뛰고 다음 예약 슬롯 계속 시도`);
+            continue;
           } finally {
             if (global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID === accountId) delete global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID;
           }
@@ -240,12 +243,12 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
       };
       cron.schedule(REFILL_CRON, () => tick().catch(e => console.error('[Autopilot][TIMED PREFILL] tick:', e.message)), { timezone:'Asia/Seoul', noOverlap:true });
       setTimeout(() => tick().catch(e => console.error('[Autopilot][TIMED PREFILL] startup:', e.message)), 3000);
-      console.log(`[Autopilot][TIMED PREFILL] ON buffer=${BUFFER} batch=${BATCH} basic=15/day pro=25/day window=24h account-stagger=ON cron=${REFILL_CRON}`);
+      console.log(`[Autopilot][TIMED PREFILL] ON buffer=${BUFFER} batch=${BATCH} basic=15/day pro=25/day window=24h account-stagger=ON retry-next-slot=ON cron=${REFILL_CRON}`);
     };
 
     exp.__timedPrefillPatched = true;
     return exp;
   };
 
-  console.log('[Autopilot][TIMED PREFILL] future schedule controller loaded · account-stagger v3 · 24h · cost-safe');
+  console.log('[Autopilot][TIMED PREFILL] future schedule controller loaded · account-stagger v4 · 24h · cost-safe · publish-rate');
 }
