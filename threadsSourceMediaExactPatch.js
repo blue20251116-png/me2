@@ -11,11 +11,12 @@ function patchBenchmarkAccounts(source) {
   let out = String(source || '');
   let profilePatched = false;
   let detailPatched = false;
+  let profileCallPatched = false;
 
   const profileRe = /const mediaFromRoot=root=>\{[\s\S]*?return\{images:images\.slice\(0,10\),hasVideo:videos\.length>0,videoCount:videos\.length\};\n      \};/;
   if (profileRe.test(out)) {
     const replacement = [
-      "const mediaFromRoot=root=>{",
+      "const mediaFromRoot=(root,target)=>{",
       "        if(!root)return{images:[],hasVideo:false,videoCount:0};",
       "        const videos=[...root.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>=180&&r.height>=180;});",
       "        const videoRects=videos.map(v=>v.getBoundingClientRect());",
@@ -37,6 +38,11 @@ function patchBenchmarkAccounts(source) {
     ].join('\n');
     out = out.replace(profileRe, replacement);
     profilePatched = true;
+  }
+
+  if (out.includes('const media=mediaFromRoot(root);')) {
+    out = out.replace('const media=mediaFromRoot(root);', 'const media=mediaFromRoot(root,href);');
+    profileCallPatched = true;
   }
 
   const detailRe = /const images=\[\],videos=\[\];\n      if\(main\)\{[\s\S]*?\n      \}\n\n      const authorReplies=/;
@@ -69,7 +75,7 @@ function patchBenchmarkAccounts(source) {
     detailPatched = true;
   }
 
-  console.log(`[Threads][SOURCE MEDIA EXACT] benchmarkAccounts profile=${profilePatched?'OK':'MISS'} detail=${detailPatched?'OK':'MISS'} · 원문 post 첨부 미디어만 허용`);
+  console.log(`[Threads][SOURCE MEDIA EXACT] benchmarkAccounts profile=${profilePatched?'OK':'MISS'} profileCall=${profileCallPatched?'OK':'MISS'} detail=${detailPatched?'OK':'MISS'} · 원문 post 첨부 미디어만 허용`);
   return out;
 }
 
