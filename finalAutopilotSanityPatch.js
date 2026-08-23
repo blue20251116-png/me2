@@ -1,18 +1,14 @@
-const axios = require('axios');
+'use strict';
+
 const engine = require('./autopilotMaterialEngine');
 const { collectPostDetails } = require('./benchmarkAccounts');
-const { getAccount, getSystemApiSettings } = require('./db');
 
 const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 
-function clean(v){ return String(v || '').replace(/\s+/g, ' ').trim(); }
-function getOpenAIKey(accountId){
-  const a = getAccount(accountId), s = getSystemApiSettings();
-  return s.openai_api_key || process.env.OPENAI_API_KEY || a?.openai_api_key || null;
-}
+function clean(v) { return String(v || '').replace(/\s+/g, ' ').trim(); }
 
-function sanitizeBody(text){
-  let lines = String(text || '')
+function sanitizeBody(text) {
+  const lines = String(text || '')
     .replace(/\r/g, '')
     .replace(/,/g, '')
     .split('\n')
@@ -30,12 +26,12 @@ function sanitizeBody(text){
   return out.slice(0, 6).join('\n').trim();
 }
 
-function sourceEvidence(detail){
+function sourceEvidence(detail) {
   return [detail?.sourceText, ...(Array.isArray(detail?.authorReplies) ? detail.authorReplies : [])]
     .map(v => String(v || '')).filter(Boolean).join('\n');
 }
 
-function affiliateKickLabel(productName){
+function affiliateKickLabel(productName) {
   const n = clean(productName);
   if (!n) return '';
   if (/들기름/i.test(n)) return '들기름';
@@ -46,132 +42,22 @@ function affiliateKickLabel(productName){
   return '';
 }
 
-async function rewriteReactionPost(accountId, result, detail){
-  const apiKey = getOpenAIKey(accountId);
-  if (!apiKey) return sanitizeBody(result.text);
-
-  const evidence = sourceEvidence(detail) || String(result.text || '');
-  const isRecipe = result.mode === 'recipe';
-  const prompt = `너는 한국 Threads에서 사람이 직접 올린 것처럼 짧고 반응 중심인 게시물을 쓴다
-원본 영상이나 사진을 친구에게 보내면서 한마디 붙이는 느낌으로 다시 쓴다
-정보 전달보다 사람의 반응과 호흡이 훨씬 중요하다
-
-원하는 결의 예시
-이거 만든 사람 진짜 뭐임ㅋㅋ
-닭요리 웬만한 건 다 해봤는데
-이건 그냥 다름
-비교 자체가 안 돼
-당분간 이것만 해먹을 듯
-
-중요
-위 문장을 복사하지 말고 호흡과 밀도만 참고한다
-소재마다 첫 문장과 끝맺음을 다르게 쓴다
-
-절대 규칙
-- 보통 3~5줄로 쓴다 필요하면 2~6줄까지 허용한다
-- 한 줄에는 하나의 생각만 쓴다
-- 한 문장을 어색하게 둘로 쪼개지 않는다
-- 조사나 연결어 앞에서 줄바꿈하지 않는다
-- 한 줄이 너무 길어지지 않게 짧게 끊되 의미 단위로 끊는다
-- 첫 줄은 설명이 아니라 반응 또는 궁금증으로 시작한다
-- 본문 전체는 정보 20 반응 80 정도의 밀도로 쓴다
-- 영상 속 사용 순서나 행동을 다시 설명하지 않는다
-- 제품 효과를 장황하게 설명하지 않는다
-- 제품명 직접 언급은 꼭 필요할 때만 한다
-- 기능 특징 장점은 여러 개 나열하지 않는다
-- 소재가 이미 보여주는 내용을 친절하게 해설하지 않는다
-- 추천 구매권유 총평을 붙이지 않는다
-- 찾는다면 이거 괜찮을 거야 하나 장만 꿀템 추천 필수템 같은 문구 금지
-- 더라 하더라 했더라 더라고 하더라고 했더라고 금지
-- 같은 종결어미를 반복하지 않는다
-- ㅋㅋ는 필요할 때 최대 1회만 사용하고 단독 줄 금지
-- 확인되지 않은 실제 구매 사용 경험을 만들지 않는다
-- 마침표와 쉼표를 쓰지 않는다
-- 자연스러운 반말을 쓴다
-- 음슴체를 쓰지 않는다
-- 일반제품 본문에는 재료 만드는 법 레시피 요리법 조리법을 쓰지 않는다
-- 레시피 본문에서도 재료와 만드는 법은 설명하지 않는다 그 정보는 댓글 영역의 역할이다
-- 매번 이거 만든 사람으로 시작하지 않는다
-- 매번 질문으로 시작하지 않는다
-- 마지막 문장을 친절한 결론이나 추천으로 마무리하지 않는다
-JSON만 출력: {"text":""}`;
-
-  const user = `[원본 소재]\n${evidence.slice(0,6000)}\n\n[현재 본문]\n${String(result.text || '').slice(0,1200)}\n\n[소재 종류]\n${isRecipe ? '음식/레시피' : '일반 생활/제품'}\n\n[대상 참고]\n${clean(result?.visionTarget?.soldObject) || clean(result?.topic) || '(없음)'}`;
-
-  try {
-    const r = await axios.post('https://api.openai.com/v1/chat/completions', {
-      model: 'gpt-4o-mini',
-      temperature: 0.9,
-      max_tokens: 500,
-      response_format: { type: 'json_object' },
-      messages: [{ role: 'system', content: prompt }, { role: 'user', content: user }],
-    }, {
-      headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      timeout: 45000,
-    });
-
-    const parsed = JSON.parse(r.data?.choices?.[0]?.message?.content || '{}');
-    const fixed = sanitizeBody(parsed.text || '');
-    if (fixed) {
-      console.log(`[AutopilotV3][FINAL VOICE] 반응형 본문 재작성 완료 mode=${result.mode} before="${sanitizeBody(result.text).replace(/\n/g,' / ')}" after="${fixed.replace(/\n/g,' / ')}"`);
-      return fixed;
-    }
-  } catch (e) {
-    console.warn(`[AutopilotV3][FINAL VOICE] 재작성 실패 reason="${e.response?.data?.error?.message || e.message}"`);
-  }
-
-  return sanitizeBody(result.text);
+function removeUngroundedClaims(text) {
+  let s = sanitizeBody(text);
+  s = s
+    .replace(/나도\s*\d+(?:\.\d+)?\s*(?:주|일|개월)째[^\n]*/gi, '')
+    .replace(/\d+(?:\.\d+)?\s*kg\s*(?:빠졌|감량했|뺐)[^\n]*/gi, '')
+    .replace(/한\s*달\s*만에\s*효과[^\n]*/gi, '')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+  return sanitizeBody(s);
 }
 
-async function rewriteRecipeFromExactSource(accountId, result, detail){
-  const apiKey = getOpenAIKey(accountId);
-  if (!apiKey) return String(result.commentLead || '').trim();
-  const evidence = sourceEvidence(detail);
-  if (!evidence.trim()) return String(result.commentLead || '').trim();
-
-  const prompt = `너는 Threads 레시피 댓글 최종 검수기다
-원본 게시물과 원작성자 댓글에 명시된 재료와 조리법만 사용해 레시피를 다시 정리한다
-절대 규칙
-- 원본에 이름이 없는 식재료를 절대 추측하거나 추가하지 않는다
-- 원본이 단지 비밀 재료 또는 비밀 소스라고만 말하면 정확한 재료명을 추측하지 않는다
-- 쿠팡 상품명이나 제휴상품을 레시피 재료 목록과 만드는 법에 임의로 넣지 않는다
-- 기존 댓글에 원본에 없는 임의 재료가 섞였으면 제거한다
-- 기본 조미료도 원본에 없으면 가급적 추가하지 않는다
-- 🥘 재료와 🍳 만드는 법 두 섹션만 출력한다
-- 재료는 원본에서 확인되는 것만 쓴다
-- 만드는 법도 원본에서 확인되는 범위만 간단히 정리한다
-- 자연스러운 반말을 쓴다
-- 문장 끝 마침표는 쓰지 않는다
-- 링크 광고고지 제휴문구는 쓰지 않는다
-JSON만 출력: {"commentLead":""}`;
-
-  const user = `[원본 게시물/원작성자 댓글]\n${evidence.slice(0,7000)}\n\n[현재 생성 댓글 - 오류가 있을 수 있음]\n${String(result.commentLead || '').slice(0,3000)}`;
-
-  try {
-    const r = await axios.post('https://api.openai.com/v1/chat/completions', {
-      model: 'gpt-4o-mini',
-      temperature: 0.05,
-      max_tokens: 1200,
-      response_format: { type: 'json_object' },
-      messages: [{ role: 'system', content: prompt }, { role: 'user', content: user }],
-    }, {
-      headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      timeout: 45000,
-    });
-
-    const parsed = JSON.parse(r.data?.choices?.[0]?.message?.content || '{}');
-    return String(parsed.commentLead || '').replace(/\r/g, '').trim() || String(result.commentLead || '').trim();
-  } catch (e) {
-    console.warn(`[AutopilotV3][FINAL RECIPE GUARD] AI 검수 실패 reason="${e.response?.data?.error?.message || e.message}"`);
-    return String(result.commentLead || '').trim();
-  }
-}
-
-engine.buildThreadsFirstAutopilot = async function finalAutopilotSanityBuild(accountId, options){
+engine.buildThreadsFirstAutopilot = async function finalAutopilotSanityBuild(accountId, options) {
   const result = await originalBuild(accountId, options);
   if (!result) return result;
 
-  result.text = sanitizeBody(result.text);
+  result.text = removeUngroundedClaims(result.text);
   let detail = null;
 
   if (result.sourceUrl && result.sourceUsername) {
@@ -184,22 +70,27 @@ engine.buildThreadsFirstAutopilot = async function finalAutopilotSanityBuild(acc
 
   if (result.mode === 'recipe' && detail) {
     try {
-      result.commentLead = await rewriteRecipeFromExactSource(accountId, result, detail);
       const evidence = sourceEvidence(detail);
       const secret = clean(result.secretTerm);
       const secretIsGrounded = secret && evidence.includes(secret);
       const label = affiliateKickLabel(result?.product?.name);
       if (!secretIsGrounded) result.secretTerm = '';
-      if (label) result.commentLead = `${String(result.commentLead || '').trim()}\n\n여기 마지막에 ${label} 살짝 더해봐\n이게 진짜 킥이야ㅋㅋ`.trim();
-      console.log(`[AutopilotV3][FINAL RECIPE GUARD] 원문 재검증 완료 source=${result.sourceUrl} kick=${label || 'none'}`);
+
+      // 앞단 RECIPE SOURCE CHECK가 이미 레시피를 AI 검증하므로 여기서는 중복 AI 검수를 하지 않는다.
+      if (label && !String(result.commentLead || '').includes(`마지막에 ${label}`)) {
+        result.commentLead = `${String(result.commentLead || '').trim()}\n\n여기 마지막에 ${label} 살짝 더해봐\n이게 진짜 킥이야ㅋㅋ`.trim();
+      }
+      console.log(`[AutopilotV3][FINAL RECIPE GUARD] local-only source recheck source=${result.sourceUrl} kick=${label || 'none'}`);
     } catch (e) {
-      console.warn(`[AutopilotV3][FINAL RECIPE GUARD] 원문 재확인 실패 reason="${e.response?.data?.error?.message || e.message}"`);
+      console.warn(`[AutopilotV3][FINAL RECIPE GUARD] 원문 재확인 실패 reason="${e.message}"`);
     }
   }
 
-  result.text = await rewriteReactionPost(accountId, result, detail);
+  console.log(`[AutopilotV3][FINAL VOICE] local-only sanitize mode=${result.mode} preview="${result.text.slice(0,160).replace(/\n/g,' / ')}"`);
   result.text = sanitizeBody(result.text);
   return result;
 };
 
-console.log('[Autopilot][FINAL SANITY] 짧은 반응형 호흡 + 설명 최소화 + 자연스러운 의미단위 줄바꿈 + 레시피 원문 재검증 활성화');
+console.log('[Autopilot][FINAL SANITY] 중복 AI 호출 제거 · 로컬 사실/형식 재검증 활성화');
+
+module.exports = { sanitizeBody, removeUngroundedClaims, sourceEvidence };
