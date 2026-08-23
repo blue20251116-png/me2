@@ -38,11 +38,48 @@ function decodeHtml(v) {
     .trim();
 }
 
+function findProductNameInJson(value, depth = 0) {
+  if (depth > 8 || value == null) return '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findProductNameInJson(item, depth + 1);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (typeof value !== 'object') return '';
+  const type = Array.isArray(value['@type']) ? value['@type'].join(' ') : String(value['@type'] || '');
+  if (/\bProduct\b/i.test(type) && safeTitle(value.name)) return safeTitle(value.name);
+  for (const child of Object.values(value)) {
+    const found = findProductNameInJson(child, depth + 1);
+    if (found) return found;
+  }
+  return '';
+}
+
+function titleFromJsonLd(html) {
+  const scripts = [...String(html || '').matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  for (const m of scripts) {
+    const raw = decodeHtml(m?.[1] || '');
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      const found = findProductNameInJson(parsed);
+      if (found) return found;
+    } catch {}
+  }
+  return '';
+}
+
 function titleFromHtml(html) {
   const s = String(html || '');
   const og = s.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
-    || s.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+    || s.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+    || s.match(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i)
+    || s.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:title["']/i);
   if (og?.[1]) return safeTitle(decodeHtml(og[1]).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim());
+  const jsonLd = titleFromJsonLd(s);
+  if (jsonLd) return safeTitle(jsonLd.replace(/\s*-\s*쿠팡!?\s*$/i, '').trim());
   const t = s.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   return t?.[1] ? safeTitle(decodeHtml(t[1]).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim()) : '';
 }
@@ -72,7 +109,7 @@ async function resolveWithAxios(sourceUrl) {
       'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.7',
     },
     validateStatus: s => s >= 200 && s < 500,
-    maxContentLength: 2 * 1024 * 1024,
+    maxContentLength: 3 * 1024 * 1024,
   });
   const finalUrl = res?.request?.res?.responseUrl || res?.request?._redirectable?._currentUrl || sourceUrl;
   const html = typeof res.data === 'string' ? res.data : '';
@@ -87,6 +124,21 @@ async function resolveWithAxios(sourceUrl) {
   };
 }
 
+async function browserVisibleTitle(page) {
+  const candidates = [];
+  const add = v => { v = safeTitle(clean(v).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim()); if (v && !candidates.includes(v)) candidates.push(v); };
+  add(await page.locator('meta[property="og:title"]').getAttribute('content').catch(() => ''));
+  add(await page.locator('meta[name="twitter:title"]').getAttribute('content').catch(() => ''));
+  add(await page.locator('[data-testid="product-title"]').first().innerText().catch(() => ''));
+  add(await page.locator('.prod-buy-header__title').first().innerText().catch(() => ''));
+  add(await page.locator('[class*="product-title"]').first().innerText().catch(() => ''));
+  add(await page.locator('h1').first().innerText().catch(() => ''));
+  const html = await page.content().catch(() => '');
+  add(titleFromHtml(html));
+  add(await page.title().catch(() => ''));
+  return candidates[0] || '';
+}
+
 async function resolveWithBrowser(sourceUrl) {
   let browser;
   try {
@@ -97,17 +149,33 @@ async function resolveWithBrowser(sourceUrl) {
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
     });
     await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await page.waitForTimeout(900);
-    const finalUrl = page.url();
-    const metaTitle = await page.locator('meta[property="og:title"]').getAttribute('content').catch(() => '');
-    const pageTitle = await page.title().catch(() => '');
-    const canonical = canonicalProductUrl(finalUrl, '');
+    await page.waitForTimeout(1000);
+    let finalUrl = page.url();
+    let html = await page.content().catch(() => '');
+    let canonical = canonicalProductUrl(finalUrl, html);
     if (!canonical) return null;
+    let title = await browserVisibleTitle(page);
+
+    if (!title && canonical.productId) {
+      const canonicalUrl = `https://www.coupang.com/vp/products/${canonical.productId}`;
+      try {
+        await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await page.waitForTimeout(1200);
+        finalUrl = page.url();
+        html = await page.content().catch(() => '');
+        canonical = canonicalProductUrl(finalUrl, html) || canonical;
+        title = await browserVisibleTitle(page);
+        if (title) console.log(`[AutopilotV3][SOURCE AFFILIATE] canonical browser title 복구 성공 productId=${canonical.productId || '-'} title="${clean(title)}"`);
+      } catch (e) {
+        console.warn(`[AutopilotV3][SOURCE AFFILIATE] canonical browser 재접근 실패 productId=${canonical.productId || '-'} reason="${e.message}"`);
+      }
+    }
+
     return {
       sourceUrl,
       finalUrl,
       ...canonical,
-      title: safeTitle(clean(metaTitle || pageTitle).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim()),
+      title: safeTitle(title),
       method: 'browser',
     };
   } finally {
@@ -131,7 +199,7 @@ async function resolveSourceLink(sourceUrl) {
     const browserResult = await resolveWithBrowser(sourceUrl);
     if (browserResult?.url && safeTitle(browserResult.title)) return browserResult;
     if (browserResult?.url) {
-      console.warn(`[AutopilotV3][SOURCE AFFILIATE] browser까지 title 없음 productId=${browserResult.productId || '-'}`);
+      console.warn(`[AutopilotV3][SOURCE AFFILIATE] browser/JSON-LD/DOM/canonical까지 title 없음 productId=${browserResult.productId || '-'}`);
     }
   } catch (e) {
     console.warn(`[AutopilotV3][SOURCE AFFILIATE] browser 해석 실패 url=${sourceUrl} reason="${e.message}"`);
@@ -181,6 +249,7 @@ function strictSourceProductMatch(candidate, result) {
   if (!title) return { ok:false, score:0, reason:'title-unavailable', reference:'' };
   const references = unique([
     clean(result?.visionTarget?.soldObject),
+    ...(Array.isArray(result?.visionTarget?.searchTerms) ? result.visionTarget.searchTerms.map(clean) : []),
     clean(result?.topic),
     clean(result?.product?.name),
   ]).filter(Boolean);
@@ -267,4 +336,4 @@ engine.buildThreadsFirstAutopilot = async function sourceAffiliateExactProductBu
   return result;
 };
 
-console.log('[Autopilot][SOURCE AFFILIATE EXACT PRODUCT] strict title/evidence match ON · axios title empty → browser fallback · title unavailable/mismatch → SOLD-FIRST 유지');
+console.log('[Autopilot][SOURCE AFFILIATE EXACT PRODUCT] v2 strict title/evidence match · axios+JSON-LD+DOM+canonical browser title recovery · unavailable/mismatch fail-safe');
