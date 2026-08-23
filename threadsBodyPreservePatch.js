@@ -8,6 +8,13 @@ function transformScheduler(src) {
   if (applied) return src;
   let out = src;
 
+  // This loader compiles scheduler.js directly, so it must also preserve the
+  // persistent upload-path rewrite that an earlier loader would otherwise miss.
+  out = out
+    .split("path.join(__dirname, 'uploads')").join("path.join(__dirname, 'db', 'uploads')")
+    .split("path.join(__dirname,'uploads')").join("path.join(__dirname,'db','uploads')");
+  console.log('[Media][PERSIST] scheduler uploads → db/uploads (final loader)');
+
   const bodyRe = /function splitThreadsSentences\(text\)\{[\s\S]*?function formatThreadsBody\(text\)\{[\s\S]*?return paragraphs\.filter\(Boolean\)\.slice\(0,5\)\.join\('\\n\\n'\)\.trim\(\);\}/;
   if (bodyRe.test(out)) {
     const replacement = `function splitThreadsSentences(text){return String(text||'').replace(/\\r/g,'').replace(/\\\\n/g,'\\n').replace(/[ \\t]+\\n/g,'\\n').replace(/\\n[ \\t]+/g,'\\n').replace(/\\n{3,}/g,'\\n\\n').trim().split('\\n').map(x=>x.trim()).filter(Boolean);}\nfunction formatThreadsBody(text){return String(text||'').replace(/\\r/g,'').replace(/\\\\n/g,'\\n').replace(/,/g,'').replace(/(^|[^0-9])\\.(?![0-9])/g,'$1').replace(/[ \\t]+\\n/g,'\\n').replace(/\\n[ \\t]+/g,'\\n').replace(/\\n{3,}/g,'\\n\\n').trim();}`;
@@ -24,7 +31,7 @@ function transformScheduler(src) {
 
   const doubleLinkRe = /function buildDoubleLinkComment\(account,prefix,link,maxLength=490\)\{[\s\S]*?return out;\}/;
   if (doubleLinkRe.test(out)) {
-    const replacement = `function extractFirstHttpUrl(value){const m=String(value||'').match(/https?:\\/\\/[^\\s<>'\"\\])}]+/i);return m?m[0].replace(/[.,;]+$/,''):'';}\nfunction buildDoubleLinkComment(account,prefix,link,maxLength=450){\n  const cap=Math.min(450,Math.max(1,Number(maxLength)||450));\n  const l=extractFirstHttpUrl(link);\n  if(!l)throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');\n  const disclosure=isCoupangLink(l)?DEFAULT_COUPANG_DISCLOSURE:'';\n  const tail=[l,l,disclosure].filter(Boolean).join('\\n\\n');\n  if(tail.length>cap)throw new Error(\`쿠팡 링크 자체가 너무 길어 댓글을 만들 수 없습니다: \\${tail.length}자\`);\n  const available=Math.max(0,cap-tail.length-2);\n  const head=compactRecipePrefix(prefix,available);\n  let comment=[head,tail].filter(Boolean).join('\\n\\n');\n  if(comment.length>cap)comment=comment.slice(0,cap).trim();\n  return comment;\n}`;
+    const replacement = `function extractFirstHttpUrl(value){const m=String(value||'').match(/https?:\\/\\/[^\\s<>'\"\\])}]+/i);return m?m[0].replace(/[.,;]+$/,''):'';}\nfunction buildDoubleLinkComment(account,prefix,link,maxLength=450){\n  const cap=Math.min(450,Math.max(1,Number(maxLength)||450));\n  const l=extractFirstHttpUrl(link);\n  if(!l)throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');\n  const disclosure=isCoupangLink(l)?DEFAULT_COUPANG_DISCLOSURE:'';\n  const tail=[l,l,disclosure].filter(Boolean).join('\\n\\n');\n  if(tail.length>cap)throw new Error(\`쿠팡 링크 자체가 너무 길어 댓글을 만들 수 없습니다: \${tail.length}자\`);\n  const available=Math.max(0,cap-tail.length-2);\n  const head=compactRecipePrefix(prefix,available);\n  const comment=[head,tail].filter(Boolean).join('\\n\\n');\n  if(comment.length>cap)throw new Error(\`댓글 길이 조립 오류: \${comment.length}/\${cap}자\`);\n  return comment;\n}`;
     out = out.replace(doubleLinkRe, replacement);
     console.log('[Comment][COMPACT] 링크 1개 추출×2 + 공식 고지문 + 전체 450자 하드캡');
   } else {
@@ -37,7 +44,7 @@ function transformScheduler(src) {
   else console.warn('[Comment][COMPACT] buildCommentText block not found');
 
   const retryOld = "const retryCount=Number(post.comment_retry_count||0)+1;const nextRetry=retryCount<3?nextCommentRetryIso(retryCount):null;";
-  const retryNew = "const noRetry=/링크가 비어|링크 자체가 너무 길어|댓글 필수영역|댓글 최종 길이/.test(msg);const retryCount=noRetry?3:Number(post.comment_retry_count||0)+1;const nextRetry=!noRetry&&retryCount<3?nextCommentRetryIso(retryCount):null;";
+  const retryNew = "const noRetry=/링크가 비어|링크 자체가 너무 길어|댓글 필수영역|댓글 최종 길이|댓글 길이 조립/.test(msg);const retryCount=noRetry?3:Number(post.comment_retry_count||0)+1;const nextRetry=!noRetry&&retryCount<3?nextCommentRetryIso(retryCount):null;";
   if (out.includes(retryOld)) out = out.replace(retryOld, retryNew);
   else console.warn('[Comment][COMPACT] retry block not found');
 
@@ -55,4 +62,4 @@ Module._extensions['.js'] = function bodyPreserveLoader(mod, filename) {
   return originalLoader(mod, filename);
 };
 
-console.log('[Threads][BODY PRESERVE] patch armed · comment compact 450 enabled');
+console.log('[Threads][BODY PRESERVE] patch armed · comment compact 450 · persistent scheduler uploads enabled');
