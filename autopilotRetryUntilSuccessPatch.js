@@ -8,9 +8,9 @@ if (!global.__ME2_AUTOPILOT_RETRY_PATCHED__) {
     const schedulerPath = path.join(__dirname, 'scheduler.js');
     let source = fs.readFileSync(schedulerPath, 'utf8');
     const startMarker = 'function startAutopilotJob(){';
-    const endMarker = '\nmodule.exports={startPublishJob,startInsightsJob,startAutopilotJob};';
+    const exportMarker = 'module.exports={startPublishJob,startInsightsJob,startAutopilotJob};';
     const start = source.indexOf(startMarker);
-    const end = source.indexOf(endMarker, start);
+    const end = source.indexOf(`\n${exportMarker}`, start);
 
     if (start < 0 || end < 0) {
       console.warn('[Autopilot][RETRY UNTIL SUCCESS PATCH] scheduler 함수 위치를 찾지 못해 적용하지 못했습니다');
@@ -84,8 +84,11 @@ if (!global.__ME2_AUTOPILOT_RETRY_PATCHED__) {
 }`;
 
       source = source.slice(0, start) + newFn + source.slice(end);
+      if (source.includes(exportMarker)) {
+        source = source.replace(exportMarker, 'module.exports={startPublishJob,startInsightsJob,startAutopilotJob,__runAutopilotOnce:runAutopilotOnce};');
+      }
       fs.writeFileSync(schedulerPath, source, 'utf8');
-      console.log('[Autopilot][RETRY UNTIL SUCCESS PATCH] 시작 3초 후 즉시 상태확인 + due 즉시실행 + 실패 5분 보충 + 대기시간 로그 활성화');
+      console.log('[Autopilot][RETRY UNTIL SUCCESS PATCH] 시작 3초 후 즉시 상태확인 + 실패 보충 + prefill one-shot hook 활성화');
     }
   } catch (err) {
     console.error('[Autopilot][RETRY UNTIL SUCCESS PATCH] 적용 실패:', err.message);
