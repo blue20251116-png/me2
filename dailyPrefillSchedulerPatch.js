@@ -5,7 +5,7 @@
 // - Pro: 25/day
 // - Keep up to 10 future posts prepared per account
 // - Generate at most 10 missing posts per refill pass
-// - Generation is account-scoped so one slow account does not stop others
+// - Publishing is independent: already prepared posts keep publishing even while refill runs
 
 const fs = require('fs');
 const path = require('path');
@@ -16,6 +16,7 @@ const BUFFER_TARGET = Math.max(1, Number(process.env.AUTOPILOT_PREFILL_BUFFER ||
 const BATCH_MAX = Math.max(1, Number(process.env.AUTOPILOT_PREFILL_BATCH || 10));
 const REFILL_CRON = String(process.env.AUTOPILOT_PREFILL_CRON || '*/10 * * * *');
 const runningAccounts = new Set();
+let tickRunning = false;
 if (!global.__ME2_PREFILL_SLOTS) global.__ME2_PREFILL_SLOTS = new Map();
 
 function dayKeyKst(date = new Date()) {
@@ -35,14 +36,13 @@ function dailyTarget(dbMod, account) {
   return String(user?.plan || '').toLowerCase() === 'pro' ? 25 : 15;
 }
 function planDaySlots(dayKey, count) {
-  // Spread across almost the entire KST day so overnight publishing is supported.
   const start = 20;
   const end = 23 * 60 + 40;
   const span = end - start;
   const slots = [];
   for (let i = 0; i < count; i++) {
     const base = start + (count === 1 ? 0 : span * i / (count - 1));
-    const jitter = ((i * 19 + count * 7) % 11) - 5; // deterministic -5..+5m
+    const jitter = ((i * 19 + count * 7) % 11) - 5;
     const m = Math.max(start, Math.min(end, Math.round(base + jitter)));
     slots.push(new Date(`${dayKey}T${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}:00+09:00`));
   }
@@ -76,8 +76,7 @@ function chooseFutureSlots(db, accountId, target, need) {
   return result;
 }
 
-// Make saveAutopilotPost use the reserved future slot instead of "now".
-// Exact source replacement only; fail open if the scheduler changes later.
+// Make saveAutopilotPost use its reserved future slot instead of now.
 const originalJs = Module._extensions['.js'];
 Module._extensions['.js'] = function prefillSchedulerLoader(mod, filename) {
   if (!filename.endsWith(`${path.sep}scheduler.js`)) return originalJs(mod, filename);
@@ -136,14 +135,24 @@ Module._load = function prefillLoad(request, parent, isMain) {
   }
 
   exp.startAutopilotJob = function startPrefillAutopilotJob() {
-    const tick = () => {
-      const accounts = db.prepare(`SELECT id FROM accounts WHERE autopilot_enabled=1 ORDER BY id`).all();
-      // Deliberately do not await all accounts in one global loop. Each account owns
-      // its lock, so a slow media/API request cannot freeze every other account.
-      for (const row of accounts) refillAccount(Number(row.id)).catch(e => console.error('[Autopilot][PREFILL 10] tick error:', e.message));
+    const tick = async () => {
+      if (tickRunning) {
+        console.log('[Autopilot][PREFILL 10] 이전 보충 작업 진행 중 → 이번 보충 tick 생략');
+        return;
+      }
+      tickRunning = true;
+      try {
+        const accounts = db.prepare(`SELECT id FROM accounts WHERE autopilot_enabled=1 ORDER BY id`).all();
+        // Sequential on purpose: existing benchmark material accounting uses a
+        // process-global current account id. This preserves correct per-account
+        // used-post tracking while the 10-post buffer isolates publishing from refill.
+        for (const row of accounts) await refillAccount(Number(row.id));
+      } finally {
+        tickRunning = false;
+      }
     };
-    cron.schedule(REFILL_CRON, tick, { timezone: 'Asia/Seoul', noOverlap: true });
-    setTimeout(tick, 3000);
+    cron.schedule(REFILL_CRON, () => tick().catch(e => console.error('[Autopilot][PREFILL 10] tick error:', e.message)), { timezone: 'Asia/Seoul', noOverlap: true });
+    setTimeout(() => tick().catch(e => console.error('[Autopilot][PREFILL 10] startup error:', e.message)), 3000);
     console.log(`[Autopilot][PREFILL 10] 활성화 buffer=${BUFFER_TARGET} batch=${BATCH_MAX} basic=15/day pro=25/day cron=${REFILL_CRON}`);
   };
   exp.__prefill10Patched = true;
