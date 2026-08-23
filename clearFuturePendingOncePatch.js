@@ -3,6 +3,8 @@
 // One-time cleanup for the broken reservation generation.
 // Deletes only pending reservations, keeps posted/failed/history untouched,
 // and records a persistent SQLite flag so future restarts do not clear again.
+// node:sqlite DatabaseSync has no better-sqlite3 style db.transaction(),
+// so use an explicit SQLite transaction.
 
 const { db } = require('./db');
 
@@ -19,11 +21,15 @@ try {
     console.log(`[Maintenance][PENDING RESET] already applied flag=${FLAG}`);
   } else {
     const before = Number(db.prepare(`SELECT COUNT(*) c FROM posts WHERE status='pending'`).get()?.c || 0);
-    const tx = db.transaction(() => {
+    db.exec('BEGIN IMMEDIATE');
+    try {
       db.prepare(`DELETE FROM posts WHERE status='pending'`).run();
       db.prepare(`INSERT INTO maintenance_flags (key,applied_at) VALUES (?,?)`).run(FLAG,new Date().toISOString());
-    });
-    tx();
+      db.exec('COMMIT');
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw err;
+    }
     console.log(`[Maintenance][PENDING RESET] one-time cleanup complete deleted=${before} flag=${FLAG}`);
   }
 } catch (err) {
