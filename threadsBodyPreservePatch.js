@@ -8,8 +8,6 @@ function transformScheduler(src) {
   if (applied) return src;
   let out = src;
 
-  // This loader compiles scheduler.js directly, so it must also preserve the
-  // persistent upload-path rewrite that an earlier loader would otherwise miss.
   out = out
     .split("path.join(__dirname, 'uploads')").join("path.join(__dirname, 'db', 'uploads')")
     .split("path.join(__dirname,'uploads')").join("path.join(__dirname,'db','uploads')");
@@ -31,7 +29,22 @@ function transformScheduler(src) {
 
   const doubleLinkRe = /function buildDoubleLinkComment\(account,prefix,link,maxLength=490\)\{[\s\S]*?return out;\}/;
   if (doubleLinkRe.test(out)) {
-    const replacement = `function extractFirstHttpUrl(value){const m=String(value||'').match(/https?:\\/\\/[^\\s<>'\"\\])}]+/i);return m?m[0].replace(/[.,;]+$/,''):'';}\nfunction buildDoubleLinkComment(account,prefix,link,maxLength=450){\n  const cap=Math.min(450,Math.max(1,Number(maxLength)||450));\n  const l=extractFirstHttpUrl(link);\n  if(!l)throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');\n  const disclosure=isCoupangLink(l)?DEFAULT_COUPANG_DISCLOSURE:'';\n  const tail=[l,l,disclosure].filter(Boolean).join('\\n\\n');\n  if(tail.length>cap)throw new Error(\`쿠팡 링크 자체가 너무 길어 댓글을 만들 수 없습니다: \${tail.length}자\`);\n  const available=Math.max(0,cap-tail.length-2);\n  const head=compactRecipePrefix(prefix,available);\n  const comment=[head,tail].filter(Boolean).join('\\n\\n');\n  if(comment.length>cap)throw new Error(\`댓글 길이 조립 오류: \${comment.length}/\${cap}자\`);\n  return comment;\n}`;
+    const replacement = [
+      "function extractFirstHttpUrl(value){const m=String(value||'').match(/https?:\\/\\/[^\\s<>'\\\"\\])}]+/i);return m?m[0].replace(/[.,;]+$/,''):'';}",
+      "function buildDoubleLinkComment(account,prefix,link,maxLength=450){",
+      "  const cap=Math.min(450,Math.max(1,Number(maxLength)||450));",
+      "  const l=extractFirstHttpUrl(link);",
+      "  if(!l)throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');",
+      "  const disclosure=isCoupangLink(l)?DEFAULT_COUPANG_DISCLOSURE:'';",
+      "  const tail=[l,l,disclosure].filter(Boolean).join('\\n\\n');",
+      "  if(tail.length>cap)throw new Error('쿠팡 링크 자체가 너무 길어 댓글을 만들 수 없습니다: '+tail.length+'자');",
+      "  const available=Math.max(0,cap-tail.length-2);",
+      "  const head=compactRecipePrefix(prefix,available);",
+      "  const comment=[head,tail].filter(Boolean).join('\\n\\n');",
+      "  if(comment.length>cap)throw new Error('댓글 길이 조립 오류: '+comment.length+'/'+cap+'자');",
+      "  return comment;",
+      "}"
+    ].join('\n');
     out = out.replace(doubleLinkRe, replacement);
     console.log('[Comment][COMPACT] 링크 1개 추출×2 + 공식 고지문 + 전체 450자 하드캡');
   } else {
