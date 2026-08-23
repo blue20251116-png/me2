@@ -4,12 +4,10 @@
 // - Basic: 15 scheduled posts/day
 // - Pro/Admin: 25 scheduled posts/day
 // - Keep up to 10 FUTURE pending posts prepared per account
+// - Spread posts across the full 24-hour KST day
 // - Stagger each account's schedule so accounts do not publish at the same minute
 // - Rebalance existing future pending rows on startup without touching content/media
 // - Publisher remains unchanged and only publishes rows whose scheduled_at <= now
-// - This patch edits scheduler.js on disk BEFORE later scheduler loaders run, so
-//   comment/account-scoped patches compile the already-extended scheduler instead
-//   of accidentally discarding the timed-prefill changes.
 
 const fs = require('fs');
 const path = require('path');
@@ -21,8 +19,6 @@ const { db, getAccount, getUserById } = dbMod;
 const BUFFER = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BUFFER || 10));
 const BATCH = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BATCH || 10));
 const REFILL_CRON = String(process.env.AUTOPILOT_TIMED_REFILL_CRON || '*/10 * * * *');
-const SCHEDULE_START_MINUTE = Math.max(0, Number(process.env.AUTOPILOT_SCHEDULE_START_MINUTE || (7 * 60 + 30)));
-const SCHEDULE_END_MINUTE = Math.min(23 * 60 + 59, Number(process.env.AUTOPILOT_SCHEDULE_END_MINUTE || (23 * 60 + 30)));
 const REBALANCE_SAFETY_MINUTES = Math.max(10, Number(process.env.AUTOPILOT_REBALANCE_SAFETY_MINUTES || 15));
 const runningAccounts = new Set();
 let refillTickRunning = false;
@@ -65,17 +61,18 @@ function accountHash(accountId, dayKey='') {
   return h >>> 0;
 }
 function plannedSlots(dayKey, target, accountId) {
-  const first = Math.min(SCHEDULE_START_MINUTE, SCHEDULE_END_MINUTE - 1);
-  const last = Math.max(first + 1, SCHEDULE_END_MINUTE);
-  const span = last - first;
-  const out = [];
+  // Full 24-hour day: divide 1,440 minutes evenly, then give each account/day
+  // its own deterministic phase and each item a small deterministic jitter.
+  const dayMinutes = 24 * 60;
+  const step = dayMinutes / Math.max(1, target);
   const seed = accountHash(accountId, dayKey);
-  const accountOffset = (seed % 29) - 14; // -14..+14 min per account/day
+  const phase = seed % Math.max(1, Math.floor(step));
+  const out = [];
   for (let i = 0; i < target; i++) {
-    const base = first + (target === 1 ? span / 2 : span * i / (target - 1));
     const itemJitter = (((seed >>> (i % 16)) + i * 19 + Number(accountId || 0) * 7) % 15) - 7; // -7..+7
-    const min = Math.max(first, Math.min(last, Math.round(base + accountOffset + itemJitter)));
-    out.push(new Date(`${dayKey}T${String(Math.floor(min / 60)).padStart(2,'0')}:${String(min % 60).padStart(2,'0')}:00+09:00`));
+    let minute = Math.round(phase + i * step + itemJitter);
+    minute = ((minute % dayMinutes) + dayMinutes) % dayMinutes;
+    out.push(new Date(`${dayKey}T${String(Math.floor(minute / 60)).padStart(2,'0')}:${String(minute % 60).padStart(2,'0')}:00+09:00`));
   }
   return out.sort((a,b)=>a-b);
 }
@@ -110,11 +107,8 @@ function rebalanceExistingFuturePending() {
       if (!posts.length) continue;
       const slots = plannedSlots(day, target, accountId).filter(d => d.toISOString() > cutoff);
       if (!slots.length) continue;
-      for (let i = 0; i < posts.length; i++) {
-        let slot = slots[Math.min(i, slots.length - 1)];
-        if (i >= slots.length) slot = new Date(slots[slots.length - 1].getTime() + (i - slots.length + 1) * 10 * 60000);
-        if (slot.toISOString() >= end) break;
-        const nextIso = slot.toISOString();
+      for (let i = 0; i < posts.length && i < slots.length; i++) {
+        const nextIso = slots[i].toISOString();
         if (String(posts[i].scheduled_at) === nextIso) continue;
         db.prepare(`UPDATE posts SET scheduled_at=? WHERE id=? AND status='pending'`).run(nextIso, posts[i].id);
         changed++;
@@ -122,16 +116,12 @@ function rebalanceExistingFuturePending() {
       }
     }
   }
-  console.log(`[Autopilot][TIMED REBALANCE] done changed=${changed} safety=${REBALANCE_SAFETY_MINUTES}m window=${SCHEDULE_START_MINUTE}-${SCHEDULE_END_MINUTE}`);
+  console.log(`[Autopilot][TIMED REBALANCE] done changed=${changed} safety=${REBALANCE_SAFETY_MINUTES}m window=24h`);
 }
 
 if (!global.__ME2_TIMED_PREFILL_PATCH__) {
   global.__ME2_TIMED_PREFILL_PATCH__ = true;
 
-  // IMPORTANT: modify the physical scheduler source before later Module._extensions
-  // patches (commentDelay/accountScoped/etc.) load it. Those patches read scheduler.js
-  // from disk and compile their own source, so an in-memory loader patch here would be
-  // discarded. Disk edit makes every later loader see the same extended scheduler.
   try {
     const schedulerPath = path.join(__dirname, 'scheduler.js');
     let source = fs.readFileSync(schedulerPath, 'utf8');
@@ -203,8 +193,6 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
     const exp = originalLoad.apply(this, arguments);
     if (!['./scheduler','./scheduler.js'].includes(request) || !exp || exp.__timedPrefillPatched) return exp;
 
-    // Do not crash the service if another loader unexpectedly strips the export.
-    // Fail closed to normal autopilot instead; startup must remain available.
     if (typeof exp.runAutopilotOnce !== 'function') {
       console.error('[Autopilot][TIMED PREFILL] runAutopilotOnce export unavailable → timed prefill disabled, normal scheduler preserved');
       return exp;
@@ -254,12 +242,12 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
       };
       cron.schedule(REFILL_CRON, () => tick().catch(e => console.error('[Autopilot][TIMED PREFILL] tick:', e.message)), { timezone:'Asia/Seoul', noOverlap:true });
       setTimeout(() => tick().catch(e => console.error('[Autopilot][TIMED PREFILL] startup:', e.message)), 3000);
-      console.log(`[Autopilot][TIMED PREFILL] ON buffer=${BUFFER} batch=${BATCH} basic=15/day pro=25/day window=07:30-23:30 account-stagger=ON cron=${REFILL_CRON}`);
+      console.log(`[Autopilot][TIMED PREFILL] ON buffer=${BUFFER} batch=${BATCH} basic=15/day pro=25/day window=24h account-stagger=ON cron=${REFILL_CRON}`);
     };
 
     exp.__timedPrefillPatched = true;
     return exp;
   };
 
-  console.log('[Autopilot][TIMED PREFILL] future schedule controller loaded · account-stagger v2');
+  console.log('[Autopilot][TIMED PREFILL] future schedule controller loaded · account-stagger v3 · 24h');
 }
