@@ -97,6 +97,35 @@ function capRequestText(data) {
   return cloned;
 }
 
+// 비용 최적화 전 측정 전용. 프롬프트/응답은 바꾸지 않고 OpenAI가 돌려준 usage만 기록한다.
+function classifyPurpose(data) {
+  const text = Array.isArray(data?.messages)
+    ? data.messages.map(m => typeof m?.content === 'string' ? m.content : '').join('\n').slice(0, 12000)
+    : '';
+  if (/YouTube.*검색|검색할 핵심 키워드|YouTube 검색 키워드/i.test(text)) return 'youtube_keyword';
+  if (/쿠팡.*검색.*키워드|상품 키워드.*제안|검색 키워드 5개/i.test(text)) return 'product_keyword';
+  if (/이미지|사진|vision|보이는 상품|영상 프레임/i.test(text)) return 'vision_analysis';
+  if (/레시피|재료|조리|요리/i.test(text)) return 'recipe_or_food';
+  if (/Threads|쓰레드|게시물|본문|말투|문체/i.test(text)) return 'post_generation';
+  return 'other';
+}
+function logUsage(response, data, attempt = 1) {
+  const usage = response?.data?.usage || {};
+  const prompt = Number(usage.prompt_tokens || usage.input_tokens || 0);
+  const completion = Number(usage.completion_tokens || usage.output_tokens || 0);
+  const total = Number(usage.total_tokens || (prompt + completion) || 0);
+  const cached = Number(
+    usage.prompt_tokens_details?.cached_tokens ||
+    usage.input_tokens_details?.cached_tokens ||
+    0
+  );
+  const uncached = Math.max(0, prompt - cached);
+  const chars = countTextChars(data?.messages || []);
+  const purpose = classifyPurpose(data);
+  const model = String(response?.data?.model || data?.model || 'unknown');
+  console.log(`[OpenAI][USAGE] purpose=${purpose} model=${model} attempt=${attempt} input=${prompt} cached=${cached} uncached=${uncached} output=${completion} total=${total} textChars=${chars}`);
+}
+
 async function runOpenAI(url, rawData, config) {
   const data = capRequestText(rawData);
   let key = null;
@@ -118,6 +147,7 @@ async function runOpenAI(url, rawData, config) {
   requestTimes.push(lastStartAt);
 
   let response;
+  let attempt = 1;
   try {
     response = await originalPost(url, data, config);
   } catch (e) {
@@ -137,8 +167,11 @@ async function runOpenAI(url, rawData, config) {
     assertHourlyBudget();
     lastStartAt = Date.now();
     requestTimes.push(lastStartAt);
+    attempt = 2;
     response = await originalPost(url, data, config);
   }
+
+  if (response) logUsage(response, data, attempt);
 
   if (key && response) {
     analysisCache.set(key, { at: Date.now(), response });
