@@ -8,6 +8,8 @@ function clean(text) {
     .replace(/\r/g, '')
     .replace(/,/g, '')
     .replace(/(^|[^0-9])\.(?![0-9])/g, '$1')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -39,32 +41,40 @@ function localFix(text) {
     .replace(/없냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '없나')
     .replace(/맞냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '맞나');
 
-  // AI가 원문 근거 없이 만들기 쉬운 관계/성과 문구를 로컬에서 제거한다.
   s = s
     .replace(/(?:남자친구|남편|아내|친구|언니|엄마|아빠|지인|주변 사람들?|다들).{0,35}(?:맛있다고|좋다고|난리(?:가 났어|났어|나더라|야)?|바로 주문|사달라고|추천해줬어)/g, '')
     .replace(/(?:나도\s*)?\d+(?:\.\d+)?\s*(?:주|일|개월)째\s*(?:먹고|쓰고|사용하고)[^\n]{0,45}?\d+(?:\.\d+)?\s*kg\s*(?:빠졌|감량|뺐)[^\n]*/gi, '')
     .replace(/\d+(?:\.\d+)?\s*kg\s*(?:빠졌|감량|뺐)[^\n]*/gi, '');
 
-  const lines = s.split('\n').map(x => x.trim()).filter(Boolean);
-  const out = [];
-  for (const line of lines) {
-    if (/^(?:ㅋㅋ+|ㅎㅎ+|ㄷㄷ+|ㅠ+|ㅜ+|ㅁㅊ)[!?~]*$/i.test(line)) {
-      if (out.length) out[out.length - 1] += ` ${line}`;
-      continue;
+  const blocks = s.split(/\n\n+/).map(block => block.split('\n').map(x => x.trim()).filter(Boolean));
+  const outBlocks = [];
+  let lineCount = 0;
+  for (const block of blocks) {
+    const out = [];
+    for (const line of block) {
+      if (lineCount >= 8) break;
+      if (/^(?:ㅋㅋ+|ㅎㅎ+|ㄷㄷ+|ㅠ+|ㅜ+|ㅁㅊ)[!?~]*$/i.test(line)) {
+        if (out.length) out[out.length - 1] += ` ${line}`;
+        else if (outBlocks.length) outBlocks[outBlocks.length - 1][outBlocks[outBlocks.length - 1].length - 1] += ` ${line}`;
+        continue;
+      }
+      out.push(line);
+      lineCount++;
     }
-    out.push(line);
+    if (out.length) outBlocks.push(out);
+    if (lineCount >= 8) break;
   }
 
-  return out.slice(0, 7).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return outBlocks.map(block => block.join('\n')).join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 engine.buildThreadsFirstAutopilot = async function humanFinalLocalBuild(accountId, args = {}) {
   const result = await originalBuild(accountId, args);
   if (!result?.text) return result;
   const fixed = localFix(result.text);
-  console.log(`[AutopilotV3][HUMAN FINAL] v9 LOCAL-ONLY non-blocking preview="${fixed.slice(0,160).replace(/\n/g,' / ')}"`);
+  console.log(`[AutopilotV3][HUMAN FINAL] v11 paragraph-preserving preview="${fixed.slice(0,160).replace(/\n/g,' / ')}"`);
   return { ...result, text: fixed || clean(result.text) };
 };
 
-console.log('[AutopilotV3][HUMAN FINAL] v9 local-only · AI 재호출/HARD REJECT 비활성화');
+console.log('[AutopilotV3][HUMAN FINAL] v11 빈줄/짧은 호흡 보존 · 안전 정리 전용');
 module.exports = { localFix, clean };
