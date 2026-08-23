@@ -3,7 +3,7 @@
 // Timed prefill queue for Autopilot.
 // - Basic: 15 scheduled posts/day
 // - Pro/Admin: 25 scheduled posts/day
-// - Keep up to 10 FUTURE pending posts prepared per account
+// - Keep only a small FUTURE buffer per account to avoid AI cost bursts
 // - Spread posts across the full 24-hour KST day
 // - Stagger each account's schedule so accounts do not publish at the same minute
 // - Rebalance existing future pending rows on startup without touching content/media
@@ -16,8 +16,8 @@ const cron = require('node-cron');
 const dbMod = require('./db');
 const { db, getAccount, getUserById } = dbMod;
 
-const BUFFER = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BUFFER || 10));
-const BATCH = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BATCH || 10));
+const BUFFER = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BUFFER || 3));
+const BATCH = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BATCH || 1));
 const REFILL_CRON = String(process.env.AUTOPILOT_TIMED_REFILL_CRON || '*/10 * * * *');
 const REBALANCE_SAFETY_MINUTES = Math.max(10, Number(process.env.AUTOPILOT_REBALANCE_SAFETY_MINUTES || 15));
 const runningAccounts = new Set();
@@ -61,15 +61,13 @@ function accountHash(accountId, dayKey='') {
   return h >>> 0;
 }
 function plannedSlots(dayKey, target, accountId) {
-  // Full 24-hour day: divide 1,440 minutes evenly, then give each account/day
-  // its own deterministic phase and each item a small deterministic jitter.
   const dayMinutes = 24 * 60;
   const step = dayMinutes / Math.max(1, target);
   const seed = accountHash(accountId, dayKey);
   const phase = seed % Math.max(1, Math.floor(step));
   const out = [];
   for (let i = 0; i < target; i++) {
-    const itemJitter = (((seed >>> (i % 16)) + i * 19 + Number(accountId || 0) * 7) % 15) - 7; // -7..+7
+    const itemJitter = (((seed >>> (i % 16)) + i * 19 + Number(accountId || 0) * 7) % 15) - 7;
     let minute = Math.round(phase + i * step + itemJitter);
     minute = ((minute % dayMinutes) + dayMinutes) % dayMinutes;
     out.push(new Date(`${dayKey}T${String(Math.floor(minute / 60)).padStart(2,'0')}:${String(minute % 60).padStart(2,'0')}:00+09:00`));
@@ -249,5 +247,5 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
     return exp;
   };
 
-  console.log('[Autopilot][TIMED PREFILL] future schedule controller loaded · account-stagger v3 · 24h');
+  console.log('[Autopilot][TIMED PREFILL] future schedule controller loaded · account-stagger v3 · 24h · cost-safe');
 }
