@@ -63,7 +63,8 @@ function badStyleReasons(text) {
   const lines = t.split('\n').map(x => x.trim()).filter(Boolean);
   const reasons = [];
   if (/(더라|하더라|했더라|더라고|하더라고|했더라고)/i.test(t)) reasons.push('더라체');
-  if (/(?:^|\s)[가-힣A-Za-z0-9]+(?:함|됨|임|했음|있음|없음|좋음|편함|끝남)(?=\s|$|[!?~ㅋㅎ])/m.test(t)) reasons.push('음슴체');
+  if (lines.some(line => /(?:함|됨|임|했음|있음|없음|좋음|편함|끝남|놀람|사라짐)(?:[!?~ㅋㅎㅠㅜ]*)$/.test(line))) reasons.push('음슴체');
+  if (lines.some(line => /(?:할|될|인|같은)\s*듯(?:[!?~ㅋㅎㅠㅜ]*)$/.test(line))) reasons.push('듯체');
   if (/[가-힣]+냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) reasons.push('냐체');
   if (/[,.]/.test(t.replace(/\d+\.\d+/g, ''))) reasons.push('마침표/쉼표');
   if (/추천|장만|필수템|꿀템/i.test(t)) reasons.push('구매권유');
@@ -72,28 +73,52 @@ function badStyleReasons(text) {
   return [...new Set(reasons)];
 }
 
+function rewriteLineEnding(line) {
+  const suffix = String(line || '').match(/([!?~ㅋㅎㅠㅜ]+)$/)?.[1] || '';
+  let core = suffix ? String(line).slice(0, -suffix.length) : String(line);
+  core = core
+    .replace(/불편함$/g, '불편해')
+    .replace(/해결됨$/g, '해결돼')
+    .replace(/편함$/g, '편해')
+    .replace(/좋음$/g, '좋아')
+    .replace(/있음$/g, '있어')
+    .replace(/없음$/g, '없어')
+    .replace(/끝남$/g, '끝나')
+    .replace(/깜짝\s*놀람$/g, '깜짝 놀랐어')
+    .replace(/놀람$/g, '놀랐어')
+    .replace(/싹\s*사라짐$/g, '싹 사라져')
+    .replace(/사라짐$/g, '사라져')
+    .replace(/대박임$/g, '대박이야')
+    .replace(/필수임$/g, '필수야')
+    .replace(/진짜임$/g, '진짜야')
+    .replace(/가능함$/g, '가능해')
+    .replace(/필요함$/g, '필요해')
+    .replace(/괜찮음$/g, '괜찮아')
+    .replace(/좋더라$/g, '좋아')
+    .replace(/편하더라$/g, '편해')
+    .replace(/했더라$/g, '했어')
+    .replace(/하더라$/g, '해')
+    .replace(/했더라고$/g, '했어')
+    .replace(/하더라고$/g, '해')
+    .replace(/더라고$/g, '')
+    .replace(/더라$/g, '')
+    .replace(/할\s*듯$/g, '할 것 같아')
+    .replace(/될\s*듯$/g, '될 것 같아')
+    .replace(/인\s*듯$/g, '인 것 같아')
+    .replace(/같은\s*듯$/g, '같아')
+    .replace(/뭐냐$/g, '뭐지')
+    .replace(/거냐$/g, '건가')
+    .replace(/없냐$/g, '없나')
+    .replace(/맞냐$/g, '맞나')
+    .replace(/냐$/g, '나');
+  return `${core}${suffix}`.trim();
+}
+
 function fallbackRewrite(text) {
-  let s = hardSanitize(text)
-    .replace(/불편함/g, '불편해')
-    .replace(/해결됨/g, '해결돼')
-    .replace(/편함/g, '편해')
-    .replace(/좋음/g, '좋아')
-    .replace(/있음/g, '있어')
-    .replace(/없음/g, '없어')
-    .replace(/끝남/g, '끝나')
-    .replace(/좋더라/g, '좋아')
-    .replace(/편하더라/g, '편해')
-    .replace(/했더라/g, '했어')
-    .replace(/하더라/g, '해')
-    .replace(/했더라고/g, '했어')
-    .replace(/하더라고/g, '해')
-    .replace(/더라고/g, '')
-    .replace(/더라/g, '')
-    .replace(/뭐냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '뭐지')
-    .replace(/거냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '건가')
-    .replace(/없냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '없나')
-    .replace(/맞냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '맞나')
-    .replace(/냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '나');
+  const s = hardSanitize(text)
+    .split('\n')
+    .map(rewriteLineEnding)
+    .join('\n');
   return normalizeLineBreaks(s);
 }
 
@@ -104,11 +129,11 @@ engine.buildThreadsFirstAutopilot = async function finalTextHardGuardBuild(accou
   const reasons = badStyleReasons(before);
   result.text = reasons.length ? fallbackRewrite(before) : before;
   result.text = normalizeLineBreaks(result.text);
-  if (reasons.length) console.log(`[AutopilotV3][TEXT HARD GUARD] v11 fix reason=${reasons.join(',')} preview="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
+  if (reasons.length) console.log(`[AutopilotV3][TEXT HARD GUARD] v12 fix reason=${reasons.join(',')} preview="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
   const remaining = badStyleReasons(result.text);
   if (remaining.length) console.warn(`[AutopilotV3][TEXT HARD GUARD] 최종 잔여=${remaining.join(',')} text="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
   return result;
 };
 
-console.log('[Autopilot][TEXT HARD GUARD] v11 빈줄 보존 + 로컬 최종검사');
+console.log('[Autopilot][TEXT HARD GUARD] v12 빈줄 보존 + 음슴체/듯체 종결 보강 + 로컬 최종검사');
 module.exports = { hardSanitize, normalizeLineBreaks, badStyleReasons, fallbackRewrite };
