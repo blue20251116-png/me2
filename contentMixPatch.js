@@ -22,12 +22,12 @@ function transformSource(src){
   src=src.replace(lifestyleMarker,lifestyleInsert);
 
   const buildMarker="async function buildThreadsFirstAutopilot(accountId,{target}){\n  const materials=await collectQualifiedThreadsMaterials(6);\n  let lastError=null;";
-  const buildInsert="async function buildThreadsFirstAutopilot(accountId,{target}){\n  const materials=await collectQualifiedThreadsMaterials(6);\n  const preferredMode=preferredContentMode(accountId);\n  console.log(`[AutopilotV3][CONTENT MIX] account=${accountId} target=30/30/40 preferred=${preferredMode}`);\n  let lastError=null;";
+  const buildInsert="async function buildThreadsFirstAutopilot(accountId,{target}){\n  const materials=await collectQualifiedThreadsMaterials(6);\n  const preferredMode=preferredContentMode(accountId);\n  let mixMisses=0;\n  console.log(`[AutopilotV3][CONTENT MIX] account=${accountId} target=30/30/40 preferred=${preferredMode} softFallback=ON`);\n  let lastError=null;";
   if(!src.includes(buildMarker))throw new Error('[CONTENT MIX PATCH] build marker not found');
   src=src.replace(buildMarker,buildInsert);
 
   const analysisMarker="      const analysis=await analyzeMaterial(accountId,material,target,vision);\n      if(!analysis.searchTerms.length){";
-  const analysisInsert="      const analysis=await analyzeMaterial(accountId,material,target,vision);\n      if(analysis.mode!==preferredMode&&idx<materials.length-1){\n        console.log(`[AutopilotV3][CONTENT MIX SKIP] preferred=${preferredMode} got=${analysis.mode} @${material.username||'-'} → 다음 소재`);\n        continue;\n      }\n      if(analysis.mode!==preferredMode)console.log(`[AutopilotV3][CONTENT MIX FALLBACK] preferred=${preferredMode} got=${analysis.mode} - 후보 부족으로 진행`);\n      if(!analysis.searchTerms.length){";
+  const analysisInsert="      const analysis=await analyzeMaterial(accountId,material,target,vision);\n      if(analysis.mode!==preferredMode&&idx<materials.length-1&&mixMisses<1){\n        mixMisses++;\n        console.log(`[AutopilotV3][CONTENT MIX SKIP] preferred=${preferredMode} got=${analysis.mode} @${material.username||'-'} → 1회만 다음 소재`);\n        continue;\n      }\n      if(analysis.mode!==preferredMode)console.log(`[AutopilotV3][CONTENT MIX SOFT FALLBACK] preferred=${preferredMode} got=${analysis.mode} → 발행률 우선 진행`);\n      if(!analysis.searchTerms.length){";
   if(!src.includes(analysisMarker))throw new Error('[CONTENT MIX PATCH] analysis marker not found');
   src=src.replace(analysisMarker,analysisInsert);
 
@@ -46,10 +46,10 @@ fs.readFileSync=function(filename,...args){
     const transformed=transformSource(src);
     applied=true;
     fs.readFileSync=originalReadFileSync;
-    console.log('[Autopilot][CONTENT MIX PATCH] 일반30/레시피30/생활썰40 + 후킹 반복 억제 + literal \\n 줄바꿈 정규화 소스주입 완료');
+    console.log('[Autopilot][CONTENT MIX PATCH] 30/30/40 soft fallback + 발행률 우선 + literal \\n 정규화 소스주입 완료');
     return isBuffer?Buffer.from(transformed,'utf8'):transformed;
   }
   return data;
 };
 
-console.log('[Autopilot][CONTENT MIX PATCH] 일반30/레시피30/생활썰40 + 후킹 반복 억제 활성화');
+console.log('[Autopilot][CONTENT MIX PATCH] 일반30/레시피30/생활썰40 soft fallback · 모드 불일치 최대 1회만 skip');
