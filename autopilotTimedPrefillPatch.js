@@ -1,32 +1,25 @@
 'use strict';
 
-// Timed prefill queue for Autopilot.
-// - Basic: 15 scheduled posts/day
-// - Pro/Admin: 25 scheduled posts/day
-// - Keep only a small FUTURE buffer per account to avoid AI cost bursts
-// - Spread posts across the full 24-hour KST day
-// - Stagger each account's schedule so accounts do not publish at the same minute
-// - Rebalance existing future pending rows on startup without touching content/media
-// - Publisher remains unchanged and only publishes rows whose scheduled_at <= now
-
 const fs = require('fs');
 const path = require('path');
 const Module = require('module');
 const cron = require('node-cron');
 const dbMod = require('./db');
+const coupangApi = require('./coupangApi');
 const { db, getAccount, getUserById } = dbMod;
 
 const BUFFER = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BUFFER || 3));
 const BATCH = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BATCH || 2));
 const REFILL_CRON = String(process.env.AUTOPILOT_TIMED_REFILL_CRON || '*/10 * * * *');
 const REBALANCE_SAFETY_MINUTES = Math.max(10, Number(process.env.AUTOPILOT_REBALANCE_SAFETY_MINUTES || 15));
+const COUPANG_PREFLIGHT_TTL_MS = Math.max(10 * 60000, Number(process.env.COUPANG_PREFLIGHT_TTL_MS || 6 * 60 * 60 * 1000));
+const COUPANG_INVALID_TTL_MS = Math.max(10 * 60000, Number(process.env.COUPANG_INVALID_TTL_MS || 6 * 60 * 60 * 1000));
 const runningAccounts = new Set();
+const coupangPreflightCache = new Map();
 let refillTickRunning = false;
 
 function dayKeyKst(date = new Date()) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).format(date);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 }
 function kstMidnight(dayKey) { return new Date(`${dayKey}T00:00:00+09:00`); }
 function addDay(dayKey, n) { return dayKeyKst(new Date(kstMidnight(dayKey).getTime() + n * 86400000)); }
@@ -54,14 +47,11 @@ function usedScheduleMinutes(accountId, dayKey) {
 function accountHash(accountId, dayKey='') {
   const s = `${Number(accountId)||0}:${dayKey}`;
   let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
 function plannedSlots(dayKey, target, accountId) {
-  const dayMinutes = 24 * 60;
+  const dayMinutes = 1440;
   const step = dayMinutes / Math.max(1, target);
   const seed = accountHash(accountId, dayKey);
   const phase = seed % Math.max(1, Math.floor(step));
@@ -104,22 +94,54 @@ function rebalanceExistingFuturePending() {
       const posts = db.prepare(`SELECT id,scheduled_at FROM posts WHERE account_id=? AND status='pending' AND scheduled_at>? AND scheduled_at>=? AND scheduled_at<? ORDER BY scheduled_at ASC,id ASC`).all(accountId, cutoff, start, end);
       if (!posts.length) continue;
       const slots = plannedSlots(day, target, accountId).filter(d => d.toISOString() > cutoff);
-      if (!slots.length) continue;
       for (let i = 0; i < posts.length && i < slots.length; i++) {
         const nextIso = slots[i].toISOString();
         if (String(posts[i].scheduled_at) === nextIso) continue;
         db.prepare(`UPDATE posts SET scheduled_at=? WHERE id=? AND status='pending'`).run(nextIso, posts[i].id);
         changed++;
-        console.log(`[Autopilot][TIMED REBALANCE] account #${accountId} post #${posts[i].id} ${posts[i].scheduled_at} -> ${nextIso}`);
       }
     }
   }
   console.log(`[Autopilot][TIMED REBALANCE] done changed=${changed} safety=${REBALANCE_SAFETY_MINUTES}m window=24h`);
 }
 
+function credentialFingerprint(account) {
+  return `${String(account?.coupang_access_key || '').trim().slice(0,6)}:${String(account?.coupang_secret_key || '').trim().length}`;
+}
+async function ensureCoupangReady(accountId, account) {
+  const fp = credentialFingerprint(account);
+  if (!coupangApi.hasCredentials(account)) {
+    coupangPreflightCache.set(accountId, { ok:false, reason:'missing_credentials', fp, until:Date.now()+COUPANG_INVALID_TTL_MS });
+    console.warn(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} API 키 없음 → OpenAI/Vision 생성 건너뜀`);
+    return false;
+  }
+  const cached = coupangPreflightCache.get(accountId);
+  if (cached && cached.fp === fp && cached.until > Date.now()) {
+    if (!cached.ok) console.warn(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} cached-invalid reason=${cached.reason} → OpenAI/Vision 생성 건너뜀`);
+    return cached.ok;
+  }
+  try {
+    // OpenAI보다 먼저 실제 서명 요청 1회로 인증 상태를 검증한다. 정상 결과는 장시간 캐시한다.
+    await coupangApi.searchProducts(accountId, '물티슈', 1);
+    coupangPreflightCache.set(accountId, { ok:true, reason:'ok', fp, until:Date.now()+COUPANG_PREFLIGHT_TTL_MS });
+    console.log(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} AUTH OK ttl=${Math.round(COUPANG_PREFLIGHT_TTL_MS/3600000)}h`);
+    return true;
+  } catch (err) {
+    const status = Number(err?.response?.status || 0);
+    const msg = String(err?.response?.data?.message || err?.response?.data?.rMessage || err?.message || err || '');
+    if (status === 401 || /invalid signature|unauthorized|access.?key|secret.?key/i.test(msg)) {
+      coupangPreflightCache.set(accountId, { ok:false, reason:'invalid_signature', fp, until:Date.now()+COUPANG_INVALID_TTL_MS });
+      console.error(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} AUTH INVALID → OpenAI/Vision 생성 중단 reason="${msg.slice(0,160)}"`);
+      return false;
+    }
+    // 호출 제한/일시 장애는 인증 실패로 오판하지 않는다.
+    console.warn(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} check deferred status=${status||'-'} reason="${msg.slice(0,160)}"`);
+    return true;
+  }
+}
+
 if (!global.__ME2_TIMED_PREFILL_PATCH__) {
   global.__ME2_TIMED_PREFILL_PATCH__ = true;
-
   try {
     const schedulerPath = path.join(__dirname, 'scheduler.js');
     let source = fs.readFileSync(schedulerPath, 'utf8');
@@ -128,54 +150,16 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
       if (!source.includes(from)) throw new Error(`[TIMED PREFILL] scheduler source pattern missing: ${from.slice(0,90)}`);
       source = source.replace(from, to);
     };
-
-    apply(
-      'function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=null,recipeCommentText=null}){',
-      'function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=null,recipeCommentText=null,scheduledAt=null}){',
-      'recipeCommentText=null,scheduledAt=null}){'
-    );
-    apply(
-      "new Date().toISOString(),accountId,recipeCommentText);}",
-      "String(scheduledAt||new Date().toISOString()),accountId,recipeCommentText);}",
-      'String(scheduledAt||new Date().toISOString()),accountId,recipeCommentText);}'
-    );
-    apply(
-      'async function runContentOnlyAutopilot(account,target){',
-      'async function runContentOnlyAutopilot(account,target,scheduledAt=null){',
-      'runContentOnlyAutopilot(account,target,scheduledAt=null)'
-    );
-    apply(
-      'recipeCommentText:r.recipeCommentText});recordAutopilotLast',
-      'recipeCommentText:r.recipeCommentText,scheduledAt});recordAutopilotLast',
-      'recipeCommentText:r.recipeCommentText,scheduledAt});recordAutopilotLast'
-    );
-    apply(
-      'async function runAutopilotOnce(account){',
-      'async function runAutopilotOnce(account,scheduledAt=null){',
-      'runAutopilotOnce(account,scheduledAt=null)'
-    );
-    apply(
-      'await runContentOnlyAutopilot(account,target);return;',
-      'await runContentOnlyAutopilot(account,target,scheduledAt);return;',
-      'await runContentOnlyAutopilot(account,target,scheduledAt);return;'
-    );
-    apply(
-      'recipeCommentText:result.commentLead});const last=',
-      'recipeCommentText:result.commentLead,scheduledAt});const last=',
-      'recipeCommentText:result.commentLead,scheduledAt});const last='
-    );
-
-    if (!source.includes('runAutopilotOnce};')) {
-      if (source.includes('module.exports={startPublishJob,startInsightsJob,startAutopilotJob};')) {
-        source = source.replace(
-          'module.exports={startPublishJob,startInsightsJob,startAutopilotJob};',
-          'module.exports={startPublishJob,startInsightsJob,startAutopilotJob,runAutopilotOnce};'
-        );
-      } else if (!source.includes('runAutopilotOnce')) {
-        throw new Error('[TIMED PREFILL] scheduler export block missing');
-      }
+    apply('function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=null,recipeCommentText=null}){','function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=null,recipeCommentText=null,scheduledAt=null}){','recipeCommentText=null,scheduledAt=null}){');
+    apply("new Date().toISOString(),accountId,recipeCommentText);}","String(scheduledAt||new Date().toISOString()),accountId,recipeCommentText);}",'String(scheduledAt||new Date().toISOString()),accountId,recipeCommentText);}');
+    apply('async function runContentOnlyAutopilot(account,target){','async function runContentOnlyAutopilot(account,target,scheduledAt=null){','runContentOnlyAutopilot(account,target,scheduledAt=null)');
+    apply('recipeCommentText:r.recipeCommentText});recordAutopilotLast','recipeCommentText:r.recipeCommentText,scheduledAt});recordAutopilotLast','recipeCommentText:r.recipeCommentText,scheduledAt});recordAutopilotLast');
+    apply('async function runAutopilotOnce(account){','async function runAutopilotOnce(account,scheduledAt=null){','runAutopilotOnce(account,scheduledAt=null)');
+    apply('await runContentOnlyAutopilot(account,target);return;','await runContentOnlyAutopilot(account,target,scheduledAt);return;','await runContentOnlyAutopilot(account,target,scheduledAt);return;');
+    apply('recipeCommentText:result.commentLead});const last=','recipeCommentText:result.commentLead,scheduledAt});const last=','recipeCommentText:result.commentLead,scheduledAt});const last=');
+    if (!source.includes('runAutopilotOnce};') && source.includes('module.exports={startPublishJob,startInsightsJob,startAutopilotJob};')) {
+      source = source.replace('module.exports={startPublishJob,startInsightsJob,startAutopilotJob};','module.exports={startPublishJob,startInsightsJob,startAutopilotJob,runAutopilotOnce};');
     }
-
     fs.writeFileSync(schedulerPath, source, 'utf8');
     console.log('[Autopilot][TIMED PREFILL] scheduler future-time generation hook written');
   } catch (err) {
@@ -183,18 +167,13 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
     throw err;
   }
 
-  try { rebalanceExistingFuturePending(); }
-  catch (err) { console.warn('[Autopilot][TIMED REBALANCE] startup skipped:', err.message); }
+  try { rebalanceExistingFuturePending(); } catch (err) { console.warn('[Autopilot][TIMED REBALANCE] startup skipped:', err.message); }
 
   const originalLoad = Module._load;
   Module._load = function timedPrefillLoad(request, parent, isMain) {
     const exp = originalLoad.apply(this, arguments);
     if (!['./scheduler','./scheduler.js'].includes(request) || !exp || exp.__timedPrefillPatched) return exp;
-
-    if (typeof exp.runAutopilotOnce !== 'function') {
-      console.error('[Autopilot][TIMED PREFILL] runAutopilotOnce export unavailable → timed prefill disabled, normal scheduler preserved');
-      return exp;
-    }
+    if (typeof exp.runAutopilotOnce !== 'function') return exp;
 
     async function refillAccount(accountId) {
       if (runningAccounts.has(accountId)) return;
@@ -207,6 +186,10 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
       const slots = chooseFutureSlots(accountId, target, need);
       if (!slots.length) return;
 
+      // 핵심: Coupang 인증을 OpenAI/Vision보다 먼저 확인한다.
+      const coupangReady = await ensureCoupangReady(accountId, account);
+      if (!coupangReady) return;
+
       runningAccounts.add(accountId);
       console.log(`[Autopilot][TIMED PREFILL] account #${accountId} target=${target}/day future=${future} preparing=${slots.length}`);
       try {
@@ -216,18 +199,21 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
             await exp.runAutopilotOnce(account, slot.toISOString());
             console.log(`[Autopilot][TIMED PREFILL] RESERVED account #${accountId} scheduled=${slot.toISOString()}`);
           } catch (err) {
-            const msg=String(err?.response?.data?.error?.message||err?.message||err||'');
+            const msg = String(err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || err || '');
+            const status = Number(err?.response?.status || 0);
             console.error(`[Autopilot][TIMED PREFILL] generation failed account #${accountId}:`, err?.response?.data || err?.message || err);
-            if(err?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED'||err?.__openAiNoRetry||/no credits remaining|OPENAI_HOURLY_BUDGET_EXCEEDED/i.test(msg)) break;
+            if (status === 401 || /invalid signature/i.test(msg)) {
+              coupangPreflightCache.set(accountId, { ok:false, reason:'invalid_signature', fp:credentialFingerprint(account), until:Date.now()+COUPANG_INVALID_TTL_MS });
+              console.error(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} runtime AUTH INVALID → 남은 슬롯 중단 + 다음 계정 이동`);
+              break;
+            }
+            if (err?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED' || err?.__openAiNoRetry || /no credits remaining|OPENAI_HOURLY_BUDGET_EXCEEDED/i.test(msg)) break;
             console.log(`[Autopilot][TIMED PREFILL] account #${accountId} 실패 1건은 건너뛰고 다음 예약 슬롯 계속 시도`);
-            continue;
           } finally {
             if (global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID === accountId) delete global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID;
           }
         }
-      } finally {
-        runningAccounts.delete(accountId);
-      }
+      } finally { runningAccounts.delete(accountId); }
     }
 
     exp.startAutopilotJob = function startTimedPrefillJob() {
@@ -237,18 +223,15 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
         try {
           const accounts = db.prepare(`SELECT id FROM accounts WHERE autopilot_enabled=1 ORDER BY id`).all();
           for (const row of accounts) await refillAccount(Number(row.id));
-        } finally {
-          refillTickRunning = false;
-        }
+        } finally { refillTickRunning = false; }
       };
       cron.schedule(REFILL_CRON, () => tick().catch(e => console.error('[Autopilot][TIMED PREFILL] tick:', e.message)), { timezone:'Asia/Seoul', noOverlap:true });
       setTimeout(() => tick().catch(e => console.error('[Autopilot][TIMED PREFILL] startup:', e.message)), 3000);
-      console.log(`[Autopilot][TIMED PREFILL] ON buffer=${BUFFER} batch=${BATCH} basic=15/day pro=25/day window=24h account-stagger=ON retry-next-slot=ON cron=${REFILL_CRON}`);
+      console.log(`[Autopilot][TIMED PREFILL] ON buffer=${BUFFER} batch=${BATCH} basic=15/day pro=25/day window=24h account-stagger=ON retry-next-slot=ON coupang-preflight=ON cron=${REFILL_CRON}`);
     };
-
     exp.__timedPrefillPatched = true;
     return exp;
   };
 
-  console.log('[Autopilot][TIMED PREFILL] future schedule controller loaded · account-stagger v4 · 24h · cost-safe · publish-rate');
+  console.log('[Autopilot][TIMED PREFILL] future schedule controller loaded · account-stagger v5 · Coupang preflight before OpenAI · 24h');
 }
