@@ -8,9 +8,8 @@ if (!global.__ME2_AUTOPILOT_RETRY_PATCHED__) {
     const schedulerPath = path.join(__dirname, 'scheduler.js');
     let source = fs.readFileSync(schedulerPath, 'utf8');
     const startMarker = 'function startAutopilotJob(){';
-    const endMarker = '\nmodule.exports={startPublishJob,startInsightsJob,startAutopilotJob};';
     const start = source.indexOf(startMarker);
-    const end = source.indexOf(endMarker, start);
+    const end = source.indexOf('\nmodule.exports=', start);
 
     if (start < 0 || end < 0) {
       console.warn('[Autopilot][RETRY UNTIL SUCCESS PATCH] scheduler 함수 위치를 찾지 못해 적용하지 못했습니다');
