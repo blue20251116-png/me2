@@ -6,6 +6,9 @@ const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 
 function hardSanitize(text) {
   let s = String(text || '').replace(/\r/g, '');
+  // 이전 패치/모델이 줄바꿈 대신 넣은 구분자를 실제 개행으로 복원
+  s = s.replace(/\s+\/\s+/g, '\n');
+  s = s.replace(/\\n/g, '\n');
   s = s.replace(/,/g, '');
   s = s.replace(/(^|[^0-9])\.(?![0-9])/g, '$1');
   s = s.replace(/\.\.+/g, '');
@@ -20,14 +23,59 @@ function hardSanitize(text) {
     out.push(line);
   }
 
-  return out.slice(0, 6).join('\n').replace(/\n{2,}/g, '\n').trim();
+  return out.slice(0, 8).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function splitLongLine(line, maxLen = 38) {
+  let rest = String(line || '').trim();
+  if (!rest || rest.length <= maxLen) return [rest].filter(Boolean);
+
+  const chunks = [];
+  // 문장부호를 최종적으로 지우더라도 먼저 자연스러운 문장 경계를 보존
+  const sentenceParts = rest
+    .split(/(?<=[!?~])\s+|\s+(?=(?:근데|그래서|심지어|이건|이거|처음엔|재료랑|만드는 법|레시피|댓글))/)
+    .map(x => x.trim())
+    .filter(Boolean);
+
+  for (let part of sentenceParts) {
+    while (part.length > maxLen) {
+      const window = part.slice(0, maxLen + 8);
+      let cut = -1;
+      // 조사/연결어 직후가 아니라 의미 덩어리 뒤 공백을 우선 사용
+      const preferred = [...window.matchAll(/\s+(?=(?:근데|그래서|심지어|이건|이거|처음엔|재료랑|만드는|집에서|반찬|소스|두\s*층|완전|진짜))/g)];
+      if (preferred.length) cut = preferred[preferred.length - 1].index;
+      if (cut < 18) cut = window.lastIndexOf(' ', maxLen);
+      if (cut < 18) cut = window.indexOf(' ', Math.min(28, window.length - 1));
+      if (cut < 1) break;
+      chunks.push(part.slice(0, cut).trim());
+      part = part.slice(cut).trim();
+    }
+    if (part) chunks.push(part);
+  }
+  return chunks.filter(Boolean);
+}
+
+function normalizeLineBreaks(text) {
+  const clean = hardSanitize(text);
+  const rawLines = clean.split('\n').map(x => x.trim()).filter(Boolean);
+  const lines = [];
+  for (const raw of rawLines) lines.push(...splitLongLine(raw));
+
+  // 너무 잘게 쪼개진 한두 단어 줄은 앞줄에 붙인다
+  const merged = [];
+  for (const line of lines) {
+    if (line.length <= 5 && merged.length) merged[merged.length - 1] += ` ${line}`;
+    else merged.push(line);
+  }
+
+  return merged.slice(0, 8).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function hasAwkwardLineBreak(text) {
   const lines = String(text || '').split('\n').map(x => x.trim()).filter(Boolean);
   if (lines.length < 2) return false;
-  const danglingEnd = /(은|는|이|가|을|를|도|만|에|의|와|과|로|으로|부터|까지|해서|하고|는데|니까|면|지만|다가|거나|처럼|보다|정도|진짜|완전)$/;
-  const awkwardStart = /^(보이|달라지|되어|돼|해서|하고|그러니까|그래서|근데|그런데|때문에|같아서|같으니까)/;
+  const danglingEnd = /(은|는|이|가|을|를|도|만|에|의|와|과|로|으로|부터|까지|해서|하고|는데|니까|면|지만|다가|거나|처럼|보다|정도)$/;
+  const awkwardStart = /^(보이|달라지|되어|돼|해서|하고|그러니까|때문에|같아서|같으니까)/;
   for (let i = 0; i < lines.length - 1; i++) {
     if (danglingEnd.test(lines[i]) || awkwardStart.test(lines[i + 1])) return true;
   }
@@ -46,7 +94,7 @@ function badStyleReasons(text) {
   if (/추천|장만|괜찮을 거야|필수템|꿀템/i.test(t)) reasons.push('구매권유');
   if (/^(?:ㅋ{1,8}|ㅎ{1,8}|ㄷㄷ)[!?]*$/m.test(t)) reasons.push('단독반응');
   if (hasAwkwardLineBreak(t)) reasons.push('어색한줄바꿈');
-  if (lines.some(line => line.length > 52)) reasons.push('긴줄');
+  if (lines.some(line => line.length > 46)) reasons.push('긴줄');
   if (/(실물\s*(?:보니까|봤는데)|직접\s*(?:보니까|써보니까|사용해보니까)|써보니까|사용해보니까|사봤는데|구매했는데|재구매|추가\s*구매|요즘\s*쓰는\s*중)/i.test(t)) reasons.push('확인안된경험');
   if (/(\d+(?:\.\d+)?\s*kg\s*(?:빠졌|감량|뺐)|\d+\s*(?:주|일|개월)째\s*(?:먹|쓰|사용)|한\s*달\s*만에\s*효과)/i.test(t)) reasons.push('위험경험수치');
   return [...new Set(reasons)];
@@ -83,16 +131,18 @@ function fallbackRewrite(text) {
     .replace(/\d+(?:\.\d+)?\s*kg\s*(?:빠졌|감량했|뺐)[^\n]*/gi, '')
     .replace(/한\s*달\s*만에\s*효과[^\n]*/gi, '');
 
-  return hardSanitize(s).replace(/\n{2,}/g, '\n').trim();
+  return normalizeLineBreaks(s);
 }
 
 engine.buildThreadsFirstAutopilot = async function finalTextHardGuardBuild(accountId, options) {
   const result = await originalBuild(accountId, options);
   if (!result) return result;
 
-  const before = hardSanitize(result.text);
+  const before = normalizeLineBreaks(result.text);
   const reasons = badStyleReasons(before);
   result.text = reasons.length ? fallbackRewrite(before) : before;
+  // 문제가 없더라도 마지막에 실제 개행을 보장
+  result.text = normalizeLineBreaks(result.text);
 
   if (reasons.length) {
     console.log(`[AutopilotV3][TEXT HARD GUARD] local-only fix reason=${reasons.join(',')} preview="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
@@ -105,6 +155,6 @@ engine.buildThreadsFirstAutopilot = async function finalTextHardGuardBuild(accou
   return result;
 };
 
-console.log('[Autopilot][TEXT HARD GUARD] AI 호출 제거 · 로컬 최종검사 활성화');
+console.log('[Autopilot][TEXT HARD GUARD] AI 호출 제거 · 로컬 최종검사 + 실제 줄바꿈 보정 활성화');
 
-module.exports = { hardSanitize, badStyleReasons, fallbackRewrite };
+module.exports = { hardSanitize, normalizeLineBreaks, badStyleReasons, fallbackRewrite };
