@@ -16,13 +16,20 @@ function clean(text) {
 
 const REL = '(?:친구|남편|아내|시어머니|언니|오빠|동생|엄마|아빠|딸|아들|지인|주변\\s*사람)';
 const REACTION_TOKEN = /(?:ㅋㅋ+|ㅎㅎ+|ㅁㅊ|ㄷㄷ+|;;+|ㅠㅠ+|ㅜㅜ+|😆|😂|🤣|🔥|헐|존맛탱|개맛|미쳤)/gi;
+const HEALTH_TOPIC = /(?:유산균|프로바이오틱|영양제|건강기능식품|비타민|루테인|오메가|밀크씨슬|아르기닌|콜라겐|효소|홍삼|마그네슘|철분|칼슘|다이어트|혈당|장건강|간건강)/i;
+const HEALTH_EFFECT = /(?:챙겨\s*먹기\s*시작|먹기\s*시작|먹고\s*나서|복용하고\s*나서|섭취하고\s*나서|화장실\s*(?:가는|가게|잘|편)|배변|장이\s*(?:편|좋|가벼|힘들)|속이\s*(?:편|좋|가벼)|확실히\s*달라|효과\s*(?:봤|있|좋)|체감|몸이\s*(?:가벼|좋)|피로가\s*(?:줄|덜)|잠이\s*(?:잘|푹)|살이\s*빠|붓기가\s*빠|성취감으로\s*느껴)/i;
 
-function inspect(text) {
+function isHealthResult(result) {
+  return HEALTH_TOPIC.test(`${result?.topic || ''} ${result?.product?.name || result?.product || ''} ${result?.productSearchTerm || ''}`);
+}
+
+function inspect(text, health = false) {
   const t = clean(text);
   const reasons = [];
   if (/(?:활용도(?:도)?\s*높|진짜\s*편리|완전\s*좋|스트레스가\s*확\s*줄|완전\s*다른\s*세상|진입장벽이\s*낮|나만의\s*스타일|재밌을\s*것\s*같|해보고\s*싶어|왜\s*이렇게\s*쉽게\s*느껴)/i.test(t)) reasons.push('ai-review-tone');
   if (new RegExp(`(?:우리\\s*)?${REL}.{0,55}(?:행복|좋아|먹|쓰|샀|추천|말했|물어|난리|반응|손이\\s*가|비웠)`, 'i').test(t)) reasons.push('invented-relation');
   if (/(?:나도\s*(?:해봤|먹어봤|써봤|사봤)|집들이\s*때|반찬으로\s*내놓으니까|어디서\s*샀냐고|밥\s*두\s*(?:공기|그릇))/i.test(t)) reasons.push('invented-experience');
+  if (health && HEALTH_EFFECT.test(t)) reasons.push('health-effect-experience');
   if (/(?:^|\s)[가-힣A-Za-z0-9]+(?:함|됨|임|했음|있음|없음|좋음|편함|끝남|싶어짐|느껴짐|생각남|보임)(?=\s|$|[!?~ㅋㅎ])/m.test(t)) reasons.push('eumseum');
   if (/[가-힣]+냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) reasons.push('nya');
   if (t.split('\n').some(x => x.length > 46)) reasons.push('long-line');
@@ -67,6 +74,26 @@ function removeInvented(text) {
   return t;
 }
 
+function removeHealthExperience(text) {
+  let t = clean(text);
+  // 건강/영양제 소재에서 직접 섭취·효과 체험 문장을 삭제한다
+  const chunks = t.split('\n');
+  const kept = [];
+  for (let line of chunks) {
+    line = line.trim();
+    if (!line) continue;
+    // 한 줄 안에 여러 생각이 붙은 경우 위험 표현 이후를 잘라낸다
+    const m = line.search(HEALTH_EFFECT);
+    if (m >= 0) {
+      const before = line.slice(0, m).trim();
+      if (before.length >= 8 && !/(그래서|요즘|나는|나도)$/.test(before)) kept.push(before);
+      continue;
+    }
+    kept.push(line);
+  }
+  return clean(kept.join('\n'));
+}
+
 function splitNatural(text) {
   const source = clean(text).split('\n').map(humanizeLine).filter(Boolean);
   const out = [];
@@ -89,8 +116,9 @@ function splitNatural(text) {
   return out.filter(x => x.length > 1).slice(0, 7).join('\n');
 }
 
-function localGuard(text) {
+function localGuard(text, health = false) {
   let t = removeInvented(clean(text));
+  if (health) t = removeHealthExperience(t);
   t = t.split('\n').map(humanizeLine).filter(Boolean).join('\n');
   let count = 0;
   t = t.replace(REACTION_TOKEN, m => (++count <= 2 ? m : ''));
@@ -103,14 +131,14 @@ engine.buildThreadsFirstAutopilot = async function(accountId, args = {}) {
   if (!result?.text) return result;
   if (String(process.env.POST_STYLE_HUMAN_GUARD_ENABLED || '1') === '0') return result;
 
+  const health = isHealthResult(result);
   const current = clean(result.text);
-  const reasons = inspect(current);
-  // 최종 단계에서는 PASS여도 항상 humanize를 한 번 적용한다
-  const fixed = localGuard(current);
-  const remaining = inspect(fixed);
-  console.log(`[AutopilotV3][POST STYLE GUARD v2] ${reasons.length ? 'LOCAL-FIX' : 'HUMANIZE'} reasons=${reasons.join(',') || 'none'} remaining=${remaining.join(',') || 'PASS'} preview="${fixed.slice(0,180).replace(/\n/g,' / ')}"`);
+  const reasons = inspect(current, health);
+  const fixed = localGuard(current, health);
+  const remaining = inspect(fixed, health);
+  console.log(`[AutopilotV3][POST STYLE GUARD v3] ${reasons.length ? 'LOCAL-FIX' : 'HUMANIZE'} health=${health ? 'yes' : 'no'} reasons=${reasons.join(',') || 'none'} remaining=${remaining.join(',') || 'PASS'} preview="${fixed.slice(0,180).replace(/\n/g,' / ')}"`);
   return { ...result, text: fixed };
 };
 
-console.log('[AutopilotV3][POST STYLE GUARD] v2 최종 인간말투 · 음슴체/가짜경험/광고감상문 제거 · AI추가호출 없음');
-module.exports = { inspect, clean, localGuard };
+console.log('[AutopilotV3][POST STYLE GUARD] v3 인간말투 + 건강식품 허구섭취/효과체감 제거 · AI추가호출 없음');
+module.exports = { inspect, clean, localGuard, removeHealthExperience };
