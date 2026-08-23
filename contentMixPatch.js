@@ -12,12 +12,12 @@ function transformSource(src){
   src=src.replace(cleanMarker,cleanInsert);
 
   const commonToneMarker=`- 첫 문장에서 '~은/는 ...입니다'처럼 정의하지 않는다. 반응·상황·의외성·궁금증으로 시작한다.\n- ㅋㅋ는 자연스러울 때 최대 1~2회만. 억지 유행어 금지.\n- 확인되지 않은 구매/사용/섭취 경험을 만들어내지 않는다.`;
-  const commonToneInsert=`- 첫 문장에서 '~은/는 ...입니다'처럼 정의하지 않는다. 반응·상황·의외성·궁금증으로 시작한다.\n- 첫 문장을 '와 이거', '와 ㅁㅊ', '와 미쳤다', '이거 진짜 미쳤다', '대박임' 같은 상투적인 감탄 공식으로 시작하지 않는다.\n- 매 글마다 감탄사를 붙이지 않는다. 소재에 맞춰 사건형·관찰형·결과선공개형·공감형·궁금증형·짧은 반응형 중 자연스러운 시작을 고른다.\n- ㅋㅋ는 자연스러울 때 최대 1회만 쓴다. ㅠㅠ, ㄷㄷ, ㅁㅊ, 대박 같은 표현도 습관적으로 반복하지 않는다. 원 Threads 소재의 분위기에 맞을 때만 제한적으로 쓴다.\n- 같은 의미를 '진짜', '완전', '대박', '미쳤다'로 겹쳐 강조하지 않는다.\n- 확인되지 않은 구매/사용/섭취 경험을 만들어내지 않는다.`;
+  const commonToneInsert=`- 첫 문장에서 '~은/는 ...입니다'처럼 정의하지 않는다. 실제 Threads 사람이 쓰는 짧은 반응이나 생활 상황으로 시작한다.\n- '와 이거 대박이야ㅋㅋ', '이거 진짜 미쳤다ㅋㅋ', '아니 이거 뭐야ㅋㅋ', '와 이런 게 있었네ㅋㅋ' 같은 즉흥 반응형 시작을 적극 허용한다. 다만 같은 첫 문장을 연속 글에서 반복하지 않는다.\n- 본문은 반응/상황 → 실제 불편이나 궁금증 → 발견/제품 장면 → 기능 또는 결과 하나 → 짧은 반응 순서로 쓴다.\n- 한 줄에 한 생각만 쓰고 1~2줄마다 빈 줄을 둘 수 있다. 설명문처럼 문장을 붙이지 않는다.\n- ㅋㅋ는 자연스러울 때 0~2회 사용할 수 있다.\n- 광고 카피처럼 장점을 나열하지 말고 사람이 직접 피드에 쓴 것처럼 짧고 날것의 표현을 우선한다.\n- 확인되지 않은 구매/사용/섭취 경험을 만들어내지 않는다.`;
   if(!src.includes(commonToneMarker))throw new Error('[CONTENT MIX PATCH] common tone marker not found');
   src=src.replace(commonToneMarker,commonToneInsert);
 
   const lifestyleMarker=`[일반상품/생활]\n- 본문 text는 제품 설명서가 아니라 상황→불편/발견→반응의 흐름을 우선한다.\n- 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.\n- commentLead에는 '✅ 핵심만' 아래 핵심 포인트 2~3개만 간결하게 쓴다.`;
-  const lifestyleInsert=`[일반상품/생활]\n- 본문 text는 제품 설명서가 아니라 상황→불편/발견→반응의 흐름을 우선한다.\n- 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.\n- commentLead에는 '✅ 핵심만' 아래 핵심 포인트 2~3개만 간결하게 쓴다.\n- mode가 lifestyle이면 생활썰형으로 쓴다. 원 Threads 소재에 실제로 있는 사건·관계·장소·불편만 사용하고 새로운 남편/친구/엄마/구매/사용 경험을 만들어내지 않는다.\n- lifestyle 본문은 생활 사건이나 당황스러운 순간으로 시작하고 → 왜 그런지 궁금하게 만들고 → 불편 또는 발견을 보여주고 → 해결 상품은 후반에 짧게 드러내는 흐름을 우선한다.\n- lifestyle에서 제품 장점 2~3개를 본문에 나열하지 않는다. 제품을 팔기 위한 설명보다 사건 자체가 먼저 읽혀야 한다.\n- lifestyle 첫 1~2줄은 상품명을 몰라도 계속 읽고 싶게 만든다.\n- 원문에 없는 냄새·남편·친구·엄마 같은 소재를 성공 공식처럼 반복해서 붙이지 않는다.\n- '이걸 왜 이제 알았지' 같은 동일 결말을 매번 쓰지 않는다. 원문 상황에 맞게 자연스럽게 끝낸다.`;
+  const lifestyleInsert=`[일반상품/생활]\n- 본문 text는 제품 설명서가 아니라 실제 Threads 생활글처럼 쓴다.\n- 기본 호흡 예시는 '와 이거 대박이야ㅋㅋ' → 생활 불편 1~2줄 → '근데 이거 한번 써보고 좀 놀람'처럼 발견/사용 장면 → 확인 가능한 결과 하나 → '나 이걸 왜 이제 알았지' 같은 짧은 반응이다. 예시 문장을 매번 그대로 복사하지 말고 소재에 맞게 자연스럽게 변주한다.\n- 원 Threads 소재에 실제로 있는 사건·관계·장소·불편만 사용하고 새로운 남편/친구/엄마/구매/사용 경험을 만들어내지 않는다. 원문에 실제 사용 경험이 없으면 '영상 보다가 봤는데', '이런 게 있더라', '보니까'처럼 사실 범위 안에서 쓴다.\n- 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.\n- 제품 장점은 본문에서 최대 하나만 전면에 둔다.\n- 4~8개의 짧은 줄을 기본으로 하고 의미 덩어리 사이에는 빈 줄을 허용한다.\n- commentLead에는 '✅ 핵심만' 아래 핵심 포인트 2~3개만 간결하게 쓴다.`;
   if(!src.includes(lifestyleMarker))throw new Error('[CONTENT MIX PATCH] lifestyle marker not found');
   src=src.replace(lifestyleMarker,lifestyleInsert);
 
@@ -46,10 +46,10 @@ fs.readFileSync=function(filename,...args){
     const transformed=transformSource(src);
     applied=true;
     fs.readFileSync=originalReadFileSync;
-    console.log('[Autopilot][CONTENT MIX PATCH] 30/30/40 soft fallback + 발행률 우선 + literal \\n 정규화 소스주입 완료');
+    console.log('[Autopilot][CONTENT MIX PATCH] 30/30/40 + Threads human rhythm + literal \\n 정규화 소스주입 완료');
     return isBuffer?Buffer.from(transformed,'utf8'):transformed;
   }
   return data;
 };
 
-console.log('[Autopilot][CONTENT MIX PATCH] 일반30/레시피30/생활썰40 soft fallback · 모드 불일치 최대 1회만 skip');
+console.log('[Autopilot][CONTENT MIX PATCH] 일반30/레시피30/생활썰40 · 사람 말투/빈줄 호흡 활성화');
