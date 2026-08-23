@@ -10,6 +10,9 @@ const MIN_GAP_MS = Math.max(1000, Number(process.env.OPENAI_MIN_GAP_MS || 3000))
 const ANALYSIS_CACHE_MS = Math.max(5 * 60 * 1000, Number(process.env.OPENAI_ANALYSIS_CACHE_MS || 24 * 60 * 60 * 1000));
 const MAX_REQUESTS_PER_HOUR = Math.max(10, Number(process.env.OPENAI_MAX_REQUESTS_PER_HOUR || 120));
 const MAX_TEXT_CHARS = Math.max(6000, Number(process.env.OPENAI_MAX_TEXT_CHARS || 18000));
+const VISION_DETAIL = /^(low|high|auto)$/i.test(String(process.env.OPENAI_VISION_DETAIL || 'low'))
+  ? String(process.env.OPENAI_VISION_DETAIL || 'low').toLowerCase()
+  : 'low';
 const analysisCache = new Map();
 const MAX_CACHE = 1000;
 const requestTimes = [];
@@ -97,7 +100,28 @@ function capRequestText(data) {
   return cloned;
 }
 
-// 비용 최적화 전 측정 전용. 프롬프트/응답은 바꾸지 않고 OpenAI가 돌려준 usage만 기록한다.
+function applyVisionCostGuard(data) {
+  if (!data || !Array.isArray(data.messages)) return data;
+  let imageCount = 0;
+  let changed = false;
+  const messages = data.messages.map(message => {
+    if (!Array.isArray(message?.content)) return message;
+    const content = message.content.map(part => {
+      if (part?.type !== 'image_url' || !part?.image_url?.url) return part;
+      imageCount += 1;
+      const current = String(part.image_url.detail || '').toLowerCase();
+      if (current === VISION_DETAIL) return part;
+      changed = true;
+      return { ...part, image_url: { ...part.image_url, detail: VISION_DETAIL } };
+    });
+    return { ...message, content };
+  });
+  if (imageCount) {
+    console.log(`[OpenAI][VISION COST GUARD] images=${imageCount} detail=${VISION_DETAIL}${changed ? ' applied=yes' : ' applied=no'}`);
+  }
+  return changed ? { ...data, messages } : data;
+}
+
 function classifyPurpose(data) {
   const text = Array.isArray(data?.messages)
     ? data.messages.map(m => typeof m?.content === 'string' ? m.content : '').join('\n').slice(0, 12000)
@@ -127,7 +151,7 @@ function logUsage(response, data, attempt = 1) {
 }
 
 async function runOpenAI(url, rawData, config) {
-  const data = capRequestText(rawData);
+  const data = applyVisionCostGuard(capRequestText(rawData));
   let key = null;
   if (isCacheableAnalysis(data)) {
     key = cacheKey(data);
@@ -188,4 +212,4 @@ axios.post = function budgetGuardedPost(url, data, config) {
   return task;
 };
 
-console.log(`[OpenAI][BUDGET GUARD] concurrency=1 minGap=${MIN_GAP_MS}ms hourlyCap=${MAX_REQUESTS_PER_HOUR} textCap=${MAX_TEXT_CHARS}chars cache<=0.2 ttl=${Math.round(ANALYSIS_CACHE_MS / 3600000)}h`);
+console.log(`[OpenAI][BUDGET GUARD] concurrency=1 minGap=${MIN_GAP_MS}ms hourlyCap=${MAX_REQUESTS_PER_HOUR} textCap=${MAX_TEXT_CHARS}chars visionDetail=${VISION_DETAIL} cache<=0.2 ttl=${Math.round(ANALYSIS_CACHE_MS / 3600000)}h`);
