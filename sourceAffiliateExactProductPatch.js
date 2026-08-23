@@ -84,18 +84,48 @@ function titleFromHtml(html) {
   return t?.[1] ? safeTitle(decodeHtml(t[1]).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim()) : '';
 }
 
+function numericParamFrom(value, key) {
+  const s = String(value || '');
+  try {
+    const u = new URL(s);
+    const v = u.searchParams.get(key);
+    if (/^\d+$/.test(String(v || ''))) return String(v);
+  } catch {}
+  const re = new RegExp(`[?&]${key}=(\\d+)`, 'i');
+  return s.match(re)?.[1] || null;
+}
 function productIdFrom(value) {
   const s = String(value || '');
   return s.match(/\/vp\/products\/(\d+)/i)?.[1]
-    || s.match(/[?&]productId=(\d+)/i)?.[1]
+    || numericParamFrom(s, 'productId')
     || null;
 }
+function itemIdFrom(value) { return numericParamFrom(value, 'itemId'); }
+function vendorItemIdFrom(value) { return numericParamFrom(value, 'vendorItemId'); }
 
 function canonicalProductUrl(finalUrl, html) {
-  const id = productIdFrom(finalUrl) || productIdFrom(html);
-  if (id) return { productId: id, url: `https://www.coupang.com/vp/products/${id}` };
+  const productId = productIdFrom(finalUrl) || productIdFrom(html);
+  const itemId = itemIdFrom(finalUrl) || itemIdFrom(html);
+  const vendorItemId = vendorItemIdFrom(finalUrl) || vendorItemIdFrom(html);
+  if (productId) {
+    const params = new URLSearchParams();
+    if (itemId) params.set('itemId', itemId);
+    if (vendorItemId) params.set('vendorItemId', vendorItemId);
+    const q = params.toString();
+    return {
+      productId,
+      itemId: itemId || null,
+      vendorItemId: vendorItemId || null,
+      url: `https://www.coupang.com/vp/products/${productId}${q ? `?${q}` : ''}`,
+    };
+  }
   if (/^https?:\/\/(?:www\.)?coupang\.com\//i.test(String(finalUrl || ''))) {
-    return { productId: null, url: String(finalUrl).split('#')[0] };
+    return {
+      productId: null,
+      itemId: itemId || null,
+      vendorItemId: vendorItemId || null,
+      url: String(finalUrl).split('#')[0],
+    };
   }
   return null;
 }
@@ -157,7 +187,7 @@ async function resolveWithBrowser(sourceUrl) {
     let title = await browserVisibleTitle(page);
 
     if (!title && canonical.productId) {
-      const canonicalUrl = `https://www.coupang.com/vp/products/${canonical.productId}`;
+      const canonicalUrl = canonical.url || `https://www.coupang.com/vp/products/${canonical.productId}`;
       try {
         await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
         await page.waitForTimeout(1200);
@@ -165,7 +195,7 @@ async function resolveWithBrowser(sourceUrl) {
         html = await page.content().catch(() => '');
         canonical = canonicalProductUrl(finalUrl, html) || canonical;
         title = await browserVisibleTitle(page);
-        if (title) console.log(`[AutopilotV3][SOURCE AFFILIATE] canonical browser title 복구 성공 productId=${canonical.productId || '-'} title="${clean(title)}"`);
+        if (title) console.log(`[AutopilotV3][SOURCE AFFILIATE] canonical browser title 복구 성공 productId=${canonical.productId || '-'} itemId=${canonical.itemId || '-'} vendorItemId=${canonical.vendorItemId || '-'} title="${clean(title)}"`);
       } catch (e) {
         console.warn(`[AutopilotV3][SOURCE AFFILIATE] canonical browser 재접근 실패 productId=${canonical.productId || '-'} reason="${e.message}"`);
       }
@@ -263,6 +293,22 @@ function strictSourceProductMatch(candidate, result) {
   return best;
 }
 
+function usableResolvedProduct(item) {
+  return !!(item?.url && /^\d+$/.test(String(item?.productId || '')) && safeTitle(item?.title));
+}
+function dedupeResolvedProducts(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items || []) {
+    if (!usableResolvedProduct(item)) continue;
+    const key = String(item.productId);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
 async function findExactSourceProduct(result) {
   if (!result?.sourceUrl || !result?.sourceUsername) return null;
   const detail = await collectPostDetails(result.sourceUrl, result.sourceUsername);
@@ -273,32 +319,60 @@ async function findExactSourceProduct(result) {
   }
   console.log(`[AutopilotV3][SOURCE AFFILIATE] @${result.sourceUsername} 작성자 C사 링크 ${links.length}개 확인`);
 
-  const resolved = [];
+  const allResolved = [];
   for (let i = 0; i < links.length; i++) {
     const item = await resolveSourceLink(links[i]);
     if (!item?.url) continue;
-    const strict = strictSourceProductMatch(item, result);
-    if (!strict.ok) {
-      console.warn(`[AutopilotV3][SOURCE AFFILIATE MATCH REJECT] @${result.sourceUsername} productId=${item.productId || '-'} title="${safeTitle(item.title) || '-'}" reference="${strict.reference || clean(result?.visionTarget?.soldObject) || clean(result?.topic) || '-'}" reason=${strict.reason} → SOLD-FIRST 기존 상품 유지`);
-      continue;
-    }
-    console.log(`[AutopilotV3][SOURCE AFFILIATE MATCH PASS] @${result.sourceUsername} productId=${item.productId || '-'} title="${safeTitle(item.title)}" reference="${strict.reference}" overlap="${(strict.overlap || []).join('/') || '-'}" score=${strict.score}`);
-    resolved.push({ ...item, index:i, strictScore:strict.score });
+    allResolved.push({ ...item, index:i });
   }
 
+  const resolved = dedupeResolvedProducts(allResolved);
   if (!resolved.length) {
-    console.warn(`[AutopilotV3][SOURCE AFFILIATE] @${result.sourceUsername} 작성자 링크 중 실제 판매대상과 검증 통과한 상품 없음 → SOLD-FIRST 기존 상품 유지`);
+    console.warn(`[AutopilotV3][SOURCE AFFILIATE] @${result.sourceUsername} productId+정상 title까지 확인된 작성자 상품 없음 → SOLD-FIRST 기존 상품 유지`);
     return null;
   }
 
-  resolved.sort((a, b) => (b.strictScore || 0) - (a.strictScore || 0));
-  const picked = resolved[0];
-  const parsedTitle = safeTitle(picked.title);
-  if (!parsedTitle) return null;
+  let picked = null;
+  if (links.length === 1 && resolved.length === 1) {
+    picked = resolved[0];
+    console.log(`[AutopilotV3][SOURCE AFFILIATE GROUND TRUTH] @${result.sourceUsername} single-link productId=${picked.productId} itemId=${picked.itemId || '-'} vendorItemId=${picked.vendorItemId || '-'} title="${safeTitle(picked.title)}" → 작성자 원본 상품 우선`);
+  } else {
+    const matched = [];
+    for (const item of resolved) {
+      const strict = strictSourceProductMatch(item, result);
+      if (!strict.ok) {
+        console.warn(`[AutopilotV3][SOURCE AFFILIATE MATCH REJECT] @${result.sourceUsername} productId=${item.productId || '-'} title="${safeTitle(item.title) || '-'}" reference="${strict.reference || clean(result?.visionTarget?.soldObject) || clean(result?.topic) || '-'}" reason=${strict.reason}`);
+        continue;
+      }
+      console.log(`[AutopilotV3][SOURCE AFFILIATE MATCH PASS] @${result.sourceUsername} productId=${item.productId || '-'} title="${safeTitle(item.title)}" reference="${strict.reference}" overlap="${(strict.overlap || []).join('/') || '-'}" score=${strict.score}`);
+      matched.push({ ...item, strictScore:strict.score });
+    }
+
+    if (!matched.length) {
+      console.warn(`[AutopilotV3][SOURCE AFFILIATE] @${result.sourceUsername} 다중 작성자 링크 중 판매대상과 일치하는 상품 없음 → SOLD-FIRST 기존 상품 유지`);
+      return null;
+    }
+    matched.sort((a, b) => (b.strictScore || 0) - (a.strictScore || 0));
+    if (matched.length > 1) {
+      const top = Number(matched[0].strictScore || 0);
+      const second = Number(matched[1].strictScore || 0);
+      if (top - second < 20) {
+        console.warn(`[AutopilotV3][SOURCE AFFILIATE AMBIGUOUS] @${result.sourceUsername} 다중링크 score=${top}/${second} margin=${top-second} < 20 → 덮어쓰기 금지 · SOLD-FIRST 유지`);
+        return null;
+      }
+    }
+    picked = matched[0];
+    console.log(`[AutopilotV3][SOURCE AFFILIATE WINNER] @${result.sourceUsername} productId=${picked.productId} score=${picked.strictScore} title="${safeTitle(picked.title)}"`);
+  }
+
+  const parsedTitle = safeTitle(picked?.title);
+  if (!picked || !parsedTitle || !picked.productId) return null;
 
   return {
     product: {
       productId: picked.productId || null,
+      itemId: picked.itemId || null,
+      vendorItemId: picked.vendorItemId || null,
       name: parsedTitle,
       image: null,
       price: null,
@@ -308,11 +382,13 @@ async function findExactSourceProduct(result) {
       rank: null,
       categoryName: null,
       sourceAffiliateExact: true,
+      sourceAffiliateGroundTruth: links.length === 1,
       sourceAffiliateOriginalUrl: picked.sourceUrl,
     },
     sourceUrl: picked.sourceUrl,
     finalUrl: picked.finalUrl,
     method: picked.method,
+    groundTruth: links.length === 1,
   };
 }
 
@@ -323,10 +399,11 @@ engine.buildThreadsFirstAutopilot = async function sourceAffiliateExactProductBu
     const exact = await findExactSourceProduct(result);
     if (exact?.product?.url) {
       result.product = exact.product;
-      result.productSearchTerm = 'source-author-affiliate-link-strict-match';
+      result.productSearchTerm = exact.groundTruth ? 'source-author-affiliate-link-ground-truth' : 'source-author-affiliate-link-unique-winner';
       result.sourceAffiliateProduct = true;
+      result.sourceAffiliateGroundTruth = !!exact.groundTruth;
       result.sourceAffiliateOriginalUrl = exact.sourceUrl;
-      console.log(`[AutopilotV3][SOURCE AFFILIATE] 검증 통과 작성자 상품 적용 productId=${exact.product.productId || '-'} product="${clean(exact.product.name)}" method=${exact.method}`);
+      console.log(`[AutopilotV3][SOURCE AFFILIATE] 작성자 상품 적용 productId=${exact.product.productId || '-'} itemId=${exact.product.itemId || '-'} vendorItemId=${exact.product.vendorItemId || '-'} product="${clean(exact.product.name)}" method=${exact.method} groundTruth=${exact.groundTruth?'yes':'no'}`);
     } else {
       console.log(`[AutopilotV3][SOURCE AFFILIATE] 작성자 링크 덮어쓰기 없음 → SOLD-FIRST 상품 유지 product="${clean(result?.product?.name) || '-'}"`);
     }
@@ -336,4 +413,4 @@ engine.buildThreadsFirstAutopilot = async function sourceAffiliateExactProductBu
   return result;
 };
 
-console.log('[Autopilot][SOURCE AFFILIATE EXACT PRODUCT] v2 strict title/evidence match · axios+JSON-LD+DOM+canonical browser title recovery · unavailable/mismatch fail-safe');
+console.log('[Autopilot][SOURCE AFFILIATE EXACT PRODUCT] v3 single-link productId+title ground truth · item/vendor identity · multi-link unique-winner · axios+browser fail-safe');
