@@ -10,65 +10,58 @@ function cleanBody(text) {
     .replace(/(^|[^0-9])\.(?![0-9])/g, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\n{4,}/g, '\n\n\n')
     .trim();
 }
 
 function needsNaturalRewrite(text) {
   const body = cleanBody(text);
   if (!body) return false;
-  const lines = body.split('\n').map((x) => x.trim()).filter(Boolean);
+  const lines = body.split('\n').map(x=>x.trim()).filter(Boolean);
   if (lines.length <= 2) return true;
-  if (lines.some((x) => x.length > 42)) return true;
+  if (lines.some(x=>x.length > 42)) return true;
   if (/왜\s*감\s+\S/.test(body)) return true;
-  if (lines.some((x) => /^(진짜|그냥|근데|그래서|그리고|이거)$/.test(x))) return true;
   return false;
 }
 
 function localBodyCleanup(text) {
   let body = cleanBody(text);
   if (!body) return body;
+  body = body.replace(/\b간편하게\b/g,'쉽게')
+    .replace(/\b실용적(?:이야|이다|인)?\b/g,'')
+    .replace(/\b효율적(?:이야|이다|인)?\b/g,'')
+    .replace(/\b활용도(?:가)?\b/g,'')
+    .replace(/[ \t]{2,}/g,' ');
 
-  body = body
-    .replace(/\b간편하게\b/g, '쉽게')
-    .replace(/\b실용적(?:이야|이다|인)?\b/g, '')
-    .replace(/\b효율적(?:이야|이다|인)?\b/g, '')
-    .replace(/\b활용도(?:가)?\b/g, '')
-    .replace(/[ \t]{2,}/g, ' ');
-
-  const blocks = body.split(/\n\n+/);
-  const cleanedBlocks = [];
+  // 생성기가 의도한 사건형 행과 문단을 다시 합치지 않는다.
+  // 특히 '근데/진짜/그래서/이거' 및 단독 반응행은 Threads 호흡으로 보존한다.
+  const pieces = body.split(/(\n{2,3})/);
+  const out = [];
   let total = 0;
-  const dangling = /(은|는|이|가|을|를|도|만|에|의|와|과|로|으로|부터|까지|해서|하고|는데|니까|면|지만|다가|거나|처럼|보다|정도)$/;
-  const weak = /^(진짜|그냥|근데|그래서|그리고|이거)$/;
-
-  for (const block of blocks) {
-    const lines = block.split('\n').map(x => x.trim()).filter(Boolean);
-    const merged = [];
-    for (const line of lines) {
-      if (total >= 8) break;
-      if (!merged.length) merged.push(line);
-      else {
-        const prev = merged[merged.length - 1];
-        if (weak.test(line) || dangling.test(prev)) merged[merged.length - 1] = `${prev} ${line}`.trim();
-        else merged.push(line);
-      }
-      total = cleanedBlocks.reduce((n,b)=>n+b.length,0) + merged.length;
+  for (const piece of pieces) {
+    if (!piece) continue;
+    if (/^\n{2,3}$/.test(piece)) {
+      if (out.length && !/^\n/.test(out[out.length - 1])) out.push(piece);
+      continue;
     }
-    if (merged.length) cleanedBlocks.push(merged);
-    if (total >= 8) break;
+    const kept = [];
+    for (const line of piece.split('\n').map(x=>x.trim()).filter(Boolean)) {
+      if (total >= 12) break;
+      kept.push(line);
+      total++;
+    }
+    if (kept.length) out.push(kept.join('\n'));
+    if (total >= 12) break;
   }
-
-  return cleanedBlocks.map(lines => lines.join('\n')).join('\n\n').replace(/\n{3,}/g,'\n\n').trim();
+  return out.join('').replace(/\n{4,}/g,'\n\n\n').trim();
 }
 
 engine.buildThreadsFirstAutopilot = async function(accountId, args = {}) {
   const result = await originalBuild(accountId, args);
   if (!result?.text) return result;
   const current = localBodyCleanup(result.text);
-  if (needsNaturalRewrite(current)) console.log(`[AutopilotV3][BODY TONE] paragraph-preserving cleanup preview="${current.slice(0,160).replace(/\n/g, ' / ')}"`);
+  if (needsNaturalRewrite(current)) console.log(`[AutopilotV3][BODY TONE] v12 preserve-only preview="${current.slice(0,160).replace(/\n/g,' / ')}"`);
   return { ...result, text: current };
 };
-
-console.log('[AutopilotV3][BODY TONE] v11 빈줄/Threads 호흡 보존 · 로컬 정리 전용');
+console.log('[AutopilotV3][BODY TONE] v12 사건형 행 합치지 않음 · 빈줄2개/최대12행 보존');
 module.exports = { needsNaturalRewrite, cleanBody, localBodyCleanup };
