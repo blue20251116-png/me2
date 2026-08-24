@@ -99,7 +99,7 @@ function badStyleReasons(text) {
   const lines = t.split('\n').map(x => x.trim()).filter(Boolean);
   const reasons = [];
   if (/(더라|하더라|했더라|더라고|하더라고|했더라고)/i.test(t)) reasons.push('더라체');
-  if (lines.some(line => /(?:함|됨|임|했음|있음|없음|좋음|편함|끝남|놀람|사라짐)(?:[!?~ㅋㅎㅠㅜ]*)$/.test(line))) reasons.push('음슴체');
+  if (lines.some(line => /(?:함|됨|임|했음|있음|없음|좋음|편함|끝남|놀람|사라짐|괜찮음|궁금해짐|달라짐|싶어짐|느껴짐)(?:[!?~ㅋㅎㅠㅜ]*)$/.test(line))) reasons.push('음슴체');
   if (lines.some(line => /(?:할|될|인|같은)\s*듯(?:[!?~ㅋㅎㅠㅜ]*)$/.test(line))) reasons.push('듯체');
   if (/[가-힣]+냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) reasons.push('냐체');
   if (/[,.]/.test(t.replace(/\d+\.\d+/g, ''))) reasons.push('마침표/쉼표');
@@ -131,14 +131,23 @@ function rewriteLineEnding(line) {
     .replace(/가능함$/g, '가능해')
     .replace(/필요함$/g, '필요해')
     .replace(/괜찮음$/g, '괜찮아')
+    .replace(/유지됨$/g, '유지돼')
+    .replace(/꿀맛임$/g, '꿀맛이야')
+    .replace(/폭발임$/g, '폭발이야')
+    .replace(/궁금해짐$/g, '궁금해')
+    .replace(/달라짐$/g, '달라져')
     .replace(/좋더라$/g, '좋아')
     .replace(/편하더라$/g, '편해')
+    .replace(/있더라$/g, '있어')
+    .replace(/없더라$/g, '없어')
+    .replace(/아니더라$/g, '아니야')
     .replace(/했더라$/g, '했어')
     .replace(/하더라$/g, '해')
     .replace(/했더라고$/g, '했어')
     .replace(/하더라고$/g, '해')
-    .replace(/더라고$/g, '')
-    .replace(/더라$/g, '')
+    .replace(/더라고$/g, '네')
+    .replace(/더라구$/g, '네')
+    .replace(/더라$/g, '네')
     .replace(/할\s*듯$/g, '할 것 같아')
     .replace(/될\s*듯$/g, '될 것 같아')
     .replace(/인\s*듯$/g, '인 것 같아')
@@ -146,14 +155,26 @@ function rewriteLineEnding(line) {
     .replace(/뭐냐$/g, '뭐지')
     .replace(/거냐$/g, '건가')
     .replace(/없냐$/g, '없나')
-    .replace(/맞냐$/g, '맞나')
-    .replace(/냐$/g, '나');
+    .replace(/맞냐$/g, '맞나');
   return repairIncompleteEnding(`${core}${suffix}`);
+}
+
+// 안전이 확인되지 않은 일반 '냐' 종결은 억지로 치환하지 않는다.
+// 문장을 망가뜨릴 위험이 있으므로, 이 경우는 라인 자체를 제거하는 쪽이 더 안전하다.
+function hasUnsafeNyaEnding(line) {
+  const raw = String(line || '').trim();
+  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ]+)$/)?.[1] || '';
+  const core = suffix ? raw.slice(0, -suffix.length) : raw;
+  if (!/[가-힣]+냐$/.test(core)) return false;
+  // 이미 안전하게 치환되는 구체 패턴은 제외한다.
+  if (/(?:뭐냐|거냐|없냐|맞냐)$/.test(core)) return false;
+  return true;
 }
 
 function fallbackRewrite(text) {
   const s = hardSanitize(text)
     .split('\n')
+    .filter(line => !hasUnsafeNyaEnding(line))
     .map(rewriteLineEnding)
     .join('\n');
   return normalizeLineBreaks(s);
@@ -166,11 +187,11 @@ engine.buildThreadsFirstAutopilot = async function finalTextHardGuardBuild(accou
   const reasons = badStyleReasons(before);
   result.text = reasons.length ? fallbackRewrite(before) : before;
   result.text = normalizeLineBreaks(result.text);
-  if (reasons.length) console.log(`[AutopilotV3][TEXT HARD GUARD] v13 fix reason=${reasons.join(',')} preview="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
+  if (reasons.length) console.log(`[AutopilotV3][TEXT HARD GUARD] v14 fix reason=${reasons.join(',')} preview="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
   const remaining = badStyleReasons(result.text);
   if (remaining.length) console.warn(`[AutopilotV3][TEXT HARD GUARD] 최종 잔여=${remaining.join(',')} text="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
   return result;
 };
 
-console.log('[Autopilot][TEXT HARD GUARD] v13 기존 말투 유지 + 미완성 어미만 최소 복구');
-module.exports = { hardSanitize, normalizeLineBreaks, badStyleReasons, fallbackRewrite, hasIncompleteEnding, repairIncompleteEnding };
+console.log('[Autopilot][TEXT HARD GUARD] v14 음슴체감지확장 + 더라·냐 자연복구');
+module.exports = { hardSanitize, normalizeLineBreaks, badStyleReasons, fallbackRewrite, hasIncompleteEnding, repairIncompleteEnding, hasUnsafeNyaEnding };
