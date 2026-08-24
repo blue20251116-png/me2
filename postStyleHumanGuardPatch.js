@@ -12,7 +12,9 @@ function clean(text) {
     .replace(/(^|[^0-9])\.(?![0-9])/g, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
+    // Threads 모바일 호흡: 빈 줄 2개(연속 \n 3개)까지 보존한다.
+    // 그 이상만 과도한 공백으로 보고 2개 빈 줄로 제한한다.
+    .replace(/\n{4,}/g, '\n\n\n')
     .trim();
 }
 
@@ -49,13 +51,22 @@ function hasUnsafeNyaEnding(line) {
 }
 
 function sanitizeByBlocks(text, result) {
-  const blocks = clean(text).split(/\n\n+/);
-  const outBlocks = [];
+  // 빈 줄 개수를 잃지 않도록 separator 자체를 보존한다.
+  const normalized = clean(text);
+  const pieces = normalized.split(/(\n{2,3})/);
+  const out = [];
   let total = 0;
-  for (const block of blocks) {
-    const out = [];
-    for (let line of block.split('\n').map(x=>x.trim()).filter(Boolean)) {
-      if (total >= 8) break;
+
+  for (const piece of pieces) {
+    if (!piece) continue;
+    if (/^\n{2,3}$/.test(piece)) {
+      if (out.length && !/^\n/.test(out[out.length - 1])) out.push(piece);
+      continue;
+    }
+
+    const kept = [];
+    for (let line of piece.split('\n').map(x => x.trim()).filter(Boolean)) {
+      if (total >= 12) break;
       if (!isRecipe(result) && RECIPE_CTA.test(line)) continue;
       if (isHealth(result) && HEALTH_EFFECT.test(line)) continue;
       if (FABRICATED_RELATION.test(line)) continue;
@@ -63,13 +74,14 @@ function sanitizeByBlocks(text, result) {
       if (hasUnsafeNyaEnding(line)) continue;
       line = lineRewrite(line);
       if (!line) continue;
-      out.push(line);
+      kept.push(line);
       total++;
     }
-    if (out.length) outBlocks.push(out);
-    if (total >= 8) break;
+    if (kept.length) out.push(kept.join('\n'));
+    if (total >= 12) break;
   }
-  return outBlocks.map(lines=>lines.join('\n')).join('\n\n').replace(/\n{3,}/g,'\n\n').trim();
+
+  return out.join('').replace(/\n{4,}/g, '\n\n\n').trim();
 }
 
 function inspect(text, result) {
@@ -89,10 +101,10 @@ engine.buildThreadsFirstAutopilot = async function postStyleHumanGuardBuild(acco
   if (!result?.text) return result;
   const text = sanitizeByBlocks(result.text, result);
   const remaining = inspect(text, result);
-  console.log(`[AutopilotV3][POST STYLE GUARD v13] remaining=${remaining.length?remaining.join(','):'PASS'} preview="${text.slice(0,180).replace(/\n/g,' / ')}"`);
+  console.log(`[AutopilotV3][POST STYLE GUARD v14] remaining=${remaining.length?remaining.join(','):'PASS'} preview="${text.slice(0,180).replace(/\n/g,' / ')}"`);
   if (remaining.length) throw new Error(`최종 Threads 문체 검사 실패: ${remaining.join(',')}`);
   return { ...result, text };
 };
 
-console.log('[AutopilotV3][POST STYLE GUARD] v13 음슴체 허용 + 핵심 위험만 fail-closed');
+console.log('[AutopilotV3][POST STYLE GUARD] v14 double-blank preserve + 핵심 위험만 fail-closed');
 module.exports = { clean, inspect, sanitizeByBlocks };
