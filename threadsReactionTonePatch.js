@@ -4,7 +4,7 @@ const originalPost = axios.post.bind(axios);
 
 const reactionGuide = `
 
-[Threads 실제 반응 말투 규칙 v13]
+[Threads 실제 반응 말투 규칙 v12]
 - 설명문 광고 카피 블로그 후기 제품 기능 요약처럼 쓰면 실패다
 - 실제 Threads 사람이 피드에 바로 쓴 글처럼 자연스럽고 날것으로 쓴다
 - 상품명이나 장점부터 설명하지 말고 입력 근거 안의 구체적인 상황 사건 장면 발견부터 시작한다
