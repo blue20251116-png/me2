@@ -7,7 +7,7 @@ let applied=false;
 
 function transformSource(src){
   const cleanMarker="function clean(v){return String(v||'').replace(/\\s+/g,' ').trim();}";
-  const cleanInsert=`${cleanMarker}\nfunction decodeEscapedNewlines(v){return String(v||'').replace(/\\\\r\\\\n/g,'\\n').replace(/\\\\n/g,'\\n').replace(/\\\\r/g,'\\n').replace(/\\n{3,}/g,'\\n\\n').trim();}\nconst CONTENT_MODE_SEQUENCE=[\n  {mode:'product',specialStory:false},\n  {mode:'recipe',specialStory:false},\n  {mode:'lifestyle',specialStory:false},\n  {mode:'product',specialStory:false},\n  {mode:'lifestyle',specialStory:true},\n  {mode:'recipe',specialStory:false},\n  {mode:'product',specialStory:false},\n  {mode:'lifestyle',specialStory:false},\n  {mode:'recipe',specialStory:false},\n  {mode:'lifestyle',specialStory:true}\n];\nconst contentModeCursor=new Map();\nfunction preferredContentSlot(accountId){const i=Number(contentModeCursor.get(accountId)||0)%CONTENT_MODE_SEQUENCE.length;return CONTENT_MODE_SEQUENCE[i];}\nfunction advanceContentMode(accountId){contentModeCursor.set(accountId,(Number(contentModeCursor.get(accountId)||0)+1)%CONTENT_MODE_SEQUENCE.length);}\nfunction specialStorySignals(v){const t=clean(v);if(!t)return 0;let s=0;for(const r of[/(고체|젤형|캡슐|스틱|패치|롤온)/i,/(자동|센서|감지|무선|진공|압축)/i,/(접이|폴딩|회전|자석|마그넷|걸이|틈새|슬라이드)/i,/(미니|휴대|포켓|벽걸이|부착|클립)/i,/(전용|일체형|분리형|다기능)/i])if(r.test(t))s++;return s;}\nfunction specialStoryScore(material,analysis,vision){const evidence=[analysis?.topic,analysis?.secretTerm,...(analysis?.searchTerms||[]),vision?.soldObject,vision?.evidence,material?.sourceText,material?.authorReplies].filter(Boolean).join(' ');let s=specialStorySignals(evidence);if(/(냄새|악취|얼룩|물때|곰팡|먼지|정리|수납|젖|습기|빨래|청소|신발|화장실|욕실|주방|차량|침대|옷장|냉장고|반려|집들이)/i.test(evidence))s+=1;if(/(뭐지|신기|처음|이런 게|특이|놀|ㅋㅋ|;;|ㅠㅠ)/i.test(evidence))s+=1;return s;}\nfunction isSpecialStoryCandidate(material,analysis,vision){return specialStoryScore(material,analysis,vision)>=2;}`;
+  const cleanInsert=`${cleanMarker}\nfunction decodeEscapedNewlines(v){return String(v||'').replace(/\\\\r\\\\n/g,'\\n').replace(/\\\\n/g,'\\n').replace(/\\\\r/g,'\\n').replace(/\\n{3,}/g,'\\n\\n').trim();}\nconst CONTENT_MODE_SEQUENCE=[\n  {mode:'product',specialStory:false},\n  {mode:'recipe',specialStory:false},\n  {mode:'product',specialStory:false},\n  {mode:'recipe',specialStory:false},\n  {mode:'product',specialStory:false},\n  {mode:'recipe',specialStory:false},\n  {mode:'product',specialStory:false},\n  {mode:'recipe',specialStory:false},\n  {mode:'product',specialStory:false},\n  {mode:'lifestyle',specialStory:false}\n];\nconst contentModeCursor=new Map();\nfunction preferredContentSlot(accountId){const i=Number(contentModeCursor.get(accountId)||0)%CONTENT_MODE_SEQUENCE.length;return CONTENT_MODE_SEQUENCE[i];}\nfunction advanceContentMode(accountId){contentModeCursor.set(accountId,(Number(contentModeCursor.get(accountId)||0)+1)%CONTENT_MODE_SEQUENCE.length);}\nfunction specialStorySignals(v){const t=clean(v);if(!t)return 0;let s=0;for(const r of[/(고체|젤형|캡슐|스틱|패치|롤온)/i,/(자동|센서|감지|무선|진공|압축)/i,/(접이|폴딩|회전|자석|마그넷|걸이|틈새|슬라이드)/i,/(미니|휴대|포켓|벽걸이|부착|클립)/i,/(전용|일체형|분리형|다기능)/i])if(r.test(t))s++;return s;}\nfunction specialStoryScore(material,analysis,vision){const evidence=[analysis?.topic,analysis?.secretTerm,...(analysis?.searchTerms||[]),vision?.soldObject,vision?.evidence,material?.sourceText,material?.authorReplies].filter(Boolean).join(' ');let s=specialStorySignals(evidence);if(/(냄새|악취|얼룩|물때|곰팡|먼지|정리|수납|젖|습기|빨래|청소|신발|화장실|욕실|주방|차량|침대|옷장|냉장고|반려|집들이)/i.test(evidence))s+=1;if(/(뭐지|신기|처음|이런 게|특이|놀|ㅋㅋ|;;|ㅠㅠ)/i.test(evidence))s+=1;return s;}\nfunction isSpecialStoryCandidate(material,analysis,vision){return specialStoryScore(material,analysis,vision)>=2;}`;
   if(!src.includes(cleanMarker))throw new Error('[CONTENT MIX PATCH] clean marker not found');
   src=src.replace(cleanMarker,cleanInsert);
 
@@ -22,7 +22,7 @@ function transformSource(src){
   src=src.replace(lifestyleMarker,lifestyleInsert);
 
   const buildMarker="async function buildThreadsFirstAutopilot(accountId,{target}){\n  const materials=await collectQualifiedThreadsMaterials(6);\n  let lastError=null;";
-  const buildInsert="async function buildThreadsFirstAutopilot(accountId,{target}){\n  const materials=await collectQualifiedThreadsMaterials(6);\n  const preferredSlot=preferredContentSlot(accountId);\n  const preferredMode=preferredSlot.mode;\n  const specialStoryWanted=preferredSlot.specialStory===true;\n  let mixMisses=0;\n  let specialStoryMisses=0;\n  console.log(`[AutopilotV3][CONTENT MIX] account=${accountId} target=30/30/20/20 preferred=${preferredMode} specialStory=${specialStoryWanted?'ON':'OFF'} softFallback=ON`);\n  let lastError=null;";
+  const buildInsert="async function buildThreadsFirstAutopilot(accountId,{target}){\n  const materials=await collectQualifiedThreadsMaterials(6);\n  const preferredSlot=preferredContentSlot(accountId);\n  const preferredMode=preferredSlot.mode;\n  const specialStoryWanted=preferredSlot.specialStory===true;\n  let mixMisses=0;\n  let specialStoryMisses=0;\n  console.log(`[AutopilotV3][CONTENT MIX] account=${accountId} target=50/40/10 preferred=${preferredMode} specialStory=${specialStoryWanted?'ON':'OFF'} softFallback=ON`);\n  let lastError=null;";
   if(!src.includes(buildMarker))throw new Error('[CONTENT MIX PATCH] build marker not found');
   src=src.replace(buildMarker,buildInsert);
 
@@ -51,10 +51,10 @@ fs.readFileSync=function(filename,...args){
     const transformed=transformSource(src);
     applied=true;
     fs.readFileSync=originalReadFileSync;
-    console.log('[Autopilot][CONTENT MIX PATCH] 30/30/20/20 + special-story soft target + lifestyle text-only + newline normalization 완료');
+    console.log('[Autopilot][CONTENT MIX PATCH] 50/40/10 + lifestyle text-only + newline normalization 완료');
     return isBuffer?Buffer.from(transformed,'utf8'):transformed;
   }
   return data;
 };
 
-console.log('[Autopilot][CONTENT MIX PATCH] 일반30/레시피30/일반생활썰20/특이상품생활썰20 · lifestyle 사진/영상 없음');
+console.log('[Autopilot][CONTENT MIX PATCH] 일반50/레시피40/일상10 · lifestyle 사진/영상 없음');
