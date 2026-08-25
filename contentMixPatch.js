@@ -22,12 +22,12 @@ function transformSource(src){
   src=src.replace(lifestyleMarker,lifestyleInsert);
 
   const buildMarker="async function buildThreadsFirstAutopilot(accountId,{target}){\n  const materials=await collectQualifiedThreadsMaterials(6);\n  let lastError=null;";
-  const buildInsert="async function buildThreadsFirstAutopilot(accountId,{target}){\n  const materials=await collectQualifiedThreadsMaterials(6);\n  const preferredSlot=preferredContentSlot(accountId);\n  const preferredMode=preferredSlot.mode;\n  const specialStoryWanted=preferredSlot.specialStory===true;\n  let mixMisses=0;\n  let specialStoryMisses=0;\n  console.log(`[AutopilotV3][CONTENT MIX] account=${accountId} target=45/45/10 preferred=${preferredMode} specialStory=${specialStoryWanted?'ON':'OFF'} softFallback=ON`);\n  let lastError=null;";
+  const buildInsert="async function buildThreadsFirstAutopilot(accountId,{target}){\n  const materials=await collectQualifiedThreadsMaterials(6);\n  const preferredSlot=preferredContentSlot(accountId);\n  const preferredMode=preferredSlot.mode;\n  const specialStoryWanted=preferredSlot.specialStory===true;\n  console.log(`[AutopilotV3][CONTENT MIX] account=${accountId} target=45/45/10 preferred=${preferredMode} specialStory=${specialStoryWanted?'ON':'OFF'} softFallback=ON publishRateFirst=ON`);\n  let lastError=null;";
   if(!src.includes(buildMarker))throw new Error('[CONTENT MIX PATCH] build marker not found');
   src=src.replace(buildMarker,buildInsert);
 
   const analysisMarker="      const analysis=await analyzeMaterial(accountId,material,target,vision);\n      if(!analysis.searchTerms.length){";
-  const analysisInsert="      const analysis=await analyzeMaterial(accountId,material,target,vision);\n      if(preferredMode==='product'&&analysis.mode==='lifestyle'&&analysis.searchTerms.length>0){analysis.mode='product';console.log(`[AutopilotV3][CONTENT MIX PRODUCT LOCK] preferred=product got=lifestyle sellable=yes → product 관찰형 유지`);}\n      if(analysis.mode!==preferredMode&&idx<materials.length-1&&mixMisses<1){mixMisses++;console.log(`[AutopilotV3][CONTENT MIX SKIP] preferred=${preferredMode} got=${analysis.mode} @${material.username||'-'} → 1회만 다음 소재`);continue;}\n      if(analysis.mode!==preferredMode)console.log(`[AutopilotV3][CONTENT MIX SOFT FALLBACK] preferred=${preferredMode} got=${analysis.mode} → 발행률 우선 진행`);\n      const specialStory=analysis.mode==='lifestyle'&&specialStoryWanted&&isSpecialStoryCandidate(material,analysis,vision);\n      if(analysis.mode==='lifestyle'&&specialStoryWanted&&!specialStory&&idx<materials.length-1&&specialStoryMisses<1){specialStoryMisses++;console.log(`[AutopilotV3][SPECIAL STORY SKIP] score=${specialStoryScore(material,analysis,vision)} @${material.username||'-'} → 특이상품/썰감 후보 1회만 추가 탐색`);continue;}\n      if(analysis.mode==='lifestyle'&&specialStoryWanted&&!specialStory)console.log(`[AutopilotV3][SPECIAL STORY FALLBACK] 특이상품 후보 없음 → 일반 lifestyle로 발행률 유지`);\n      if(specialStory)console.log(`[AutopilotV3][SPECIAL STORY] selected score=${specialStoryScore(material,analysis,vision)} @${material.username||'-'}`);\n      if(!analysis.searchTerms.length){";
+  const analysisInsert="      const analysis=await analyzeMaterial(accountId,material,target,vision);\n      if(preferredMode==='product'&&analysis.mode==='lifestyle'&&analysis.searchTerms.length>0){analysis.mode='product';console.log(`[AutopilotV3][CONTENT MIX PRODUCT LOCK] preferred=product got=lifestyle sellable=yes → product 관찰형 유지`);}\n      if(analysis.mode!==preferredMode)console.log(`[AutopilotV3][CONTENT MIX SOFT FALLBACK] preferred=${preferredMode} got=${analysis.mode} → 후보 소모 없이 발행 시도`);\n      const specialStory=analysis.mode==='lifestyle'&&specialStoryWanted&&isSpecialStoryCandidate(material,analysis,vision);\n      if(analysis.mode==='lifestyle'&&specialStoryWanted&&!specialStory)console.log(`[AutopilotV3][SPECIAL STORY FALLBACK] score=${specialStoryScore(material,analysis,vision)} → 후보를 버리지 않고 일반 lifestyle로 발행 시도`);\n      if(specialStory)console.log(`[AutopilotV3][SPECIAL STORY] selected score=${specialStoryScore(material,analysis,vision)} @${material.username||'-'}`);\n      if(!analysis.searchTerms.length){";
   if(!src.includes(analysisMarker))throw new Error('[CONTENT MIX PATCH] analysis marker not found');
   src=src.replace(analysisMarker,analysisInsert);
 
@@ -51,10 +51,10 @@ fs.readFileSync=function(filename,...args){
     const transformed=transformSource(src);
     applied=true;
     fs.readFileSync=originalReadFileSync;
-    console.log('[Autopilot][CONTENT MIX PATCH] 45/45/10 + special-story 5 + product-lock + product observation-only + lifestyle text-only 완료');
+    console.log('[Autopilot][CONTENT MIX PATCH] 45/45/10 + special-story 5 + product-lock + publish-rate-first soft fallback + lifestyle text-only 완료');
     return isBuffer?Buffer.from(transformed,'utf8'):transformed;
   }
   return data;
 };
 
-console.log('[Autopilot][CONTENT MIX PATCH] 일반45/레시피45/일상5/특수상품썰5 · sellable lifestyle→product lock · lifestyle 사진/영상 없음');
+console.log('[Autopilot][CONTENT MIX PATCH] 일반45/레시피45/일상5/특수상품썰5 · 후보3개 유지 · mode mismatch 후보 즉시폐기 제거 · exact identity 유지');
