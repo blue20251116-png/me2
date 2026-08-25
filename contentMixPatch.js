@@ -17,7 +17,7 @@ function transformSource(src){
   src=src.replace(commonToneMarker,commonToneInsert);
 
   const lifestyleMarker=`[일반상품/생활]\n- 본문 text는 제품 설명서가 아니라 상황→불편/발견→반응의 흐름을 우선한다.\n- 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.\n- commentLead에는 '✅ 핵심만' 아래 핵심 포인트 2~3개만 간결하게 쓴다.`;
-  const lifestyleInsert=`[일반상품/생활]\n- analysis.mode가 product이면 원문·이미지·영상에서 실제 확인되는 장면과 상품 특징만 사용한다. 관찰/반응 → 확인된 기능 또는 쓰임 하나 → 짧은 반응 흐름으로 쓰고, 내가 샀다·써봤다·먹어봤다 또는 남편·아이·친구·강아지와 실제로 겪은 것처럼 보이는 개인 서사를 새로 만들지 않는다.\n- analysis.mode가 lifestyle이고 analysis.specialStory가 true일 때만 특수상품 일상썰 구조를 사용한다. 이때 소재에서 확인되는 생활 문제와 상품 특성을 바탕으로 공감 상황 → 불편 확대 → 제품/해결책 반전 흐름을 만들 수 있지만, 확인되지 않은 구체적 인물·구매·사용 사실을 사실처럼 단정하지 않는다.\n- analysis.mode가 lifestyle이고 analysis.specialStory가 false이면 상품 홍보를 앞세우지 않는 짧은 일상형 텍스트로 쓴다.\n- product 모드와 specialStory 모드를 절대 섞지 않는다. 일반상품에 특수상품용 가상 생활썰을 붙이지 않는다.\n- 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.\n- 검증 가능한 브랜드명·모델명·수치·가격·효능은 원문/판매대상 근거가 있을 때만 쓴다.\n- 한 줄에 한 생각만 쓰고 의미 덩어리 사이에는 빈 줄을 둘 수 있다.\n- commentLead에는 '✅ 핵심만' 아래 핵심 포인트 2~3개만 간결하게 쓴다.`;
+  const lifestyleInsert=`[일반상품/생활]\n- analysis.mode가 product이면 원문·이미지·영상에서 실제 확인되는 장면과 상품 특징만 사용한다. 관찰/반응 → 확인된 기능 또는 쓰임 하나 → 짧은 반응 흐름으로 쓰고, 내가 샀다·써봤다·먹어봤다 또는 남편·아이·친구·강아지와 실제로 겪은 것처럼 보이는 개인 서사를 새로 만들지 않는다.\n- product에서는 '비밀 재료', '비밀 소스', 레시피 댓글 유도 같은 음식 전용 표현을 절대 쓰지 않는다.\n- analysis.mode가 lifestyle이고 analysis.specialStory가 true일 때만 특수상품 일상썰 구조를 사용한다. 이때 소재에서 확인되는 생활 문제와 상품 특성을 바탕으로 공감 상황 → 불편 확대 → 제품/해결책 반전 흐름을 만들 수 있지만, 확인되지 않은 구체적 인물·구매·사용 사실을 사실처럼 단정하지 않는다.\n- analysis.mode가 lifestyle이고 analysis.specialStory가 false이면 상품 홍보를 앞세우지 않는 짧은 일상형 텍스트로 쓴다.\n- product 모드와 specialStory 모드를 절대 섞지 않는다. 일반상품에 특수상품용 가상 생활썰을 붙이지 않는다.\n- 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.\n- 검증 가능한 브랜드명·모델명·수치·가격·효능은 원문/판매대상 근거가 있을 때만 쓴다.\n- 한 줄에 한 생각만 쓰고 의미 덩어리 사이에는 빈 줄을 둘 수 있다.\n- commentLead에는 '✅ 핵심만' 아래 핵심 포인트 2~3개만 간결하게 쓴다.`;
   if(!src.includes(lifestyleMarker))throw new Error('[CONTENT MIX PATCH] lifestyle marker not found');
   src=src.replace(lifestyleMarker,lifestyleInsert);
 
@@ -27,7 +27,7 @@ function transformSource(src){
   src=src.replace(buildMarker,buildInsert);
 
   const analysisMarker="      const analysis=await analyzeMaterial(accountId,material,target,vision);\n      if(!analysis.searchTerms.length){";
-  const analysisInsert="      const analysis=await analyzeMaterial(accountId,material,target,vision);\n      if(analysis.mode!==preferredMode&&idx<materials.length-1&&mixMisses<1){mixMisses++;console.log(`[AutopilotV3][CONTENT MIX SKIP] preferred=${preferredMode} got=${analysis.mode} @${material.username||'-'} → 1회만 다음 소재`);continue;}\n      if(analysis.mode!==preferredMode)console.log(`[AutopilotV3][CONTENT MIX SOFT FALLBACK] preferred=${preferredMode} got=${analysis.mode} → 발행률 우선 진행`);\n      const specialStory=analysis.mode==='lifestyle'&&specialStoryWanted&&isSpecialStoryCandidate(material,analysis,vision);\n      if(analysis.mode==='lifestyle'&&specialStoryWanted&&!specialStory&&idx<materials.length-1&&specialStoryMisses<1){specialStoryMisses++;console.log(`[AutopilotV3][SPECIAL STORY SKIP] score=${specialStoryScore(material,analysis,vision)} @${material.username||'-'} → 특이상품/썰감 후보 1회만 추가 탐색`);continue;}\n      if(analysis.mode==='lifestyle'&&specialStoryWanted&&!specialStory)console.log(`[AutopilotV3][SPECIAL STORY FALLBACK] 특이상품 후보 없음 → 일반 lifestyle로 발행률 유지`);\n      if(specialStory)console.log(`[AutopilotV3][SPECIAL STORY] selected score=${specialStoryScore(material,analysis,vision)} @${material.username||'-'}`);\n      if(!analysis.searchTerms.length){";
+  const analysisInsert="      const analysis=await analyzeMaterial(accountId,material,target,vision);\n      if(preferredMode==='product'&&analysis.mode==='lifestyle'&&analysis.searchTerms.length>0){analysis.mode='product';console.log(`[AutopilotV3][CONTENT MIX PRODUCT LOCK] preferred=product got=lifestyle sellable=yes → product 관찰형 유지`);}\n      if(analysis.mode!==preferredMode&&idx<materials.length-1&&mixMisses<1){mixMisses++;console.log(`[AutopilotV3][CONTENT MIX SKIP] preferred=${preferredMode} got=${analysis.mode} @${material.username||'-'} → 1회만 다음 소재`);continue;}\n      if(analysis.mode!==preferredMode)console.log(`[AutopilotV3][CONTENT MIX SOFT FALLBACK] preferred=${preferredMode} got=${analysis.mode} → 발행률 우선 진행`);\n      const specialStory=analysis.mode==='lifestyle'&&specialStoryWanted&&isSpecialStoryCandidate(material,analysis,vision);\n      if(analysis.mode==='lifestyle'&&specialStoryWanted&&!specialStory&&idx<materials.length-1&&specialStoryMisses<1){specialStoryMisses++;console.log(`[AutopilotV3][SPECIAL STORY SKIP] score=${specialStoryScore(material,analysis,vision)} @${material.username||'-'} → 특이상품/썰감 후보 1회만 추가 탐색`);continue;}\n      if(analysis.mode==='lifestyle'&&specialStoryWanted&&!specialStory)console.log(`[AutopilotV3][SPECIAL STORY FALLBACK] 특이상품 후보 없음 → 일반 lifestyle로 발행률 유지`);\n      if(specialStory)console.log(`[AutopilotV3][SPECIAL STORY] selected score=${specialStoryScore(material,analysis,vision)} @${material.username||'-'}`);\n      if(!analysis.searchTerms.length){";
   if(!src.includes(analysisMarker))throw new Error('[CONTENT MIX PATCH] analysis marker not found');
   src=src.replace(analysisMarker,analysisInsert);
 
@@ -51,10 +51,10 @@ fs.readFileSync=function(filename,...args){
     const transformed=transformSource(src);
     applied=true;
     fs.readFileSync=originalReadFileSync;
-    console.log('[Autopilot][CONTENT MIX PATCH] 45/45/10 + special-story 5 + product observation-only + lifestyle text-only 완료');
+    console.log('[Autopilot][CONTENT MIX PATCH] 45/45/10 + special-story 5 + product-lock + product observation-only + lifestyle text-only 완료');
     return isBuffer?Buffer.from(transformed,'utf8'):transformed;
   }
   return data;
 };
 
-console.log('[Autopilot][CONTENT MIX PATCH] 일반45/레시피45/일상5/특수상품썰5 · product 관찰형 · lifestyle 사진/영상 없음');
+console.log('[Autopilot][CONTENT MIX PATCH] 일반45/레시피45/일상5/특수상품썰5 · sellable lifestyle→product lock · lifestyle 사진/영상 없음');
