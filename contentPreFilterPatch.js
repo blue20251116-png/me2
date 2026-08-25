@@ -27,9 +27,8 @@ function transformSource(src) {
 
   const visionMarker = '      const vision=await identifyCommerceTarget(accountId,material);';
   const visionInsert = `      const localMode=localStrongContentMode(material);
-      if(localMode&&localMode!==preferredMode&&idx<materials.length-1){
-        console.log(\`[AutopilotV3][LOCAL PREFILTER SKIP] preferred=\${preferredMode} local=\${localMode} @\${material.username||'-'} → Vision 생략\`);
-        continue;
+      if(localMode&&localMode!==preferredMode){
+        console.log(\`[AutopilotV3][LOCAL PREFILTER DEFER] preferred=\${preferredMode} local=\${localMode} @\${material.username||'-'} → 후보 유지 · Vision/실제 판정 계속\`);
       }
       const vision=await identifyCommerceTarget(accountId,material);`;
   if (!src.includes(visionMarker)) {
@@ -48,10 +47,10 @@ fs.readFileSync = function localPrefilterRead(filename, ...args) {
     const transformed = transformSource(src);
     applied = true;
     fs.readFileSync = previousReadFileSync;
-    console.log('[Autopilot][LOCAL PREFILTER] 명백한 레시피는 mode 불일치 시 Vision 호출 전 생략');
+    console.log('[Autopilot][LOCAL PREFILTER] 후보3개 유지 · 로컬 mode 불일치여도 Vision/실제 판정 계속 · exact identity untouched');
     return isBuffer ? Buffer.from(transformed, 'utf8') : transformed;
   }
   return data;
 };
 
-console.log('[Autopilot][LOCAL PREFILTER] source hook armed');
+console.log('[Autopilot][LOCAL PREFILTER] source hook armed · no early candidate drop');
