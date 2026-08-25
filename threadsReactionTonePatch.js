@@ -4,14 +4,17 @@ const originalPost = axios.post.bind(axios);
 
 const reactionGuide = `
 
-[Threads 실제 반응 말투 규칙 v17 - 비정형 사건 + 모바일 호흡]
+[Threads 실제 반응 말투 규칙 v18 - 비정형 사건 + 모바일 호흡]
 - 설명문 광고 카피 블로그 후기 제품 기능 요약처럼 쓰면 실패다
 - 제품을 설명하기보다 원문에 있는 구체적인 장면이나 반응 하나를 잡는다
 - 사건에는 정해진 순서가 없다
 - 발견 → 의심 → 행동 → 확인 → 반응 순서를 기본 공식으로 쓰지 않는다
+- 상황 → 불편/발견 → 반응 순서도 기본 공식으로 쓰지 않는다
 - '이거 → 처음엔/뭐지 → 근데/보니까 → 생각보다' 구조를 반복하지 않는다
 - 대상부터 평가하는 '이거 아이디어 괜찮다' '이 조합 신기하다' 같은 시작을 습관적으로 쓰지 않는다
 - 어떤 글은 상황 중간에서 시작하고 어떤 글은 결과부터 어떤 글은 행동부터 어떤 글은 짧은 반응만 쓰고 끝내도 된다
+- 모든 글에 시작 훅을 억지로 만들지 않는다
+- 2줄짜리 짧은 반응글도 정상이고 필요한 소재만 길게 쓴다
 - 직접 경험 근거가 없으면 구매 사용 경험을 지어내지 않는다
 - 장점을 직접 나열하기보다 원문에 있는 행동 장면 변화 반응을 우선한다
 - 모든 글에 의심 놀람 반전을 억지로 만들지 않는다
@@ -20,6 +23,7 @@ const reactionGuide = `
 
 [Threads 모바일 호흡]
 - 한 행은 대체로 짧게 쓰되 숫자로 길이를 맞추지 않는다
+- 3~7줄 같은 고정 길이를 목표로 하지 않는다
 - 조사나 어절 중간에서 강제로 자르지 않는다
 - 서로 이어지는 문장은 붙여도 된다
 - 장면이나 감정이 바뀔 때만 빈 줄을 사용할 수 있다
@@ -57,15 +61,42 @@ function isThreadsWritingPrompt(content) {
   return /한국 Threads/.test(s) && /(쇼핑\/레시피 글 편집자|본문 말투 교정기|실제 사람이 올린 것 같은 글|최종 편집기)/.test(s);
 }
 
+function removeFixedStoryBias(content) {
+  return String(content || '')
+    .replace(
+      /- 친구가 Threads에 툭 올린 느낌으로 짧게 쓴다\. 3~7줄, 짧은 문장, 줄바꿈 중심\./g,
+      '- 친구가 Threads에 툭 올린 느낌으로 쓴다. 길이와 줄 수는 소재에 따라 달라야 하고 짧은 반응만으로 끝나도 된다.'
+    )
+    .replace(
+      /- 첫 문장에서 '~은\/는 \.\.\.입니다'처럼 정의하지 않는다\. 반응·상황·의외성·궁금증으로 시작한다\./g,
+      "- 첫 문장에서 '~은/는 ...입니다'처럼 정의하지 않는다. 시작 방식은 고정하지 말고 원문에서 가장 자연스러운 지점부터 바로 쓴다."
+    )
+    .replace(
+      /- 본문 text는 제품 설명서가 아니라 상황→불편\/발견→반응의 흐름을 우선한다\./g,
+      '- 본문 text는 제품 설명서가 아니어야 한다. 상황 불편 발견 반응을 정해진 순서로 채우지 말고 원문에서 실제로 말할 가치가 있는 한 장면이나 한 생각만 골라도 된다.'
+    )
+    .replace(
+      /- 3~7줄 정도\. 한 줄은 되도록 짧게\./g,
+      '- 줄 수를 정해 맞추지 않는다. 짧은 글은 2~3줄에서 끝내도 되고 실제 사건이 충분할 때만 더 길게 쓴다.'
+    )
+    .replace(
+      /- 첫 줄부터 정의\/설명하지 말고 반응, 상황, 의외성, 궁금증 중 하나로 시작한다\./g,
+      '- 첫 줄부터 정의나 설명문으로 시작하지 않는다. 다만 반응 상황 의외성 궁금증 중 하나를 의무적으로 채우지 말고 원문에서 가장 자연스러운 시작점을 쓴다.'
+    );
+}
+
 axios.post = async function patchedReactionPost(url, data, config) {
   try {
     if (url === 'https://api.openai.com/v1/chat/completions' && Array.isArray(data?.messages)) {
       const messages = data.messages.map(m => ({ ...m }));
       const systemIndex = messages.findIndex(m => m.role === 'system');
       if (systemIndex >= 0 && isThreadsWritingPrompt(messages[systemIndex].content)) {
-        messages[systemIndex].content = String(messages[systemIndex].content || '') + reactionGuide;
+        const original = String(messages[systemIndex].content || '');
+        const relaxed = removeFixedStoryBias(original);
+        messages[systemIndex].content = relaxed + reactionGuide;
         data = { ...data, messages };
-        console.log('[AutopilotV3][REACTION TONE] v17 non-template diversity injected');
+        const changed = original !== relaxed;
+        console.log(`[AutopilotV3][REACTION TONE] v18 fixed-story-bias=${changed ? 'REMOVED' : 'NONE'} non-template diversity injected`);
       }
     }
   } catch (e) {
@@ -74,4 +105,4 @@ axios.post = async function patchedReactionPost(url, data, config) {
   return originalPost(url, data, config);
 };
 
-console.log('[AutopilotV3][REACTION TONE] v17 non-template diversity + no eumseum');
+console.log('[AutopilotV3][REACTION TONE] v18 fixed-story skeleton 제거 + non-template diversity + no eumseum');
