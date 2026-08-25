@@ -1,7 +1,7 @@
 'use strict';
 
 // Threads body rhythm patch
-// 목적: 현재 생성된 문장/말투는 그대로 두고 줄바꿈과 빈 줄만 자연스럽게 정리한다.
+// 목적: 문장/말투는 그대로 두고 의미 단위 줄바꿈과 빈 줄만 자연스럽게 정리한다.
 // 새 표현, ㅋㅋ, 감탄사, CTA를 추가하지 않는다.
 
 const engine = require('./autopilotMaterialEngine');
@@ -23,24 +23,55 @@ function normalizeForCompare(text) {
   return clean(text).replace(/\s+/g, '');
 }
 
+function looksLikeNaturalEnding(word) {
+  return /(?:했다|했어|였어|있어|없어|좋아|같아|더라|더라고|거야|잖아|인데|했는데|해|돼|줘|봐|네|지|까|자|다|듯해|듯|임|함)[!?~ㅋㅎㅠㅜ]*$/.test(String(word || ''));
+}
+
+function splitSemanticLine(line) {
+  const words = String(line || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length <= 1) return words.length ? [words[0]] : [];
+
+  const units = [];
+  let current = [];
+  for (const word of words) {
+    current.push(word);
+    const joined = current.join(' ');
+    // 글자수로 강제로 자르지 않는다. 충분한 길이 + 자연스러운 어미가 있을 때만 끊는다.
+    if (joined.length >= 20 && looksLikeNaturalEnding(word)) {
+      units.push(joined);
+      current = [];
+    }
+  }
+  if (current.length) units.push(current.join(' '));
+  return units;
+}
+
 function preserveOnlyRhythm(text) {
   const src = clean(text);
   if (!src) return src;
 
-  // 이미 생성기가 문단을 만든 경우 그 구조를 우선 보존한다.
-  if (/\n\s*\n/.test(src)) return src;
+  // 기존 빈 줄을 무조건 신뢰하지 않는다. 긴 덩어리는 의미 단위로 다시 호흡을 만든다.
+  const rawParagraphs = src.split(/\n{2,}/).map(x => x.trim()).filter(Boolean);
+  const units = [];
+  for (const paragraph of rawParagraphs) {
+    const physicalLines = paragraph.split('\n').map(x => x.trim()).filter(Boolean);
+    for (const line of physicalLines) {
+      units.push(...splitSemanticLine(line));
+    }
+  }
 
-  const lines = src.split('\n').map(x => x.trim()).filter(Boolean);
-  if (lines.length < 3) return src;
+  if (units.length <= 1) return src;
 
-  // 문장 내용은 바꾸지 않고 4줄 이상일 때만 중간에 한 번 호흡을 준다.
-  // 3줄은 그대로 두어 모든 글이 같은 레이아웃이 되는 것을 막는다.
-  if (lines.length === 3) return lines.join('\n');
+  // 1~2개 의미 단위마다 한 문단. 문장 중간 hard-wrap은 하지 않는다.
+  const paragraphs = [];
+  for (let i = 0; i < units.length; ) {
+    const remain = units.length - i;
+    const take = remain === 3 ? 1 : Math.min(2, remain);
+    paragraphs.push(units.slice(i, i + take).join('\n'));
+    i += take;
+  }
 
-  const cut = lines.length === 4 ? 2 : Math.min(3, Math.max(2, Math.floor(lines.length / 2)));
-  return `${lines.slice(0, cut).join('\n')}\n\n${lines.slice(cut).join('\n')}`
-    .replace(/\n{4,}/g, '\n\n\n')
-    .trim();
+  return paragraphs.join('\n\n').replace(/\n{4,}/g, '\n\n\n').trim();
 }
 
 function contentPreserved(before, after) {
@@ -59,10 +90,10 @@ engine.buildThreadsFirstAutopilot = async function threadsRhythmBuild(accountId,
     return { ...result, text: before };
   }
 
-  console.log(`[AutopilotV3][THREADS RHYTHM] preserve-only lines=${after.split('\n').filter(Boolean).length} preview="${after.slice(0,160).replace(/\n/g,' / ')}"`);
+  console.log(`[AutopilotV3][THREADS RHYTHM] v2 semantic-paragraphs=${after.split(/\n{2,}/).filter(Boolean).length} preview="${after.slice(0,160).replace(/\n/g,' / ')}"`);
   return { ...result, text: after };
 };
 
-console.log('[AutopilotV3][THREADS RHYTHM] v1 문장 100% 보존 · 줄바꿈/빈줄 전용');
+console.log('[AutopilotV3][THREADS RHYTHM] v2 의미단위 개행 · 문장중간 강제개행 금지 · 내용 100% 보존');
 
-module.exports = { clean, normalizeForCompare, preserveOnlyRhythm, contentPreserved };
+module.exports = { clean, normalizeForCompare, splitSemanticLine, preserveOnlyRhythm, contentPreserved };
