@@ -49,17 +49,19 @@ const INCOMPLETE_ENDINGS = [
   { re: /해보$/, to: '해봤어' }, { re: /사보$/, to: '사봤어' },
   { re: /찾아보$/, to: '찾아봤어' }, { re: /챙겨먹$/, to: '챙겨먹어' },
   { re: /생각하$/, to: '생각해' }, { re: /느껴지$/, to: '느껴져' },
+  // '붙여야겠😨'처럼 종결어미가 '겠'에서 잘린 문장은 자연스러운 반말 '겠어'로 복구한다
+  { re: /겠$/, to: '겠어' },
 ];
 
 function hasIncompleteEnding(line) {
   const raw = String(line || '').trim();
-  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ]+)$/)?.[1] || '';
+  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ😨😱😂🤣🥲😭]+)$/u)?.[1] || '';
   const core = suffix ? raw.slice(0, -suffix.length).trim() : raw;
   return INCOMPLETE_ENDINGS.some(rule => rule.re.test(core));
 }
 function repairIncompleteEnding(line) {
   const raw = String(line || '').trim();
-  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ]+)$/)?.[1] || '';
+  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ😨😱😂🤣🥲😭]+)$/u)?.[1] || '';
   let core = suffix ? raw.slice(0, -suffix.length).trim() : raw;
   for (const rule of INCOMPLETE_ENDINGS) {
     if (!rule.re.test(core)) continue;
@@ -79,7 +81,7 @@ function badStyleReasons(text) {
   return [...new Set(reasons)];
 }
 function rewriteLineEnding(line) {
-  const suffix = String(line || '').match(/([!?~ㅋㅎㅠㅜ]+)$/)?.[1] || '';
+  const suffix = String(line || '').match(/([!?~ㅋㅎㅠㅜ😨😱😂🤣🥲😭]+)$/u)?.[1] || '';
   let core = suffix ? String(line).slice(0, -suffix.length) : String(line);
   core = core.replace(/좋더라$/g,'좋아').replace(/편하더라$/g,'편해').replace(/있더라$/g,'있어').replace(/없더라$/g,'없어')
     .replace(/아니더라$/g,'아니야').replace(/했더라$/g,'했어').replace(/하더라$/g,'해').replace(/했더라고$/g,'했어')
@@ -89,7 +91,7 @@ function rewriteLineEnding(line) {
 }
 function hasUnsafeNyaEnding(line) {
   const raw = String(line || '').trim();
-  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ]+)$/)?.[1] || '';
+  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ😨😱😂🤣🥲😭]+)$/u)?.[1] || '';
   const core = suffix ? raw.slice(0, -suffix.length) : raw;
   if (!/[가-힣]+냐$/.test(core)) return false;
   if (/(?:뭐냐|거냐|없냐|맞냐)$/.test(core)) return false;
@@ -106,10 +108,10 @@ engine.buildThreadsFirstAutopilot = async function finalTextHardGuardBuild(accou
   const reasons = badStyleReasons(before);
   result.text = reasons.length ? fallbackRewrite(before) : before;
   result.text = normalizeLineBreaks(result.text);
-  if (reasons.length) console.log(`[AutopilotV3][TEXT HARD GUARD] v16 fix reason=${reasons.join(',')} preview="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
+  if (reasons.length) console.log(`[AutopilotV3][TEXT HARD GUARD] v17 fix reason=${reasons.join(',')} preview="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
   const remaining = badStyleReasons(result.text);
   if (remaining.length) console.warn(`[AutopilotV3][TEXT HARD GUARD] 최종 잔여=${remaining.join(',')} text="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
   return result;
 };
-console.log('[Autopilot][TEXT HARD GUARD] v16 사건형 줄바꿈/빈줄2개 보존 · 최소 문체 안전정리');
+console.log('[Autopilot][TEXT HARD GUARD] v17 dangling 겠→겠어 + 기존 최소 문체 안전정리');
 module.exports = { hardSanitize, normalizeLineBreaks, badStyleReasons, fallbackRewrite, hasIncompleteEnding, repairIncompleteEnding, hasUnsafeNyaEnding };
