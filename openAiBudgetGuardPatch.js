@@ -8,7 +8,7 @@ let queue = Promise.resolve();
 let lastStartAt = 0;
 const MIN_GAP_MS = Math.max(1000, Number(process.env.OPENAI_MIN_GAP_MS || 3000));
 const ANALYSIS_CACHE_MS = Math.max(5 * 60 * 1000, Number(process.env.OPENAI_ANALYSIS_CACHE_MS || 24 * 60 * 60 * 1000));
-const MAX_REQUESTS_PER_HOUR = Math.max(10, Number(process.env.OPENAI_MAX_REQUESTS_PER_HOUR || 120));
+const MAX_REQUESTS_PER_HOUR = Math.max(10, Number(process.env.OPENAI_MAX_REQUESTS_PER_HOUR || 240));
 const MAX_TEXT_CHARS = Math.max(6000, Number(process.env.OPENAI_MAX_TEXT_CHARS || 18000));
 const VISION_DETAIL = /^(low|high|auto)$/i.test(String(process.env.OPENAI_VISION_DETAIL || 'low'))
   ? String(process.env.OPENAI_VISION_DETAIL || 'low').toLowerCase()
