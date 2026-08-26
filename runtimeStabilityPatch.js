@@ -19,11 +19,14 @@ Module.prototype._compile = function runtimeStabilityCompile(content, filename) 
     const visionReplacement = "    }catch(e){\n      " + budgetGuardLine() + "\n      console.warn(`[AutopilotV3][VISION TARGET] 이미지 분석 실패 → 텍스트 재시도: ${e.response?.status||'-'} ${e.response?.data?.error?.message||e.message}`);\n    }";
     const textCatch = "  }catch(e){\n    console.warn(`[AutopilotV3][TEXT TARGET] 실패: ${e.response?.status||'-'} ${e.response?.data?.error?.message||e.message}`);\n    return{kind:'product',soldObject:'',dish:'',promotedIngredient:'',searchTerms:[],confidence:0,evidence:''};\n  }";
     const textReplacement = "  }catch(e){\n    " + budgetGuardLine() + "\n    console.warn(`[AutopilotV3][TEXT TARGET] 실패: ${e.response?.status||'-'} ${e.response?.data?.error?.message||e.message}`);\n    return{kind:'product',soldObject:'',dish:'',promotedIngredient:'',searchTerms:[],confidence:0,evidence:''};\n  }";
+    const tryCatch = "    }catch(e){\n      lastError=e;\n      console.warn(`[AutopilotV3][TRY FAIL] @${material.username||'-'} ${e.response?.data?.error?.message||e.message} → 다음 소재`);\n      if(coupangApi.isRateLimitError?.(e))throw e;\n      markUsedPost(material.url);\n    }";
+    const tryReplacement = "    }catch(e){\n      lastError=e;\n      " + budgetGuardLine() + "\n      console.warn(`[AutopilotV3][TRY FAIL] @${material.username||'-'} ${e.response?.data?.error?.message||e.message} → 다음 소재`);\n      if(coupangApi.isRateLimitError?.(e))throw e;\n      markUsedPost(material.url);\n    }";
 
     let hits = 0;
     if (source.includes(visionCatch)) { source = source.replace(visionCatch, visionReplacement); hits++; }
     if (source.includes(textCatch)) { source = source.replace(textCatch, textReplacement); hits++; }
-    console.log(`[Autopilot][RUNTIME STABILITY] engine budget propagation ${hits===2?'ON':'PARTIAL('+hits+'/2)'}`);
+    if (source.includes(tryCatch)) { source = source.replace(tryCatch, tryReplacement); hits++; }
+    console.log(`[Autopilot][RUNTIME STABILITY] engine budget propagation ${hits===3?'ON':'PARTIAL('+hits+'/3)'}`);
     patched.add(base);
   }
 
