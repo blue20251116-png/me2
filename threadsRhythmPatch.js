@@ -1,4 +1,5 @@
 'use strict';
+const { normalizeVoice, voiceGuide, voiceProblems } = require('./threadsVoicePolicy');
 
 // Threads body rhythm patch
 // 목적: 문장/말투는 그대로 두고 의미 단위 줄바꿈과 빈 줄만 자연스럽게 정리한다.
@@ -11,8 +12,6 @@ function clean(text) {
   return String(text || '')
     .replace(/\r/g, '')
     .replace(/\\n/g, '\n')
-    .replace(/,/g, '')
-    .replace(/(^|[^0-9])\.(?![0-9])/g, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{4,}/g, '\n\n\n')
@@ -46,33 +45,7 @@ function splitSemanticLine(line) {
   return units;
 }
 
-function preserveOnlyRhythm(text) {
-  const src = clean(text);
-  if (!src) return src;
-
-  // 기존 빈 줄을 무조건 신뢰하지 않는다. 긴 덩어리는 의미 단위로 다시 호흡을 만든다.
-  const rawParagraphs = src.split(/\n{2,}/).map(x => x.trim()).filter(Boolean);
-  const units = [];
-  for (const paragraph of rawParagraphs) {
-    const physicalLines = paragraph.split('\n').map(x => x.trim()).filter(Boolean);
-    for (const line of physicalLines) {
-      units.push(...splitSemanticLine(line));
-    }
-  }
-
-  if (units.length <= 1) return src;
-
-  // 1~2개 의미 단위마다 한 문단. 문장 중간 hard-wrap은 하지 않는다.
-  const paragraphs = [];
-  for (let i = 0; i < units.length; ) {
-    const remain = units.length - i;
-    const take = remain === 3 ? 1 : Math.min(2, remain);
-    paragraphs.push(units.slice(i, i + take).join('\n'));
-    i += take;
-  }
-
-  return paragraphs.join('\n\n').replace(/\n{4,}/g, '\n\n\n').trim();
-}
+function preserveOnlyRhythm(text) { return normalizeVoice(text); }
 
 function contentPreserved(before, after) {
   return normalizeForCompare(before) === normalizeForCompare(after);
@@ -97,3 +70,4 @@ engine.buildThreadsFirstAutopilot = async function threadsRhythmBuild(accountId,
 console.log('[AutopilotV3][THREADS RHYTHM] v2 의미단위 개행 · 문장중간 강제개행 금지 · 내용 100% 보존');
 
 module.exports = { clean, normalizeForCompare, splitSemanticLine, preserveOnlyRhythm, contentPreserved };
+
