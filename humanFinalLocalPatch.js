@@ -1,4 +1,5 @@
 'use strict';
+const { normalizeVoice, voiceGuide, voiceProblems } = require('./threadsVoicePolicy');
 
 const engine = require('./autopilotMaterialEngine');
 const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
@@ -6,8 +7,6 @@ const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 function clean(text) {
   return String(text || '')
     .replace(/\r/g, '')
-    .replace(/,/g, '')
-    .replace(/(^|[^0-9])\.(?![0-9])/g, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{4,}/g, '\n\n\n')
@@ -16,9 +15,7 @@ function clean(text) {
 
 function localFix(text) {
   let s = clean(text);
-  s = s.replace(/하더라고/g,'해').replace(/했더라고/g,'했어').replace(/더라고/g,'')
-    .replace(/하더라/g,'해').replace(/했더라/g,'했어').replace(/좋더라/g,'좋아').replace(/편하더라/g,'편해').replace(/더라/g,'')
-    .replace(/했음(?=$|\s|[!?~ㅋㅎㅠㅜ])/g,'했어').replace(/됐음(?=$|\s|[!?~ㅋㅎㅠㅜ])/g,'됐어')
+  s = s    .replace(/했음(?=$|\s|[!?~ㅋㅎㅠㅜ])/g,'했어').replace(/됐음(?=$|\s|[!?~ㅋㅎㅠㅜ])/g,'됐어')
     .replace(/있음(?=$|\s|[!?~ㅋㅎㅠㅜ])/g,'있어').replace(/없음(?=$|\s|[!?~ㅋㅎㅠㅜ])/g,'없어')
     .replace(/좋음(?=$|\s|[!?~ㅋㅎㅠㅜ])/g,'좋아').replace(/편함(?=$|\s|[!?~ㅋㅎㅠㅜ])/g,'편해')
     .replace(/개맛있음(?=$|\s|[!?~ㅋㅎㅠㅜ])/g,'개맛있어').replace(/미쳤음(?=$|\s|[!?~ㅋㅎㅠㅜ])/g,'미쳤어')
@@ -41,13 +38,11 @@ function localFix(text) {
     }
     const kept = [];
     for (const line of piece.split('\n').map(x=>x.trim()).filter(Boolean)) {
-      if (lineCount >= 12) break;
       // ㅋㅋ/ㄷㄷ/ㅠㅠ/ㅁㅊ 같은 단독 반응행도 사건의 호흡이므로 그대로 둔다.
       kept.push(line);
       lineCount++;
     }
     if (kept.length) out.push(kept.join('\n'));
-    if (lineCount >= 12) break;
   }
   return out.join('').replace(/\n{4,}/g,'\n\n\n').trim();
 }
@@ -61,3 +56,4 @@ engine.buildThreadsFirstAutopilot = async function humanFinalLocalBuild(accountI
 };
 console.log('[AutopilotV3][HUMAN FINAL] v12 단독반응/빈줄2개/최대12행 보존 · 안전 정리 전용');
 module.exports = { localFix, clean };
+
