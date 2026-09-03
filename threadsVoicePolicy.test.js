@@ -7,6 +7,19 @@ const vm = require('node:vm');
 const policy = require('./threadsVoicePolicy');
 
 function loadFile(file, deps = {}, extra = '') {
+  // These fixtures exercise integration; semantic audit responses are explicitly stubbed.
+  if (deps.axios) {
+    const original = deps.axios.post;
+    deps = {...deps,axios:{...deps.axios,post:async(url,body,...args)=>{
+      if(body.messages?.[0]?.content?.includes('사실/편집 검수자')){
+        const input=body.messages[1].content;
+        const evidence=input.split('[입력 근거]\n')[1].split('\n[검수할')[0];
+        const candidate=input.split(/\n\[검수할 (?:본문|댓글)\]\n/)[1];
+        return {data:{choices:[{message:{content:JSON.stringify({issues:policy.voiceProblems(candidate),sourceAnchors:[evidence.slice(0,12)]})}}]}};
+      }
+      return original(url,body,...args);
+    }}};
+  }
   const module = { exports: {} };
   const context = { module, exports: module.exports, console: {log(){},warn(){}}, process,
     require(name) { if(name==='./threadsVoicePolicy')return policy; if(name in deps)return deps[name]; throw new Error(`Unexpected dependency ${name}`); } };
@@ -107,15 +120,6 @@ test('natural questions and connecting lines survive, canned engagement and repo
   for(const text of ['원문에서는 좋다고 하네','여러분은 어때?','직접 써보'])assert.throws(()=>policy.assertVoice(text),{code:'CONTENT_STYLE_REJECTED'});
 });
 
-test('targeted editor has no unconditional rewrite and refuses repeated invalid output',async()=>{
-  let calls=0;
-  const good='재우러 간 사람이 더 신났네ㅋㅋ';
-  assert.equal(await policy.editVoice(good,{},async()=>{calls++;return '다른 글';}),good);
-  assert.equal(calls,0);
-  await assert.rejects(policy.editVoice('여러분은 어때?',{},async()=>{calls++;return '여러분은 어떰?';}),{code:'CONTENT_STYLE_REJECTED'});
-  assert.equal(calls,1);
-});
-
 test('autopilot actually rejects a failed rewrite instead of logging and accepting it',async()=>{
   let calls=0;
   const engine=loadFile('autopilotMaterialEngine.js',{'axios':{post:async()=>{calls++;return {data:{choices:[{message:{content:JSON.stringify({text:'원문에서는 좋다고 하네',commentLead:''})}}]}}}},'./db':{getAccount:()=>({}),getSystemApiSettings:()=>({openai_api_key:'test'})},'./benchmarkAccounts':{},'./coupangApi':{}},'\nmodule.exports.testGenerate=generatePost;');
@@ -148,4 +152,28 @@ test('source-grounded reactions are not censored by a fixed laugh count or famil
   const text='애 재우라고 아빠 들여보냈더니\n둘이서 그림자놀이 배틀 뜨고 있어ㅋㅋㅋ\n재우러 간 사람이 더 신났네ㅋㅋ\n잠은 언제 잘 건데 진짜ㅋㅋㅋㅋ';
   assert.equal(policy.assertVoice(text),text);
   assert.equal(policy.assertVoice('눈 저렇게 부었는데\n꿀은 끝까지 먹고 있네ㅋㅋ\n진짜 포기를 모르네'),'눈 저렇게 부었는데\n꿀은 끝까지 먹고 있네ㅋㅋ\n진짜 포기를 모르네');
+});
+
+test('source audit keeps a grounded situational reaction without rewriting',async()=>{
+  const source='아빠가 아이를 재우러 들어갔다가 같이 그림자놀이를 한다';
+  const text='재우러 간 사람이 더 신났네ㅋㅋ';let calls=0;
+  const out=await policy.reviewSourceVoice(text,{sourceText:source},async()=>{calls++;return {issues:[],sourceAnchors:['같이 그림자놀이를 한다']};});
+  assert.equal(out,text);assert.equal(calls,1);
+});
+
+test('source audit repairs a fabricated friend story once and verifies the replacement',async()=>{
+  const text='친구들이 다 물어볼 정도야';let calls=0;
+  const out=await policy.reviewSourceVoice(text,{sourceText:'수영장에 가져갈 물건을 가방에 담는 모습'},async()=>{
+    calls++;
+    if(calls===1)return {issues:['친구들이 물어봤다는 사건은 근거에 없음'],sourceAnchors:['가방에 담는 모습']};
+    if(calls===2)return {text:'수영장 갈 물건을 한 가방에 담았네'};
+    return {issues:[],sourceAnchors:['물건을 가방에 담는 모습']};
+  });
+  assert.equal(out,'수영장 갈 물건을 한 가방에 담았네');assert.equal(calls,3);
+});
+
+test('source audit rejects unsupported repairs, invented citations and malformed approval',async()=>{
+  await assert.rejects(policy.reviewSourceVoice('친구들이 샀대',{sourceText:'가방에 수건을 담아'},async()=>({issues:['근거 없는 친구 사건'],sourceAnchors:['가방'],text:'친구들이 샀대'})),{code:'CONTENT_STYLE_REJECTED'});
+  await assert.rejects(policy.reviewSourceVoice('편하네',{sourceText:'가방에 수건을 담아'},async()=>({issues:[],sourceAnchors:['존재하지 않는 인용문'],text:'편하네'})),{code:'CONTENT_STYLE_REJECTED'});
+  await assert.rejects(policy.reviewSourceVoice('편하네',{sourceText:'가방에 수건을 담아'},async()=>({approved:true})),{code:'CONTENT_STYLE_REJECTED'});
 });
