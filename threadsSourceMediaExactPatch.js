@@ -4,7 +4,7 @@ const Module = require('module');
 const fs = require('fs');
 const path = require('path');
 
-const originalLoader = Module._extensions['.js'];
+const originalCompile = Module.prototype._compile;
 let applied = false;
 
 function patchBenchmarkAccounts(source) {
@@ -79,14 +79,12 @@ function patchBenchmarkAccounts(source) {
   return out;
 }
 
-Module._extensions['.js'] = function sourceMediaExactLoader(mod, filename) {
+Module.prototype._compile = function sourceMediaExactCompile(source, filename) {
   if (!applied && path.basename(filename) === 'benchmarkAccounts.js') {
     applied = true;
-    const source = fs.readFileSync(filename, 'utf8');
-    mod._compile(patchBenchmarkAccounts(source), filename);
-    return;
+    source = patchBenchmarkAccounts(source);
   }
-  return originalLoader(mod, filename);
+  return originalCompile.call(this, source, filename);
 };
 
 console.log('[Threads][SOURCE MEDIA EXACT] patch armed · 댓글/추천글/프로필/영상오버레이 이미지 제외');

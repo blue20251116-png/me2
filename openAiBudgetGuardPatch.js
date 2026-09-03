@@ -2,6 +2,7 @@
 
 const axios = require('axios');
 const crypto = require('crypto');
+const { budgetState, reserveRequest } = require('./automationState');
 
 const originalPost = axios.post.bind(axios);
 let queue = Promise.resolve();
@@ -15,7 +16,6 @@ const VISION_DETAIL = /^(low|high|auto)$/i.test(String(process.env.OPENAI_VISION
   : 'low';
 const analysisCache = new Map();
 const MAX_CACHE = 1000;
-const requestTimes = [];
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function isOpenAI(url) { return String(url || '') === 'https://api.openai.com/v1/chat/completions'; }
@@ -41,18 +41,14 @@ function pruneCache() {
   for (const [k, v] of analysisCache) if (now - v.at > ANALYSIS_CACHE_MS) analysisCache.delete(k);
   while (analysisCache.size > MAX_CACHE) analysisCache.delete(analysisCache.keys().next().value);
 }
-function pruneRequestTimes(now = Date.now()) {
-  const cutoff = now - 60 * 60 * 1000;
-  while (requestTimes.length && requestTimes[0] < cutoff) requestTimes.shift();
-}
 function assertHourlyBudget() {
-  const now = Date.now();
-  pruneRequestTimes(now);
-  if (requestTimes.length < MAX_REQUESTS_PER_HOUR) return;
-  const e = new Error(`OPENAI_HOURLY_BUDGET_EXCEEDED: ${requestTimes.length}/${MAX_REQUESTS_PER_HOUR} requests in last hour`);
+  const state = budgetState();
+  if (state.available) return;
+  const e = new Error(`OPENAI_HOURLY_BUDGET_EXCEEDED: ${state.used}/${state.limit} requests in last hour`);
   e.code = 'OPENAI_HOURLY_BUDGET_EXCEEDED';
   e.__openAiNoRetry = true;
-  console.warn(`[OpenAI][HARD BUDGET] hourly cap reached ${requestTimes.length}/${MAX_REQUESTS_PER_HOUR} → new AI generation blocked`);
+  e.retryAt = state.retryAt;
+  console.warn(`[OpenAI][HARD BUDGET] hourly cap reached ${state.used}/${state.limit} retryAt=${new Date(state.retryAt).toISOString()}`);
   throw e;
 }
 function countTextChars(value) {
@@ -151,6 +147,9 @@ function logUsage(response, data, attempt = 1) {
 }
 
 async function runOpenAI(url, rawData, config) {
+  // A response timeout alone does not bound DNS/connect/TLS stalls.
+  const timeout = Number(config?.timeout) > 0 ? Math.min(Number(config.timeout), 60000) : 60000;
+  config = { ...config, timeout, signal: config?.signal ? AbortSignal.any([config.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) };
   const data = applyVisionCostGuard(capRequestText(rawData));
   let key = null;
   if (isCacheableAnalysis(data)) {
@@ -168,7 +167,7 @@ async function runOpenAI(url, rawData, config) {
   if (wait) await sleep(wait);
   assertHourlyBudget();
   lastStartAt = Date.now();
-  requestTimes.push(lastStartAt);
+  reserveRequest();
 
   let response;
   let attempt = 1;
@@ -190,7 +189,7 @@ async function runOpenAI(url, rawData, config) {
     await sleep(retryMs);
     assertHourlyBudget();
     lastStartAt = Date.now();
-    requestTimes.push(lastStartAt);
+    reserveRequest();
     attempt = 2;
     response = await originalPost(url, data, config);
   }

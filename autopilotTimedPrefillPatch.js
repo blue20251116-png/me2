@@ -1,22 +1,25 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const Module = require('module');
+const crypto = require('crypto');
 const cron = require('node-cron');
 const dbMod = require('./db');
 const coupangApi = require('./coupangApi');
 const { db, getAccount, getUserById } = dbMod;
+const { setState, budgetState } = require('./automationState');
 
 const BUFFER = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BUFFER || 3));
 const BATCH = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BATCH || 2));
 const REFILL_CRON = String(process.env.AUTOPILOT_TIMED_REFILL_CRON || '*/10 * * * *');
 const REBALANCE_SAFETY_MINUTES = Math.max(10, Number(process.env.AUTOPILOT_REBALANCE_SAFETY_MINUTES || 15));
 const COUPANG_PREFLIGHT_TTL_MS = Math.max(10 * 60000, Number(process.env.COUPANG_PREFLIGHT_TTL_MS || 6 * 60 * 60 * 1000));
-const COUPANG_INVALID_TTL_MS = Math.max(10 * 60000, Number(process.env.COUPANG_INVALID_TTL_MS || 6 * 60 * 60 * 1000));
+// An auth failure must recover without restarting the process. Retry on a later refill tick.
+const invalidTtl = Number(process.env.COUPANG_INVALID_TTL_MS || 5 * 60000);
+const COUPANG_INVALID_TTL_MS = Number.isFinite(invalidTtl) ? Math.min(10 * 60000, Math.max(60000, invalidTtl)) : 5 * 60000;
 const runningAccounts = new Set();
 const coupangPreflightCache = new Map();
 let refillTickRunning = false;
+let lastAccountId = 0;
 
 function dayKeyKst(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
@@ -106,7 +109,23 @@ function rebalanceExistingFuturePending() {
 }
 
 function credentialFingerprint(account) {
-  return `${String(account?.coupang_access_key || '').trim().slice(0,6)}:${String(account?.coupang_secret_key || '').trim().length}`;
+  return crypto.createHash('sha256').update(JSON.stringify([
+    String(account?.coupang_access_key || '').trim(),
+    String(account?.coupang_secret_key || '').trim(),
+  ])).digest('hex');
+}
+function isCoupangAuthError(err) {
+  // A 401 from OpenAI, Threads, or a media URL is not a Coupang credential failure.
+  let fromCoupang = err?.service === 'coupang';
+  try {
+    const config = err?.config || err?.response?.config;
+    fromCoupang ||= new URL(config?.url, config?.baseURL).hostname === 'api-gateway.coupang.com';
+  } catch {}
+  if (!fromCoupang) return false;
+  const status = Number(err?.response?.status || 0);
+  const data = err?.response?.data;
+  const msg = String(data?.message || data?.rMessage || err?.message || '');
+  return status === 401 || String(data?.rCode) === '401' || /invalid signature|unauthorized|invalid.*(?:access.?key|secret.?key)/i.test(msg);
 }
 async function ensureCoupangReady(accountId, account) {
   const fp = credentialFingerprint(account);
@@ -129,7 +148,7 @@ async function ensureCoupangReady(accountId, account) {
   } catch (err) {
     const status = Number(err?.response?.status || 0);
     const msg = String(err?.response?.data?.message || err?.response?.data?.rMessage || err?.message || err || '');
-    if (status === 401 || /invalid signature|unauthorized|access.?key|secret.?key/i.test(msg)) {
+    if (isCoupangAuthError(err)) {
       coupangPreflightCache.set(accountId, { ok:false, reason:'invalid_signature', fp, until:Date.now()+COUPANG_INVALID_TTL_MS });
       console.error(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} AUTH INVALID → OpenAI/Vision 생성 중단 reason="${msg.slice(0,160)}"`);
       return false;
@@ -142,31 +161,6 @@ async function ensureCoupangReady(accountId, account) {
 
 if (!global.__ME2_TIMED_PREFILL_PATCH__) {
   global.__ME2_TIMED_PREFILL_PATCH__ = true;
-  try {
-    const schedulerPath = path.join(__dirname, 'scheduler.js');
-    let source = fs.readFileSync(schedulerPath, 'utf8');
-    const apply = (from, to, already) => {
-      if (already && source.includes(already)) return;
-      if (!source.includes(from)) throw new Error(`[TIMED PREFILL] scheduler source pattern missing: ${from.slice(0,90)}`);
-      source = source.replace(from, to);
-    };
-    apply('function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=null,recipeCommentText=null}){','function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=null,recipeCommentText=null,scheduledAt=null}){','recipeCommentText=null,scheduledAt=null}){');
-    apply("new Date().toISOString(),accountId,recipeCommentText);}","String(scheduledAt||new Date().toISOString()),accountId,recipeCommentText);}",'String(scheduledAt||new Date().toISOString()),accountId,recipeCommentText);}');
-    apply('async function runContentOnlyAutopilot(account,target){','async function runContentOnlyAutopilot(account,target,scheduledAt=null){','runContentOnlyAutopilot(account,target,scheduledAt=null)');
-    apply('recipeCommentText:r.recipeCommentText});recordAutopilotLast','recipeCommentText:r.recipeCommentText,scheduledAt});recordAutopilotLast','recipeCommentText:r.recipeCommentText,scheduledAt});recordAutopilotLast');
-    apply('async function runAutopilotOnce(account){','async function runAutopilotOnce(account,scheduledAt=null){','runAutopilotOnce(account,scheduledAt=null)');
-    apply('await runContentOnlyAutopilot(account,target);return;','await runContentOnlyAutopilot(account,target,scheduledAt);return;','await runContentOnlyAutopilot(account,target,scheduledAt);return;');
-    apply('recipeCommentText:result.commentLead});const last=','recipeCommentText:result.commentLead,scheduledAt});const last=','recipeCommentText:result.commentLead,scheduledAt});const last=');
-    if (!source.includes('runAutopilotOnce};') && source.includes('module.exports={startPublishJob,startInsightsJob,startAutopilotJob};')) {
-      source = source.replace('module.exports={startPublishJob,startInsightsJob,startAutopilotJob};','module.exports={startPublishJob,startInsightsJob,startAutopilotJob,runAutopilotOnce};');
-    }
-    fs.writeFileSync(schedulerPath, source, 'utf8');
-    console.log('[Autopilot][TIMED PREFILL] scheduler future-time generation hook written');
-  } catch (err) {
-    console.error('[Autopilot][TIMED PREFILL] source patch failed:', err.message);
-    throw err;
-  }
-
   try { rebalanceExistingFuturePending(); } catch (err) { console.warn('[Autopilot][TIMED REBALANCE] startup skipped:', err.message); }
 
   const originalLoad = Module._load;
@@ -179,6 +173,18 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
       if (runningAccounts.has(accountId)) return;
       const account = getAccount(accountId);
       if (!account?.autopilot_enabled) return;
+      if (!String(account.threads_access_token || '').trim() || (account.threads_token_expires_at && Date.parse(account.threads_token_expires_at)<=Date.now())) {
+        setState(accountId, 'blocked', 'THREADS_TOKEN_MISSING');
+        console.warn(`[Autopilot][PREFLIGHT] account #${accountId} THREADS_TOKEN_MISSING → 생성 생략`);
+        return;
+      }
+      if (account.user_id) {
+        const user = getUserById(account.user_id);
+        if (!user || user.status !== 'active' || (user.expires_at && Date.parse(user.expires_at) <= Date.now())) {
+          setState(accountId, 'blocked', 'SUBSCRIPTION_INACTIVE');
+          return;
+        }
+      }
       const future = futurePendingCount(accountId);
       const need = Math.min(BATCH, Math.max(0, BUFFER - future));
       if (!need) return;
@@ -188,26 +194,35 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
 
       // 핵심: Coupang 인증을 OpenAI/Vision보다 먼저 확인한다.
       const coupangReady = await ensureCoupangReady(accountId, account);
-      if (!coupangReady) return;
+      if (!coupangReady) { setState(accountId,'blocked','COUPANG_CREDENTIALS_INVALID'); return; }
 
       runningAccounts.add(accountId);
+      setState(accountId, 'running', 'generating');
       console.log(`[Autopilot][TIMED PREFILL] account #${accountId} target=${target}/day future=${future} preparing=${slots.length}`);
       try {
         for (const slot of slots) {
+          const budget = budgetState();
+          if (!budget.available) {
+            setState(accountId, 'waiting', 'AI_HOURLY_BUDGET', new Date(budget.retryAt).toISOString());
+            break;
+          }
           try {
             global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID = accountId;
             await exp.runAutopilotOnce(account, slot.toISOString());
+            setState(accountId, 'ready', 'reserved');
             console.log(`[Autopilot][TIMED PREFILL] RESERVED account #${accountId} scheduled=${slot.toISOString()}`);
           } catch (err) {
             const msg = String(err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || err || '');
             const status = Number(err?.response?.status || 0);
             console.error(`[Autopilot][TIMED PREFILL] generation failed account #${accountId}:`, err?.response?.data || err?.message || err);
-            if (status === 401 || /invalid signature/i.test(msg)) {
+            setState(accountId, 'retry', String(err?.code || 'GENERATION_FAILED'), new Date(Date.now()+10*60000).toISOString());
+            if (isCoupangAuthError(err)) {
               coupangPreflightCache.set(accountId, { ok:false, reason:'invalid_signature', fp:credentialFingerprint(account), until:Date.now()+COUPANG_INVALID_TTL_MS });
               console.error(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} runtime AUTH INVALID → 남은 슬롯 중단 + 다음 계정 이동`);
               break;
             }
-            if (err?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED' || err?.__openAiNoRetry || /no credits remaining|OPENAI_HOURLY_BUDGET_EXCEEDED/i.test(msg)) break;
+            // Stop this account's batch, but never poison the Coupang auth cache.
+            if (status === 401 || err?.isContentQualityHold || err?.code==='CONTENT_QUALITY_HOLD' || err?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED' || err?.__openAiNoRetry || /no credits remaining|OPENAI_HOURLY_BUDGET_EXCEEDED/i.test(msg)) break;
             console.log(`[Autopilot][TIMED PREFILL] account #${accountId} 실패 1건은 건너뛰고 다음 예약 슬롯 계속 시도`);
           } finally {
             if (global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID === accountId) delete global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID;
@@ -220,10 +235,26 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
       const tick = async () => {
         if (refillTickRunning) return;
         refillTickRunning = true;
+        const startedAt = Date.now();
+        setState(0, 'running', 'refill');
         try {
           const accounts = db.prepare(`SELECT id FROM accounts WHERE autopilot_enabled=1 ORDER BY id`).all();
-          for (const row of accounts) await refillAccount(Number(row.id));
-        } finally { refillTickRunning = false; }
+          // Resume after the last attempted account instead of starving later accounts.
+          const ordered = [...accounts.filter(r=>Number(r.id)>lastAccountId), ...accounts.filter(r=>Number(r.id)<=lastAccountId)];
+          for (const row of ordered) {
+            const budget = budgetState();
+            if (!budget.available) {
+              setState(0, 'waiting', 'AI_HOURLY_BUDGET', new Date(budget.retryAt).toISOString());
+              console.log(`[Autopilot][BUDGET WAIT] retryAt=${new Date(budget.retryAt).toISOString()}`);
+              return;
+            }
+            lastAccountId = Number(row.id);
+            try { await refillAccount(lastAccountId); }
+            catch (err) { setState(lastAccountId,'retry',err.code||'PREFLIGHT_FAILED'); console.error(`[Autopilot][ACCOUNT ERROR] #${lastAccountId}: ${err.message}`); }
+            if (Date.now()-startedAt >= 8*60000) break;
+          }
+          setState(0, 'idle', 'refill complete');
+        } finally { refillTickRunning = false; console.log(`[Autopilot][TICK COMPLETE] durationMs=${Date.now()-startedAt} lastAccount=${lastAccountId}`); }
       };
       cron.schedule(REFILL_CRON, () => tick().catch(e => console.error('[Autopilot][TIMED PREFILL] tick:', e.message)), { timezone:'Asia/Seoul', noOverlap:true });
       setTimeout(() => tick().catch(e => console.error('[Autopilot][TIMED PREFILL] startup:', e.message)), 3000);

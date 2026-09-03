@@ -177,6 +177,8 @@ function hasUnsafeNyaEnding(line) {
 
 function fallbackRewrite(text, mode) {
   const s = hardSanitize(text)
+    .replace(/실화냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, '실화인가')
+    .replace(/[가-힣]+더라(?:고)?(?=$|\s|[!?~ㅋㅎㅠㅜ])/g, value => rewriteLineEnding(value))
     .split('\n')
     .filter(line => !hasUnsafeNyaEnding(line))
     .map(rewriteLineEnding)
@@ -197,7 +199,11 @@ engine.buildThreadsFirstAutopilot = async function finalTextHardGuardBuild(accou
   result.text = normalizeLineBreaks(result.text);
   if (reasons.length) console.log(`[AutopilotV3][TEXT HARD GUARD] v18 fix reason=${reasons.join(',')} mode=${mode||'-'} preview="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
   const remaining = badStyleReasons(result.text, mode);
-  if (remaining.length) console.warn(`[AutopilotV3][TEXT HARD GUARD] 최종 잔여=${remaining.join(',')} mode=${mode||'-'} text="${result.text.replace(/\n/g, ' / ').slice(0,180)}"`);
+  if (remaining.length || !result.text) {
+    const err = new Error(`최종 문체 검증 실패: ${remaining.join(',') || 'empty'}`);
+    err.code = 'CONTENT_STYLE_REJECTED';
+    throw err;
+  }
   return result;
 };
 console.log('[Autopilot][TEXT HARD GUARD] v18 비레시피 recipe 오염 + 음슴체 종결 최소 안전정리');

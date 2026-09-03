@@ -170,6 +170,9 @@ async function browserVisibleTitle(page) {
 }
 
 async function resolveWithBrowser(sourceUrl) {
+  if (process.env.ME2_BROWSER_WORKER !== '1') {
+    return require('./isolatedTask').isolatedBrowserTask('sourceAffiliateExactProductPatch', 'resolveWithBrowser', [sourceUrl], 90000);
+  }
   let browser;
   try {
     const playwright = require('playwright');
@@ -414,3 +417,4 @@ engine.buildThreadsFirstAutopilot = async function sourceAffiliateExactProductBu
 };
 
 console.log('[Autopilot][SOURCE AFFILIATE EXACT PRODUCT] v3 single-link productId+title ground truth · item/vendor identity · multi-link unique-winner · axios+browser fail-safe');
+module.exports.resolveWithBrowser = resolveWithBrowser;

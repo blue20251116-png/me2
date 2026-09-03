@@ -21,7 +21,7 @@ function ensureCoupangDisclosureFirst(text) {
   return rest ? `${disclosure}\n\n${rest}` : disclosure;
 }
 
-threadsApi.publishReply = async function publishReplyWithDisclosureFirst(accountId, parentMediaId, text) {
+threadsApi.publishReply = async function publishReplyWithDisclosureFirst(accountId, parentMediaId, text, options) {
   const before = String(text || '').trim();
   const normalized = ensureCoupangDisclosureFirst(before);
 
@@ -29,7 +29,7 @@ threadsApi.publishReply = async function publishReplyWithDisclosureFirst(account
     console.log(`[Threads][COUPANG DISCLOSURE FIRST] account=${accountId} parentMediaId=${parentMediaId}`);
   }
 
-  return originalPublishReply(accountId, parentMediaId, normalized);
+  return originalPublishReply(accountId, parentMediaId, normalized, options);
 };
 
 console.log('[Threads][REPLY PATCH] 쿠팡 고지문 첫줄 고정 · preview sink/link_attachment 제거');

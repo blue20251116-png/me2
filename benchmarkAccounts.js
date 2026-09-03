@@ -370,6 +370,15 @@ async function runThreadsAccessDiag() {
   }
 }
 
-setImmediate(() => { runThreadsAccessDiag().catch(() => {}); });
+// Diagnostics are opt-in: startup must not launch an untracked browser.
+if (process.env.THREADS_STARTUP_DIAGNOSTICS === '1' && process.env.ME2_BROWSER_WORKER !== '1') {
+  setImmediate(() => { runThreadsAccessDiag().catch(() => {}); });
+}
 
 module.exports={listBenchmarkAccounts,addBenchmarkAccount,addBenchmarkAccountsBulk,deleteBenchmarkAccount,markUsedPost,collectBenchmarkMaterials,collectPostDetails,collectProfilePosts};
+if (process.env.ME2_BROWSER_WORKER !== '1') {
+  const { isolatedBrowserTask } = require('./isolatedTask');
+  for (const method of ['collectBenchmarkMaterials','collectPostDetails','collectProfilePosts']) {
+    module.exports[method] = (...args) => isolatedBrowserTask('benchmarkAccounts', method, args);
+  }
+}
