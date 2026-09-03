@@ -26,21 +26,9 @@ function affiliateKickLabel(productName) {
   return '';
 }
 
-function removeUngroundedClaims(text) {
-  let s = sanitizeBody(text);
-  s = s
-    .replace(/나도\s*\d+(?:\.\d+)?\s*(?:주|일|개월)째[^\n]*/gi, '')
-    .replace(/\d+(?:\.\d+)?\s*kg\s*(?:빠졌|감량했|뺐)[^\n]*/gi, '')
-    .replace(/한\s*달\s*만에\s*효과[^\n]*/gi, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-  return sanitizeBody(s);
-}
-
 engine.buildThreadsFirstAutopilot = async function finalAutopilotSanityBuild(accountId, options) {
   const result = await originalBuild(accountId, options);
   if (!result) return result;
-  result.text = removeUngroundedClaims(result.text);
   let detail = null;
   if (result.sourceUrl && result.sourceUsername) {
     try { detail = await collectPostDetails(result.sourceUrl, result.sourceUsername); }
@@ -61,6 +49,7 @@ engine.buildThreadsFirstAutopilot = async function finalAutopilotSanityBuild(acc
   return result;
 };
 
-console.log('[Autopilot][FINAL SANITY] v11 로컬 사실검사 + 빈줄 보존');
-module.exports = { sanitizeBody, removeUngroundedClaims, sourceEvidence };
+console.log('[Autopilot][FINAL SANITY] source/affiliate check only; voice owned by shared policy');
+module.exports = { sanitizeBody, sourceEvidence };
+
 

@@ -1,4 +1,4 @@
-const { normalizeVoice, voiceGuide, voiceProblems } = require('./threadsVoicePolicy');
+const { normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, editVoice } = require('./threadsVoicePolicy');
 const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 const { collectBenchmarkMaterials, collectPostDetails, markUsedPost } = require('./benchmarkAccounts');
@@ -204,67 +204,16 @@ function normalizeRecipeHeadings(text){
   out=out.replace(/(?:🍳\s*)?(?:만드는\s*법|조리\s*방법|만들기)\s*[:：]?/i,'🍳 만드는 법');
   return out;
 }
-function normalizeThreadsLayout(text){
-  return String(text||'')
-    .replace(/\r/g,'')
-    .replace(/[ \t]+\n/g,'\n')
-    .replace(/\n{3,}/g,'\n\n')
-    .trim();
-}
-function badThreadsToneReasons(text){
-  const t=String(text||'');
-  const reasons=voiceProblems(t);
-  const honorific=[/입니다[.!?]?/g,/합니다[.!?]?/g,/됩니다[.!?]?/g,/하세요[.!?]?/g,/해보세요/g,/추천드립니다/g,/바랍니다/g,/수 있습니다/g,/원하신다면/g];
-  const aiPhrases=[/고급 요리/i,/풍미가 배가/i,/특별한 (?:저녁|식사|한 끼)/i,/꼭 시도해/i,/즐겨보세요/i,/완벽한 조화/i,/매력적인 메뉴/i,/한층 더/i,/입맛을 사로잡/i,/감칠맛을 더해/i];
-  if(honorific.some(r=>r.test(t)))reasons.push('존댓말/설명문');
-  if(aiPhrases.some(r=>r.test(t)))reasons.push('AI/블로그 상투어');
-  const lines=t.split('\n').map(x=>x.trim()).filter(Boolean);
-  if(t.length>=120&&lines.length<=2)reasons.push('긴 문단');
-  if(lines.some(x=>x.length>95))reasons.push('문장 과다길이');
-  if(/^[가-힣A-Za-z0-9 ]+은\s|^[가-힣A-Za-z0-9 ]+는\s/.test(t)&&/(요리|제품|상품|아이템)(?:입니다|이다)/.test(t))reasons.push('사전식 도입');
-  return reasons;
-}
-async function rewriteThreadsTone(accountId,text,{mode,topic,material}){
-  const before=normalizeThreadsLayout(text);
-  const reasons=badThreadsToneReasons(before);
-  if(!reasons.length)return before;
-  console.warn(`[AutopilotV3][TONE] 재작성 필요 reason=${reasons.join(',')} preview="${before.slice(0,90).replace(/\n/g,' / ')}"`);
-  try{
+function normalizeThreadsLayout(text){return formatVoice(text);}
+async function rewriteThreadsTone(accountId,text,{mode,topic,material,comment=false}){
+  return editVoice(text,{mode,comment},async(before,reasons)=>{
+    console.log(`[AutopilotV3][VOICE REPAIR] targeted=${reasons.join(',')}`);
     const d=await callOpenAI(accountId,
-`한국 Threads 본문 말투 교정기다. 사실과 주제는 유지한다.
-${voiceGuide()}
-- 레시피는 정확한 제휴 소스 이름을 본문에 새로 노출하지 않는다.
-JSON만 출력: {"text":""}`,
-      `모드:${mode}\n주제:${topic}\n[원 Threads 소재]\n${String(material?.sourceText||'').slice(0,3000)}\n\n[교정할 본문]\n${before}`,
-      {maxTokens:900,temperature:.65}
-    );
-    const fixed=normalizeThreadsLayout(d.text||'');
-    const afterReasons=badThreadsToneReasons(fixed);
-    if(fixed&&afterReasons.length===0){
-      console.log(`[AutopilotV3][TONE] 재작성 통과 length=${fixed.length}`);
-      return fixed;
-    }
-    console.warn(`[AutopilotV3][TONE] 재작성 후 잔여=${afterReasons.join(',')||'empty'} → 규칙 기반 정리`);
-    return normalizeThreadsLayout((fixed||before)
-      .replace(/해보세요/g,'해봐')
-      .replace(/하세요/g,'해')
-      .replace(/추천드립니다/g,'추천해')
-      .replace(/원하신다면/g,'원하면')
-      .replace(/수 있습니다/g,'수 있어')
-      .replace(/됩니다/g,'돼')
-      .replace(/입니다/g,'이야')
-      .replace(/합니다/g,'해'));
-  }catch(e){
-    console.warn(`[AutopilotV3][TONE] 재작성 실패: ${e.message}`);
-    return normalizeThreadsLayout(before
-      .replace(/해보세요/g,'해봐')
-      .replace(/하세요/g,'해')
-      .replace(/원하신다면/g,'원하면')
-      .replace(/수 있습니다/g,'수 있어')
-      .replace(/됩니다/g,'돼')
-      .replace(/입니다/g,'이야')
-      .replace(/합니다/g,'해'));
-  }
+      `${voiceGuide()}\n기존 글의 문제가 있는 부분만 수정한다. 정상 문장/순서/농담은 유지한다. 새 상황은 이 교정 단계에서 추가하지 않는다. 레시피 비밀재료는 노출하지 않는다. JSON만 출력: {"text":""}`,
+      `모드:${mode} / ${comment?'댓글':'본문'}\n수정할 문제:${reasons.join(',')}\n[원문]\n${String(material?.sourceText||'').slice(0,5000)}\n[추가 근거]\n${String(material?.authorReplies||'').slice(0,3000)}\n[기존 글]\n${before}`,
+      {maxTokens:900,temperature:.25});
+    return String(d.text||'');
+  });
 }
 async function repairRecipeComment(accountId,{commentLead,material,analysis,productName}){
   let fixed=normalizeRecipeHeadings(commentLead);
@@ -277,19 +226,18 @@ async function repairRecipeComment(accountId,{commentLead,material,analysis,prod
     );
     fixed=normalizeRecipeHeadings(String(d.commentLead||''));
   }catch(e){console.warn(`[AutopilotV3][RECIPE REPAIR] AI 교정 실패: ${e.message}`);}
-  if(!hasIngredientHeading(fixed))fixed=`🥘 재료\n- 원문에 나온 기본 재료\n- 비밀 재료\n\n${fixed}`.trim();
-  if(!hasMethodHeading(fixed))fixed=`${fixed}\n\n🍳 만드는 법\n1. 재료를 먹기 좋게 준비해.\n2. 비밀 재료를 넣고 알맞게 익혀.`.trim();
+  if(!hasIngredientHeading(fixed)||!hasMethodHeading(fixed))throw new Error('원문에 근거한 레시피 댓글을 완성하지 못했습니다');
   return fixed;
 }
 async function generatePost(accountId,{material,analysis,product,target}){
   const productName=clean(product?.name);
   const d=await callOpenAI(accountId,
-`너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 원 Threads 소재의 핵심과 상황은 참고하되 문장을 복사하지 않는다.
+`너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 원 Threads의 내용과 말맛을 중심으로 가볍게 편집한다.
 
 ${voiceGuide()}
 
 [레시피]
-- 본문 text에는 음식의 핵심 장면과 궁금증만 짧게 쓴다.
+- 본문 text는 원문 내용과 흐름을 살리고 필요한 상황 반응만 보탠다. 궁금증이나 후킹을 억지로 만들지 않는다.
 - 정확한 제휴 소스/핵심재료 이름은 숨긴다.
 - 본문 마지막에 댓글 유도 문구를 자동으로 붙이지 않는다.
 - commentLead는 반드시 '🥘 재료'와 '🍳 만드는 법' 두 섹션으로 쓴다.
@@ -297,12 +245,12 @@ ${voiceGuide()}
 - 쿠팡 연결 핵심재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다.
 
 [일반상품/생활]
-- 본문 text는 소재에 맞는 장면과 반응을 쓴다. 고정된 사건 순서를 강제하지 않는다.
+- 본문 text는 원문 흐름을 유지한다. 확인된 상황을 살리는 한마디는 필요할 때만 추가한다.
 - 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.
 - commentLead는 확인된 정보 하나를 자연스러운 반말 1~2문장으로 보충한다. 추가 정보가 없으면 빈 문자열로 둔다.
 
 JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
-    `타겟:${target||'전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm||productName}\n쿠팡 상품:${productName}\n판매대상:${analysis.vision?.soldObject||'-'} / 요리:${analysis.vision?.dish||'-'}\n[Threads 원문]\n${material.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0,5000)||'(없음)'}`,
+    `타겟:${target||'전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm||productName}\n쿠팡 상품:${productName}\n판매대상:${analysis.vision?.soldObject||'-'} / 요리:${analysis.vision?.dish||'-'}\n[시각 근거]\n${analysis.vision?.evidence||'(없음)'}\n[Threads 원문]\n${material.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0,5000)||'(없음)'}`,
     {maxTokens:2800,temperature:.65}
   );
   let text=normalizeThreadsLayout(d.text||''),commentLead=String(d.commentLead||'').trim();
@@ -319,12 +267,12 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
   }
   text=await rewriteThreadsTone(accountId,text,{mode:analysis.mode,topic:analysis.topic,material});
   if(analysis.mode!=='recipe' && commentLead){
-    commentLead=await rewriteThreadsTone(accountId,commentLead,{mode:analysis.mode,topic:analysis.topic,material});
-    if(badThreadsToneReasons(commentLead).length) commentLead='';
+    try{commentLead=await rewriteThreadsTone(accountId,commentLead,{mode:analysis.mode,topic:analysis.topic,material,comment:true});}
+    catch(e){if(e.code!=='CONTENT_STYLE_REJECTED')throw e;commentLead='';}
   }
   if(analysis.mode==='recipe')text=scrubSecret(text,analysis.secretTerm,productName);
-  const finalReasons=badThreadsToneReasons(text);
-  if(finalReasons.length)console.warn(`[AutopilotV3][TONE] 최종 경고=${finalReasons.join(',')} text="${text.slice(0,120).replace(/\n/g,' / ')}"`);
+  text=assertVoice(text,{mode:analysis.mode});
+  console.log(`[AutopilotV3][SOURCE VOICE v2] text="${text.replace(/\n/g,' / ')}"`);
   return{text,commentLead};
 }
 async function buildThreadsFirstAutopilot(accountId,{target}){
@@ -353,7 +301,7 @@ async function buildThreadsFirstAutopilot(accountId,{target}){
       const generated=await generatePost(accountId,{material,analysis,product:found.product,target});
       markUsedPost(material.url);
       console.log(`[AutopilotV3][SUCCESS] @${material.username||'-'} product="${found.product.name}" mode=${analysis.mode}`);
-      return{text:generated.text,commentLead:generated.commentLead,product:found.product,productSearchTerm:found.searchTerm,mode:analysis.mode,topic:analysis.topic,secretTerm:analysis.secretTerm,sourceUrl:material.url,sourceUsername:material.username||null,sourceImages:Array.isArray(material.images)?material.images.filter(Boolean).slice(0,10):[],sourceVideos:Array.isArray(material.videos)?material.videos.filter(Boolean).slice(0,5):[],referenceImage:material.images?.[0]||null,visionTarget:vision};
+      return{text:generated.text,commentLead:generated.commentLead,product:found.product,productSearchTerm:found.searchTerm,mode:analysis.mode,topic:analysis.topic,secretTerm:analysis.secretTerm,sourceUrl:material.url,sourceUsername:material.username||null,sourceText:material.sourceText,authorReplies:material.authorReplies,sourceImages:Array.isArray(material.images)?material.images.filter(Boolean).slice(0,10):[],sourceVideos:Array.isArray(material.videos)?material.videos.filter(Boolean).slice(0,5):[],referenceImage:material.images?.[0]||null,visionTarget:vision};
     }catch(e){
       lastError=e;
       console.warn(`[AutopilotV3][TRY FAIL] @${material.username||'-'} ${e.response?.data?.error?.message||e.message} → 다음 소재`);
@@ -364,3 +312,4 @@ async function buildThreadsFirstAutopilot(accountId,{target}){
   throw new Error(`쇼핑 소재 ${materials.length}개를 검사했지만 발행 가능한 상품 연결에 실패했습니다${lastError?`: ${lastError.message}`:''}`);
 }
 module.exports={buildThreadsFirstAutopilot};
+
