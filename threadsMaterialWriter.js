@@ -1,4 +1,4 @@
-const { normalizeVoice, voiceGuide, voiceProblems } = require('./threadsVoicePolicy');
+const { normalizeVoice, voiceGuide, formatVoice, assertVoice, editVoice } = require('./threadsVoicePolicy');
 const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 
@@ -65,18 +65,10 @@ function sanitizeGeneratedComment(value) {
   return s.replace(/\n{2,}/g, '\n').trim();
 }
 
-function cleanBodyPunctuation(value) { return normalizeVoice(value); }
+function cleanBodyPunctuation(value) { return formatVoice(value); }
 
-function stripRecipeLanguageFromProductBody(value) {
-  const banned = /(재료(?:랑|와|하고)?\s*(?:만드는\s*법|만드는법)|만드는\s*법|만드는법|레시피|요리법|조리법)/i;
-  let lines = String(value || '').split('\n').map(x => x.trim());
-  lines = lines.filter(line => !banned.test(line));
-  return lines.join('\n').trim();
-}
-
-function formatThreadsBody(value, { isRecipe = false } = {}) {
-  const body = normalizeVoice(stripAffiliateNoise(value, { preserveLines: true }));
-  return isRecipe ? body : stripRecipeLanguageFromProductBody(body);
+function formatThreadsBody(value) {
+  return formatVoice(stripAffiliateNoise(value, { preserveLines: true }));
 }
 
 function detectRecipe(sourceText, authorReplies, requestedMode) {
@@ -98,11 +90,14 @@ async function generateFromThreadsMaterial(accountId, { keyword, sourceText, aut
 - 입력의 광고 고지 링크 작성자 UI 정보는 출력하지 않는다.
 - text와 comment 어디에도 URL을 출력하지 않는다.`;
 
-  const system = isRecipe
-    ? `${styleRules}\n레시피/음식 소재다\n[본문]\n- 소재에 맞는 길이의 Threads 반응글을 쓴다\n- 레시피 전체를 본문에 나열하지 않는다\n[댓글 - 형식 강제]\n🥘 재료\n- 재료를 한 줄에 하나씩 작성\n\n🍳 만드는 법\n1. 한 단계씩 줄바꿈\n2. 실제로 따라갈 수 있게 순서대로 정리\n- 원문에 없는 재료를 임의 추가하지 않는다\n반드시 JSON만 출력: {\"items\":[{\"text\":\"본문\",\"comment\":\"댓글\"}, ...]} 정확히 5개`
-    : `${styleRules}\n생활/제품 일반소재다\n[본문]\n- 장면과 반응에 필요한 길이만 쓴다\n- 전체 문장은 완결하고 생각이 바뀌는 곳에서 줄바꿈한다\n- 문장 중간을 잘라 줄 수를 맞추지 않는다\n- 하나의 불편 발견 의외성 반응 중 하나만 선택한다\n- 제품 특징은 최대 1개만 쓴다\n- 영상이나 사진을 보고 사람이 친구한테 한마디 하듯 끝낸다\n- 제품을 칭찬하려고 장점을 덧붙이지 않는다\n- 재료 만드는 법 만드는법 레시피 요리법 조리법이라는 단어를 절대 쓰지 않는다\n- 댓글에 재료나 만드는 법을 적어준다는 CTA를 절대 쓰지 않는다\n- 댓글을 보라고 유도하는 문장을 본문에 넣지 않는다\n[댓글]\n- ✅ 핵심만 같은 고정 제목을 쓰지 않는다\n- 1~2줄의 자연스러운 말투로 원문에서 확인되는 핵심만 적는다\n- 본문과 같은 사람이 바로 이어서 쓴 것처럼 쓴다\n- 완전 추천 강추 필수템 꿀템 같은 구매 권유를 쓰지 않는다\n- 필요하면 핵심 사실 하나만 짧게 적고 끝낸다\n- 재료 만드는 법 레시피 요리법 조리법을 쓰지 않는다\n- 링크와 광고고지는 쓰지 않는다\n반드시 JSON만 출력: {\"items\":[{\"text\":\"본문\",\"comment\":\"댓글\"}, ...]} 정확히 5개`;
-
-  const user = `키워드: ${String(keyword || '').trim()}\n[원 게시물]\n${cleanedSource.slice(0,5000)}\n[작성자 추가 설명]\n${cleanedReplies.slice(0,5000)}\n원문은 타인의 자료다. 사실만 참고하고 원작성자의 경험을 나의 경험으로 바꾸지 마. 소재마다 다른 시작과 호흡을 사용해.`;
+  const system = `${styleRules}
+${isRecipe ? `[레시피 댓글]
+🥘 재료 다음에 원문에서 확인된 재료와 계량을 쓴다
+🍳 만드는 법 다음에 확인된 조리 순서를 쓴다
+재료/단계 수를 채우려고 내용을 만들지 않는다` : '[일반상품 댓글] 추가 정보가 있으면 같은 말투로 짧게 보충하고 없으면 빈 문자열로 둔다'}
+같은 원문으로 선택할 후보 5개를 만든다. 후보마다 시작 구조를 억지로 바꾸지 않는다. 표현과 선택적인 상황 한마디만 조금 다르게 한다.
+JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}]}`;
+  const user = `키워드:${String(keyword||'').trim()}\n[원 게시물]\n${cleanedSource.slice(0,5000)}\n[작성자 추가 설명]\n${cleanedReplies.slice(0,5000)}\n원문 흐름을 살리고 필요한 상황 표현만 보태라. 새로운 사건이나 사용 경험은 만들지 마.`;
 
   const res = await axios.post('https://api.openai.com/v1/chat/completions', {
     model: 'gpt-4o-mini', temperature: isRecipe ? 0.32 : 0.72, max_tokens: isRecipe ? 4200 : 2600,
@@ -117,18 +112,33 @@ async function generateFromThreadsMaterial(accountId, { keyword, sourceText, aut
     : [];
   if (!items.length) throw new Error('AI 글 생성 결과를 읽지 못했습니다.');
 
+  const accepted = [];
   for (const item of items) {
-    if (!item.comment) {
-      item.comment = isRecipe
-        ? `🥘 재료\n- 원문에 확인되는 재료 정보가 부족합니다\n\n🍳 만드는 법\n1. 원문에서 확인되는 조리 과정만 참고해주세요`
-        : '';
+    try {
+      item.text = await editVoice(item.text,{mode:isRecipe?'recipe':'product'},async(before,reasons)=>{
+        const r=await axios.post('https://api.openai.com/v1/chat/completions',{
+          model:'gpt-4o-mini',temperature:.25,max_tokens:900,response_format:{type:'json_object'},
+          messages:[{role:'system',content:`${voiceGuide()}\n기존 글의 문제 부분만 수정하고 새 상황을 추가하지 않는다. JSON만 출력: {"text":""}`},
+            {role:'user',content:`수정할 문제:${reasons.join(',')}\n[원문]\n${cleanedSource.slice(0,5000)}\n[추가 근거]\n${cleanedReplies.slice(0,3000)}\n[기존 글]\n${before}`}]
+        },{headers:{Authorization:`Bearer ${apiKey}`,'content-type':'application/json'},timeout:30000});
+        return JSON.parse(r.data?.choices?.[0]?.message?.content||'{}').text||'';
+      });
+      item.comment = formatVoice(sanitizeGeneratedComment(item.comment));
+      if (!isRecipe) {
+        try{item.comment=assertVoice(item.comment,{comment:true,mode:'product'});}
+        catch(e){if(e.code!=='CONTENT_STYLE_REJECTED')throw e;item.comment='';}
+      }
+      accepted.push(item);
+    } catch(e) {
+      if(e.code!=='CONTENT_STYLE_REJECTED')throw e;
+      console.warn(`[Threads][SOURCE VOICE v2] candidate omitted: ${e.message}`);
     }
-    item.comment = sanitizeGeneratedComment(item.comment);
-    item.text = formatThreadsBody(item.text, { isRecipe });
   }
+  if(!accepted.length){const e=new Error('원문 기반 말투 검증을 통과한 후보가 없습니다');e.code='CONTENT_STYLE_REJECTED';throw e;}
 
-  return { mode: isRecipe ? 'recipe' : 'product', items, texts: items.map(x => x.text), comments: items.map(x => x.comment) };
+  return { mode: isRecipe ? 'recipe' : 'product', items: accepted, texts: accepted.map(x => x.text), comments: accepted.map(x => x.comment) };
 }
 
 module.exports = { generateFromThreadsMaterial };
+
 
