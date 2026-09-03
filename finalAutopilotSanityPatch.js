@@ -1,4 +1,5 @@
 'use strict';
+const { normalizeVoice, voiceGuide, voiceProblems } = require('./threadsVoicePolicy');
 
 const engine = require('./autopilotMaterialEngine');
 const { collectPostDetails } = require('./benchmarkAccounts');
@@ -7,36 +8,7 @@ const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 
 function clean(v) { return String(v || '').replace(/\s+/g, ' ').trim(); }
 
-function sanitizeBody(text) {
-  const blocks = String(text || '')
-    .replace(/\r/g, '')
-    .replace(/,/g, '')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n[ \t]+/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .split(/\n\n+/)
-    .map(block => block.split('\n').map(x => x.replace(/\.\s*$/g, '').trim()).filter(Boolean))
-    .filter(block => block.length);
-
-  const outBlocks = [];
-  let total = 0;
-  for (const block of blocks) {
-    const out = [];
-    for (const line of block) {
-      if (total >= 8) break;
-      if (/^(?:ㅋ{1,6}|ㅎ{1,6}|ㄷㄷ|ㅠ{1,4}|ㅜ{1,4})[!?]*$/.test(line)) {
-        if (out.length) out[out.length - 1] += line;
-        else if (outBlocks.length) outBlocks[outBlocks.length - 1][outBlocks[outBlocks.length - 1].length - 1] += line;
-        continue;
-      }
-      out.push(line);
-      total++;
-    }
-    if (out.length) outBlocks.push(out);
-    if (total >= 8) break;
-  }
-  return outBlocks.map(block => block.join('\n')).join('\n\n').trim();
-}
+function sanitizeBody(text) { return normalizeVoice(text); }
 
 function sourceEvidence(detail) {
   return [detail?.sourceText, ...(Array.isArray(detail?.authorReplies) ? detail.authorReplies : [])]
@@ -81,9 +53,6 @@ engine.buildThreadsFirstAutopilot = async function finalAutopilotSanityBuild(acc
       const secretIsGrounded = secret && evidence.includes(secret);
       const label = affiliateKickLabel(result?.product?.name);
       if (!secretIsGrounded) result.secretTerm = '';
-      if (label && !String(result.commentLead || '').includes(`마지막에 ${label}`)) {
-        result.commentLead = `${String(result.commentLead || '').trim()}\n\n여기 마지막에 ${label} 살짝 더해봐\n이게 진짜 킥이야ㅋㅋ`.trim();
-      }
       console.log(`[AutopilotV3][FINAL RECIPE GUARD] local-only source recheck source=${result.sourceUrl} kick=${label || 'none'}`);
     } catch (e) { console.warn(`[AutopilotV3][FINAL RECIPE GUARD] 원문 재확인 실패 reason="${e.message}"`); }
   }
@@ -94,3 +63,4 @@ engine.buildThreadsFirstAutopilot = async function finalAutopilotSanityBuild(acc
 
 console.log('[Autopilot][FINAL SANITY] v11 로컬 사실검사 + 빈줄 보존');
 module.exports = { sanitizeBody, removeUngroundedClaims, sourceEvidence };
+
