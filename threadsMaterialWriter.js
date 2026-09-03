@@ -1,4 +1,4 @@
-const { normalizeVoice, voiceGuide, formatVoice, assertVoice, editVoice } = require('./threadsVoicePolicy');
+const { normalizeVoice, voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('./threadsVoicePolicy');
 const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 
@@ -115,13 +115,12 @@ JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}]}`;
   const accepted = [];
   for (const item of items) {
     try {
-      item.text = await editVoice(item.text,{mode:isRecipe?'recipe':'product'},async(before,reasons)=>{
+      item.text = await reviewSourceVoice(item.text,{mode:isRecipe?'recipe':'product',sourceText:cleanedSource,authorReplies:cleanedReplies},async(system,user)=>{
         const r=await axios.post('https://api.openai.com/v1/chat/completions',{
-          model:'gpt-4o-mini',temperature:.25,max_tokens:900,response_format:{type:'json_object'},
-          messages:[{role:'system',content:`${voiceGuide()}\n기존 글의 문제 부분만 수정하고 새 상황을 추가하지 않는다. JSON만 출력: {"text":""}`},
-            {role:'user',content:`수정할 문제:${reasons.join(',')}\n[원문]\n${cleanedSource.slice(0,5000)}\n[추가 근거]\n${cleanedReplies.slice(0,3000)}\n[기존 글]\n${before}`}]
+          model:'gpt-4o-mini',temperature:.15,max_tokens:1000,response_format:{type:'json_object'},
+          messages:[{role:'system',content:system},{role:'user',content:user}]
         },{headers:{Authorization:`Bearer ${apiKey}`,'content-type':'application/json'},timeout:30000});
-        return JSON.parse(r.data?.choices?.[0]?.message?.content||'{}').text||'';
+        return JSON.parse(r.data?.choices?.[0]?.message?.content||'{}');
       });
       item.comment = formatVoice(sanitizeGeneratedComment(item.comment));
       if (!isRecipe) {

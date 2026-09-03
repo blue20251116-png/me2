@@ -1,4 +1,4 @@
-const { normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, editVoice } = require('./threadsVoicePolicy');
+const { normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, reviewSourceVoice } = require('./threadsVoicePolicy');
 const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 const { collectBenchmarkMaterials, collectPostDetails, markUsedPost } = require('./benchmarkAccounts');
@@ -205,15 +205,10 @@ function normalizeRecipeHeadings(text){
   return out;
 }
 function normalizeThreadsLayout(text){return formatVoice(text);}
-async function rewriteThreadsTone(accountId,text,{mode,topic,material,comment=false}){
-  return editVoice(text,{mode,comment},async(before,reasons)=>{
-    console.log(`[AutopilotV3][VOICE REPAIR] targeted=${reasons.join(',')}`);
-    const d=await callOpenAI(accountId,
-      `${voiceGuide()}\n기존 글의 문제가 있는 부분만 수정한다. 정상 문장/순서/농담은 유지한다. 새 상황은 이 교정 단계에서 추가하지 않는다. 레시피 비밀재료는 노출하지 않는다. JSON만 출력: {"text":""}`,
-      `모드:${mode} / ${comment?'댓글':'본문'}\n수정할 문제:${reasons.join(',')}\n[원문]\n${String(material?.sourceText||'').slice(0,5000)}\n[추가 근거]\n${String(material?.authorReplies||'').slice(0,3000)}\n[기존 글]\n${before}`,
-      {maxTokens:900,temperature:.25});
-    return String(d.text||'');
-  });
+async function rewriteThreadsTone(accountId,text,{mode,material,comment=false,visualEvidence=''}){
+  if(comment&&!String(text||'').trim())return '';
+  return reviewSourceVoice(text,{mode,comment,sourceText:material?.sourceText,authorReplies:material?.authorReplies,visualEvidence},
+    (system,user)=>callOpenAI(accountId,system,user,{maxTokens:1000,temperature:.15}));
 }
 async function repairRecipeComment(accountId,{commentLead,material,analysis,productName}){
   let fixed=normalizeRecipeHeadings(commentLead);
@@ -265,9 +260,9 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     commentLead=normalizeVoice(commentLead.replace(/^\s*✅?\s*핵심만\s*[:：]?\s*\n?/i,''));
     text=text.replace(/\{\{COUPANG_LINK\}\}/g,'').replace(/\n{3,}/g,'\n\n').trim();
   }
-  text=await rewriteThreadsTone(accountId,text,{mode:analysis.mode,topic:analysis.topic,material});
+  text=await rewriteThreadsTone(accountId,text,{mode:analysis.mode,topic:analysis.topic,material,visualEvidence:analysis.vision?.evidence});
   if(analysis.mode!=='recipe' && commentLead){
-    try{commentLead=await rewriteThreadsTone(accountId,commentLead,{mode:analysis.mode,topic:analysis.topic,material,comment:true});}
+    try{commentLead=await rewriteThreadsTone(accountId,commentLead,{mode:analysis.mode,topic:analysis.topic,material,comment:true,visualEvidence:analysis.vision?.evidence});}
     catch(e){if(e.code!=='CONTENT_STYLE_REJECTED')throw e;commentLead='';}
   }
   if(analysis.mode==='recipe')text=scrubSecret(text,analysis.secretTerm,productName);
