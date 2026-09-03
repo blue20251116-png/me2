@@ -85,7 +85,7 @@ test('unknown outcomes after restart never automatically republish', () => {
 test('observed inline style defects are repaired and checked at final boundary', () => {
   const result=node(`const q=require('./finalTextHardGuardPatch');const text=q.fallbackRewrite('주방 살림 고수들은 이런 거 쓰더라 진짜 편함\\n진짜 실화냐?','product');console.log('RESULT:'+JSON.stringify({text,reasons:q.badStyleReasons(text,'product')}));process.exit();`);
   assert.deepEqual(result.reasons,[]);
-  assert.match(result.text,/쓰네/);
+  assert.match(result.text,/쓰더라/); // Valid conversational ending is preserved; 음슴체/냐체 are still repaired.
   assert.match(result.text,/실화인가/);
 });
 
@@ -117,3 +117,4 @@ test('real HTTP startup, admin authentication and health endpoint work', async (
     await new Promise(resolve=>{if(child.exitCode!==null||child.signalCode)resolve();else child.once('exit',resolve);});
   }
 });
+

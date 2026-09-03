@@ -1,3 +1,4 @@
+const { normalizeVoice, voiceGuide, voiceProblems } = require('./threadsVoicePolicy');
 const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 const { collectBenchmarkMaterials, collectPostDetails, markUsedPost } = require('./benchmarkAccounts');
@@ -212,7 +213,7 @@ function normalizeThreadsLayout(text){
 }
 function badThreadsToneReasons(text){
   const t=String(text||'');
-  const reasons=[];
+  const reasons=voiceProblems(t);
   const honorific=[/입니다[.!?]?/g,/합니다[.!?]?/g,/됩니다[.!?]?/g,/하세요[.!?]?/g,/해보세요/g,/추천드립니다/g,/바랍니다/g,/수 있습니다/g,/원하신다면/g];
   const aiPhrases=[/고급 요리/i,/풍미가 배가/i,/특별한 (?:저녁|식사|한 끼)/i,/꼭 시도해/i,/즐겨보세요/i,/완벽한 조화/i,/매력적인 메뉴/i,/한층 더/i,/입맛을 사로잡/i,/감칠맛을 더해/i];
   if(honorific.some(r=>r.test(t)))reasons.push('존댓말/설명문');
@@ -230,18 +231,9 @@ async function rewriteThreadsTone(accountId,text,{mode,topic,material}){
   console.warn(`[AutopilotV3][TONE] 재작성 필요 reason=${reasons.join(',')} preview="${before.slice(0,90).replace(/\n/g,' / ')}"`);
   try{
     const d=await callOpenAI(accountId,
-`한국 Threads 본문 말투 교정기다. 주어진 글의 사실과 주제는 유지하고 말투와 호흡만 완전히 바꾼다.
-필수 규칙:
-- 자연스러운 반말. 음슴체 금지.
-- 존댓말(~입니다, ~합니다, ~하세요, ~해보세요, ~됩니다) 절대 금지.
-- 블로그/광고/AI 문장 금지: '고급 요리', '풍미가 배가됩니다', '특별한 식사', '꼭 시도해보세요', '완벽한 조화', '한층 더' 같은 표현 금지.
-- 친구가 Threads에 툭 올린 느낌. 짧은 문장과 줄바꿈을 쓴다.
-- 3~7줄 정도. 한 줄은 되도록 짧게.
-- 첫 줄부터 정의/설명하지 말고 반응, 상황, 의외성, 궁금증 중 하나로 시작한다.
-- ㅋㅋ는 어울릴 때 최대 1~2번만 쓴다. 억지 유행어 금지.
-- 확인되지 않은 '내가 샀다/먹었다/써봤다/친구가 했다' 같은 경험을 새로 만들지 않는다.
-- 링크, 광고고지, 해시태그, 번호목록, 제품 스펙표 금지.
-- 레시피면 정확한 비밀 소스/제휴재료 이름은 본문에 쓰지 않는다.
+`한국 Threads 본문 말투 교정기다. 사실과 주제는 유지한다.
+${voiceGuide()}
+- 레시피는 정확한 제휴 소스 이름을 본문에 새로 노출하지 않는다.
 JSON만 출력: {"text":""}`,
       `모드:${mode}\n주제:${topic}\n[원 Threads 소재]\n${String(material?.sourceText||'').slice(0,3000)}\n\n[교정할 본문]\n${before}`,
       {maxTokens:900,temperature:.65}
@@ -294,27 +286,20 @@ async function generatePost(accountId,{material,analysis,product,target}){
   const d=await callOpenAI(accountId,
 `너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 원 Threads 소재의 핵심과 상황은 참고하되 문장을 복사하지 않는다.
 
-[말투 - 모든 모드 공통, 매우 중요]
-- 자연스러운 반말만 사용한다. 음슴체는 금지한다.
-- '~입니다/~합니다/~됩니다/~하세요/~해보세요' 같은 존댓말 설명문은 절대 쓰지 않는다.
-- 블로그·AI 문체 금지: '고급 요리', '풍미가 배가됩니다', '특별한 저녁 식사', '꼭 시도해보세요', '완벽한 조화', '한층 더', '매력적인 메뉴' 같은 표현을 쓰지 않는다.
-- 친구가 Threads에 툭 올린 느낌으로 짧게 쓴다. 3~7줄, 짧은 문장, 줄바꿈 중심.
-- 첫 문장에서 '~은/는 ...입니다'처럼 정의하지 않는다. 반응·상황·의외성·궁금증으로 시작한다.
-- ㅋㅋ는 자연스러울 때 최대 1~2회만. 억지 유행어 금지.
-- 확인되지 않은 구매/사용/섭취 경험을 만들어내지 않는다.
+${voiceGuide()}
 
 [레시피]
 - 본문 text에는 음식의 핵심 장면과 궁금증만 짧게 쓴다.
 - 정확한 제휴 소스/핵심재료 이름은 숨긴다.
-- 마지막은 '재료랑 만드는 법은 댓글에 적어둘게'처럼 자연스럽게 끝낼 수 있다.
+- 본문 마지막에 댓글 유도 문구를 자동으로 붙이지 않는다.
 - commentLead는 반드시 '🥘 재료'와 '🍳 만드는 법' 두 섹션으로 쓴다.
 - 조리 단계도 짧은 반말로 쓴다. 음슴체/존댓말 금지.
 - 쿠팡 연결 핵심재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다.
 
 [일반상품/생활]
-- 본문 text는 제품 설명서가 아니라 상황→불편/발견→반응의 흐름을 우선한다.
+- 본문 text는 소재에 맞는 장면과 반응을 쓴다. 고정된 사건 순서를 강제하지 않는다.
 - 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.
-- commentLead에는 '✅ 핵심만' 아래 핵심 포인트 2~3개만 간결하게 쓴다.
+- commentLead는 확인된 정보 하나를 자연스러운 반말 1~2문장으로 보충한다. 추가 정보가 없으면 빈 문자열로 둔다.
 
 JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     `타겟:${target||'전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm||productName}\n쿠팡 상품:${productName}\n판매대상:${analysis.vision?.soldObject||'-'} / 요리:${analysis.vision?.dish||'-'}\n[Threads 원문]\n${material.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0,5000)||'(없음)'}`,
@@ -329,10 +314,14 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     commentLead=await repairRecipeComment(accountId,{commentLead,material,analysis,productName});
   }else{
     if(/✅\s*핵심만/.test(text))text=text.replace(/\n?✅\s*핵심만[\s\S]*$/,'').trim();
-    if(!/✅\s*핵심만/.test(commentLead))commentLead=`✅ 핵심만\n- ${analysis.facts?.[0]||analysis.topic}\n- ${analysis.facts?.[1]||'원문에서 확인되는 핵심 특징'}`;
+    commentLead=normalizeVoice(commentLead.replace(/^\s*✅?\s*핵심만\s*[:：]?\s*\n?/i,''));
     text=text.replace(/\{\{COUPANG_LINK\}\}/g,'').replace(/\n{3,}/g,'\n\n').trim();
   }
   text=await rewriteThreadsTone(accountId,text,{mode:analysis.mode,topic:analysis.topic,material});
+  if(analysis.mode!=='recipe' && commentLead){
+    commentLead=await rewriteThreadsTone(accountId,commentLead,{mode:analysis.mode,topic:analysis.topic,material});
+    if(badThreadsToneReasons(commentLead).length) commentLead='';
+  }
   if(analysis.mode==='recipe')text=scrubSecret(text,analysis.secretTerm,productName);
   const finalReasons=badThreadsToneReasons(text);
   if(finalReasons.length)console.warn(`[AutopilotV3][TONE] 최종 경고=${finalReasons.join(',')} text="${text.slice(0,120).replace(/\n/g,' / ')}"`);

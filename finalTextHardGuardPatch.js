@@ -1,4 +1,5 @@
 'use strict';
+const { normalizeVoice, voiceGuide, voiceProblems } = require('./threadsVoicePolicy');
 
 const engine = require('./autopilotMaterialEngine');
 const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
@@ -8,38 +9,13 @@ function hardSanitize(text) {
     .replace(/\r/g, '')
     .replace(/\s+\/\s+/g, '\n')
     .replace(/\\n/g, '\n')
-    .replace(/,/g, '')
-    .replace(/(^|[^0-9])\.(?![0-9])/g, '$1')
-    .replace(/\.\.+/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{4,}/g, '\n\n\n')
     .trim();
 }
 
-function normalizeLineBreaks(text) {
-  const clean = hardSanitize(text);
-  const pieces = clean.split(/(\n{2,3})/);
-  const out = [];
-  let total = 0;
-  for (const piece of pieces) {
-    if (!piece) continue;
-    if (/^\n{2,3}$/.test(piece)) {
-      if (out.length && !/^\n/.test(out[out.length - 1])) out.push(piece);
-      continue;
-    }
-    const lines = piece.split('\n').map(x => x.trim()).filter(Boolean);
-    const kept = [];
-    for (const line of lines) {
-      if (total >= 12) break;
-      kept.push(line);
-      total++;
-    }
-    if (kept.length) out.push(kept.join('\n'));
-    if (total >= 12) break;
-  }
-  return out.join('').replace(/\n{4,}/g, '\n\n\n').trim();
-}
+function normalizeLineBreaks(text) { return normalizeVoice(text); }
 
 const INCOMPLETE_ENDINGS = [
   { re: /추천해주$/, to: '추천해줬어' }, { re: /알려주$/, to: '알려줬어' },
@@ -55,13 +31,13 @@ const INCOMPLETE_ENDINGS = [
 
 function hasIncompleteEnding(line) {
   const raw = String(line || '').trim();
-  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ😨😱😂🤣🥲😭]+)$/u)?.[1] || '';
+  const suffix = raw.match(/([\s.!?~;ㅋㅎㅠㅜ\p{Extended_Pictographic}\uFE0F]+)$/u)?.[1] || '';
   const core = suffix ? raw.slice(0, -suffix.length).trim() : raw;
   return INCOMPLETE_ENDINGS.some(rule => rule.re.test(core));
 }
 function repairIncompleteEnding(line) {
   const raw = String(line || '').trim();
-  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ😨😱😂🤣🥲😭]+)$/u)?.[1] || '';
+  const suffix = raw.match(/([\s.!?~;ㅋㅎㅠㅜ\p{Extended_Pictographic}\uFE0F]+)$/u)?.[1] || '';
   let core = suffix ? raw.slice(0, -suffix.length).trim() : raw;
   for (const rule of INCOMPLETE_ENDINGS) {
     if (!rule.re.test(core)) continue;
@@ -72,7 +48,7 @@ function repairIncompleteEnding(line) {
 
 function splitEndingSuffix(line) {
   const raw = String(line || '').trim();
-  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ😨😱😂🤣🥲😭]+)$/u)?.[1] || '';
+  const suffix = raw.match(/([\s.!?~;ㅋㅎㅠㅜ\p{Extended_Pictographic}\uFE0F]+)$/u)?.[1] || '';
   return { raw, suffix, core: suffix ? raw.slice(0, -suffix.length).trim() : raw };
 }
 
@@ -144,10 +120,8 @@ function isUnsupportedSecretIngredientLine(line, mode) {
 function badStyleReasons(text, mode) {
   const t = String(text || '');
   const lines = t.split('\n').map(x => x.trim()).filter(Boolean);
-  const reasons = [];
-  if (/(더라|하더라|했더라|더라고|하더라고|했더라고)/i.test(t)) reasons.push('더라체');
+  const reasons = voiceProblems(t);
   if (/[가-힣]+냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) reasons.push('냐체');
-  if (/[,.]/.test(t.replace(/\d+\.\d+/g, ''))) reasons.push('마침표/쉼표');
   if (/강력\s*추천|무조건\s*추천|꼭\s*써봐|놓치면\s*후회/i.test(t)) reasons.push('구매권유');
   if (lines.some(hasIncompleteEnding)) reasons.push('미완성어미');
   if (lines.some(hasEumseumEnding)) reasons.push('음슴체');
@@ -157,18 +131,15 @@ function badStyleReasons(text, mode) {
 }
 
 function rewriteLineEnding(line) {
-  const suffix = String(line || '').match(/([!?~ㅋㅎㅠㅜ😨😱😂🤣🥲😭]+)$/u)?.[1] || '';
+  const suffix = String(line || '').match(/([\s.!?~;ㅋㅎㅠㅜ\p{Extended_Pictographic}\uFE0F]+)$/u)?.[1] || '';
   let core = suffix ? String(line).slice(0, -suffix.length) : String(line);
-  core = core.replace(/좋더라$/g,'좋아').replace(/편하더라$/g,'편해').replace(/있더라$/g,'있어').replace(/없더라$/g,'없어')
-    .replace(/아니더라$/g,'아니야').replace(/했더라$/g,'했어').replace(/하더라$/g,'해').replace(/했더라고$/g,'했어')
-    .replace(/하더라고$/g,'해').replace(/더라고$/g,'네').replace(/더라구$/g,'네').replace(/더라$/g,'네')
-    .replace(/뭐냐$/g,'뭐지').replace(/거냐$/g,'건가').replace(/없냐$/g,'없나').replace(/맞냐$/g,'맞나');
-  return repairEumseumEnding(repairIncompleteEnding(`${core}${suffix}`));
+  core = core    .replace(/뭐냐$/g,'뭐지').replace(/거냐$/g,'건가').replace(/없냐$/g,'없나').replace(/맞냐$/g,'맞나');
+  return repairEumseumEnding(`${core}${suffix}`);
 }
 
 function hasUnsafeNyaEnding(line) {
   const raw = String(line || '').trim();
-  const suffix = raw.match(/([!?~ㅋㅎㅠㅜ😨😱😂🤣🥲😭]+)$/u)?.[1] || '';
+  const suffix = raw.match(/([\s.!?~;ㅋㅎㅠㅜ\p{Extended_Pictographic}\uFE0F]+)$/u)?.[1] || '';
   const core = suffix ? raw.slice(0, -suffix.length) : raw;
   if (!/[가-힣]+냐$/.test(core)) return false;
   if (/(?:뭐냐|거냐|없냐|맞냐)$/.test(core)) return false;
@@ -204,7 +175,14 @@ engine.buildThreadsFirstAutopilot = async function finalTextHardGuardBuild(accou
     err.code = 'CONTENT_STYLE_REJECTED';
     throw err;
   }
+  if (result.mode !== 'recipe' && result.commentLead) {
+    const comment = fallbackRewrite(result.commentLead, result.mode);
+    const issues = badStyleReasons(comment, result.mode);
+    result.commentLead = issues.length ? '' : comment;
+    if (issues.length) console.warn(`[AutopilotV3][COMMENT TONE] optional comment omitted reason=${issues.join(',')}`);
+  }
   return result;
 };
 console.log('[Autopilot][TEXT HARD GUARD] v18 비레시피 recipe 오염 + 음슴체 종결 최소 안전정리');
 module.exports = { hardSanitize, normalizeLineBreaks, badStyleReasons, fallbackRewrite, hasIncompleteEnding, repairIncompleteEnding, hasUnsafeNyaEnding, hasEumseumEnding, repairEumseumEnding, isNonRecipeRecipeLine, isUnsupportedSecretIngredientLine };
+
