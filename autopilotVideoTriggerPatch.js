@@ -3,6 +3,10 @@ const engine = require('./autopilotMaterialEngine');
 const originalBuildThreadsFirstAutopilot = engine.buildThreadsFirstAutopilot.bind(engine);
 
 async function detectThreadsVideo(postUrl) {
+  if (process.env.ME2_BROWSER_WORKER !== '1') {
+    try { return await require('./isolatedTask').isolatedBrowserTask('autopilotVideoTriggerPatch', 'detectThreadsVideo', [postUrl], 45000); }
+    catch (err) { console.warn(`[Autopilot][VIDEO DETECT] ${err.code || err.message}`); return false; }
+  }
   if (!postUrl) return false;
 
   let playwright;
@@ -78,3 +82,5 @@ engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutop
 };
 
 console.log('[Autopilot][VIDEO TRIGGER PATCH] 영상 존재 감지 시 mp4 importer 강제 실행 활성화');
+
+module.exports.detectThreadsVideo = detectThreadsVideo;

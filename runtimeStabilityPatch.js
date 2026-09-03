@@ -1,4 +1,5 @@
 'use strict';
+require('./httpDeadline');
 
 const Module = require('module');
 const path = require('path');

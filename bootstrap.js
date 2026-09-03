@@ -49,7 +49,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS insight_history (
   UNIQUE(post_id, captured_at)
 )`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_insight_history_account_time ON insight_history(account_id, captured_at)`);
-const uploadsDir = path.join(__dirname, 'uploads');
+const uploadsDir = path.join(__dirname, 'db', 'uploads');
 const videoEditLocks=new Set(), threadsImportLocks=new Set(), threadsSearchLocks=new Set();
 function requireOwnedAccount(req,res,next){const accountId=Number(req.query.accountId||req.body?.accountId||req.params?.accountId);if(!accountId)return res.status(400).json({error:'accountId가 필요합니다'});const account=getAccount(accountId);if(!account)return res.status(404).json({error:'존재하지 않는 계정입니다'});if(!req.currentUser||account.user_id!==req.currentUser.id)return res.status(403).json({error:'본인 소유의 계정만 이용할 수 있습니다'});req.account=account;next();}
 function requireAdmin(req,res,next){if(req.currentUser?.role!=='admin')return res.status(403).json({error:'관리자만 이용할 수 있습니다.'});next();}

@@ -1,5 +1,8 @@
 const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
+const __me2Fs = require('fs');
+const __me2Path = require('path');
+const { editVideo: __me2EditVideo } = require('./videoEditor');
 
 function resolveThreadsAppCreds(account){
   const shared=getSystemApiSettings();
@@ -13,6 +16,27 @@ function resolveThreadsAppCreds(account){
 const GRAPH_BASE='https://graph.threads.net/v1.0';
 const MEDIA_BUNDLE_PREFIX='__THREADS_MEDIA_BUNDLE__';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+async function __me2NormalizeCarouselVideoUrl(rawUrl){
+  try{
+    const u=new URL(String(rawUrl||''));
+    const marker='/uploads/';
+    const idx=u.pathname.indexOf(marker);
+    if(idx<0)throw new Error('로컬 uploads URL이 아닙니다');
+    const relative=decodeURIComponent(u.pathname.slice(idx+marker.length));
+    const uploadsRoot=__me2Path.resolve(__dirname,'db','uploads');
+    const inputPath=__me2Path.resolve(uploadsRoot,relative);
+    if(!inputPath.startsWith(uploadsRoot+__me2Path.sep)&&inputPath!==uploadsRoot)throw new Error('잘못된 uploads 경로입니다');
+    if(!__me2Fs.existsSync(inputPath))throw new Error('원본 영상 파일이 영속 저장소에 없습니다');
+    const normalized=await __me2EditVideo({inputPath,outputDir:uploadsRoot,start:0,end:null,mute:false});
+    const nextUrl=`${u.protocol}//${u.host}/uploads/${encodeURIComponent(normalized.filename)}`;
+    console.log(`[Threads][CAROUSEL_VIDEO_NORMALIZE] success old=${rawUrl} new=${nextUrl} size=${normalized.size} duration=${Number(normalized.duration||0).toFixed(2)}s`);
+    return nextUrl;
+  }catch(err){
+    console.error(`[Threads][CAROUSEL_VIDEO_NORMALIZE] failed url=${rawUrl} reason="${err.message}"`);
+    return String(rawUrl||'');
+  }
+}
 
 // Threads 본문은 발행 직전에 한 번 더 정리한다
 // 이미 DB에 저장된 예약글/대기글도 이 단계를 지나므로 생성 시점이 오래됐어도 마침표가 제거된다
@@ -253,8 +277,33 @@ async function publishMediaItemsPost(accountId,{text,mediaItems}){
   console.log(`[Threads][CAROUSEL_WAIT] 자식 ${children.length}개 준비 상태 확인`);
   const readyChildren=[];const failedChildren=[];
   for(const child of children){
-    try{await waitForContainerReady(child.id,accessToken,{maxTries:child.type==='VIDEO'?40:20,waitMs:child.type==='VIDEO'?2000:1000,label:`CAROUSEL_${child.type}`});readyChildren.push(child);}
-    catch(err){if(!isMediaProcessingError(err))throw err;failedChildren.push({child,err});console.warn(`[Threads][CAROUSEL_ITEM_SKIP] ${child.type} 처리 실패 → 제외 id=${child.id} url=${child.url} reason="${err.message}"`);}
+    try{
+      await waitForContainerReady(child.id,accessToken,{maxTries:child.type==='VIDEO'?40:20,waitMs:child.type==='VIDEO'?2000:1000,label:`CAROUSEL_${child.type}`});
+      readyChildren.push(child);
+    }catch(err){
+      if(!isMediaProcessingError(err))throw err;
+
+      if(child.type==='VIDEO'){
+        console.warn(`[Threads][CAROUSEL_VIDEO_RECREATE] 1차 VIDEO 처리 실패 → ffmpeg 정상화 후 새 child 재생성 oldId=${child.id} url=${child.url} reason="${err.message}"`);
+        let retryUrl=child.url;
+        try{retryUrl=await __me2NormalizeCarouselVideoUrl(child.url);}catch{}
+        await sleep(1200);
+        try{
+          const retryChild=await createCarouselChildContainer(accountId,{type:'VIDEO',url:retryUrl},accessToken,{maxTries:3});
+          await waitForContainerReady(retryChild.id,accessToken,{maxTries:40,waitMs:2000,label:'CAROUSEL_VIDEO_RETRY'});
+          readyChildren.push(retryChild);
+          console.log(`[Threads][CAROUSEL_VIDEO_RECREATE] 성공 oldId=${child.id} newId=${retryChild.id} normalized=${retryUrl!==child.url?'yes':'no'}`);
+          continue;
+        }catch(retryErr){
+          if(!isMediaProcessingError(retryErr)&&!isTransientThreadsError(retryErr))throw retryErr;
+          console.error(`[Threads][CAROUSEL_VIDEO_ABORT] 정상화 후 VIDEO도 실패 → 이미지 단독 발행 금지 oldId=${child.id} oldUrl=${child.url} retryUrl=${retryUrl} reason="${retryErr.message}"`);
+          throw mediaProcessingError('예약글 VIDEO 정상화 재시도 실패 - 이미지 단독 발행을 차단했습니다',{type:'VIDEO',url:retryUrl,originalError:retryErr});
+        }
+      }
+
+      failedChildren.push({child,err});
+      console.warn(`[Threads][CAROUSEL_ITEM_SKIP] ${child.type} 처리 실패 → 제외 id=${child.id} url=${child.url} reason="${err.message}"`);
+    }
   }
   if(failedChildren.length)console.warn(`[Threads][CAROUSEL_FALLBACK] 준비 성공=${readyChildren.length} 실패=${failedChildren.length}`);
   if(!readyChildren.length){console.warn('[Threads][CAROUSEL_FALLBACK] 모든 미디어 처리 실패 → TEXT 발행');return publishPost(accountId,{text});}
@@ -270,14 +319,21 @@ async function publishMediaItemsPost(accountId,{text,mediaItems}){
 
 async function publishCarouselPost(accountId,{text,imageUrls}){return publishMediaItemsPost(accountId,{text,mediaItems:(imageUrls||[]).filter(Boolean).map(url=>({type:'IMAGE',url}))});}
 
-async function publishReply(accountId,parentMediaId,text){
+async function publishReply(accountId,parentMediaId,text,options={}){
   const account=getAccount(accountId);if(!account)throw new Error('존재하지 않는 계정입니다');if(!account.threads_access_token)throw new Error('스레드 Access Token이 없습니다');const accessToken=account.threads_access_token;
   const guarded=applyCoupangReplyPreviewGuard(text);
+  if(options.creationId){
+    const status=await getContainerStatus(options.creationId,accessToken);
+    if(status.status==='PUBLISHED')throw Object.assign(new Error('기존 댓글이 이미 발행됨: 결과 확인 필요'),{code:'COMMENT_OUTCOME_UNKNOWN'});
+    return publishContainer(options.creationId,accessToken,3,2500);
+  }
   text=guarded.text;
   console.log(`[Threads][REPLY_PREVIEW_GUARD] account=${accountId} parentMediaId=${parentMediaId} applied=${guarded.guardApplied?'yes':'no'} coupangUrls=${guarded.urlCount} text=${JSON.stringify(text)}`);
   let creationId;
   try{const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params:{media_type:'TEXT',text,reply_to_id:parentMediaId,access_token:accessToken},timeout:20000});creationId=createRes.data?.id;if(!creationId)throw new Error('Threads 댓글 컨테이너 생성 응답에 id가 없습니다');console.log(`[Threads][REPLY_CREATE] 성공 account=${accountId} parentMediaId=${parentMediaId} creationId=${creationId}`);}catch(err){logThreadsError('REPLY_CREATE',err,{accountId,parentMediaId});throw err;}
-  return publishContainer(creationId,accessToken,3,2000);
+  if(options.onCreated)await options.onCreated(creationId);
+  await sleep(2500);
+  return publishContainer(creationId,accessToken,3,2500);
 }
 
 async function getMediaInsights(accountId,mediaId){

@@ -397,3 +397,9 @@ async function importThreadsVideo({ url, outputDir }) {
 }
 
 module.exports = { validateThreadsUrl, extractCandidates, extractCandidatesWithBrowser, importThreadsVideo };
+if (process.env.ME2_BROWSER_WORKER !== '1') {
+  const { isolatedBrowserTask } = require('./isolatedTask');
+  for (const method of ['importThreadsVideo','extractCandidatesWithBrowser']) {
+    module.exports[method] = (...args) => isolatedBrowserTask('threadsMediaImporter', method, args, 180000);
+  }
+}

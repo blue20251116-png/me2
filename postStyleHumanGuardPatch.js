@@ -94,6 +94,9 @@ function sanitizeByBlocks(text, result) {
 function inspect(text, result) {
   const t = clean(text);
   const fatal = [];
+  if (/없이는?\s*못\s*살.*느낌|그냥\s*[^\n]{1,20}아닌\s*듯/.test(t)) fatal.push('empty-sentiment');
+  if (/(?:친구|남편|아내|엄마|아빠)가.{0,20}행복해\s*보이다니/.test(t)) fatal.push('fabricated-relation');
+  if ((t.match(/ㅋ{2,}|ㅎ{2,}|ㅁㅊ/g)||[]).length >= 3) fatal.push('reaction-overuse');
   if (!isRecipe(result) && (RECIPE_CTA.test(t) || RECIPE_LEAK.test(t))) fatal.push('recipe-leak');
   if (/[가-힣]+냐(?=$|\s|[!?~ㅋㅎㅠㅜ])/m.test(t)) fatal.push('nya');
   if (CANNED.test(t)) fatal.push('canned-ad-tone');

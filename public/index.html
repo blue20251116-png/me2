@@ -12,7 +12,7 @@
       <div class="brand">
         <span class="brand-mark">≡</span>
         <div class="brand-text"><h1>스레드 자동발행</h1><span id="connStatus" class="conn-badge conn-loading">연결 확인 중…</span></div>
-        <div class="user-menu"><span id="myUserEmail" class="my-user-email"></span><a id="adminLink" href="/admin" class="my-admin-link hidden">관리자</a><button type="button" id="logoutBtn" class="my-logout-btn">로그아웃</button></div>
+        <div class="user-menu"><span id="myUserEmail" class="my-user-email"></span><span id="subscriptionRemaining" class="conn-badge conn-loading" style="white-space:nowrap;">이용권 확인 중…</span><a id="adminLink" href="/admin" class="my-admin-link hidden">관리자</a><button type="button" id="logoutBtn" class="my-logout-btn">로그아웃</button></div>
       </div>
       <div class="account-strip" id="accountStrip"></div>
     </header>
@@ -56,6 +56,41 @@
     </main>
     <nav class="bottom-nav"><button class="nav-btn active" data-tab="dashboard"><span class="nav-icon">📊</span><span class="nav-label">대시보드</span></button><button class="nav-btn" data-tab="compose"><span class="nav-icon">✏️</span><span class="nav-label">글 예약</span></button><button class="nav-btn" data-tab="posts"><span class="nav-icon">📋</span><span class="nav-label">전체 글</span></button><button class="nav-btn" data-tab="settings"><span class="nav-icon">⚙️</span><span class="nav-label">연결 설정</span></button></nav>
   </div>
+  <script>
+    (async function loadSubscriptionRemaining(){
+      const el=document.getElementById('subscriptionRemaining');
+      if(!el)return;
+      try{
+        const res=await fetch('/api/auth/me');
+        if(!res.ok)throw new Error('me');
+        const me=await res.json();
+        if(me.role==='admin'){el.classList.add('hidden');return;}
+        const plan=String(me.plan||'이용권').toUpperCase();
+        if(!me.expires_at){
+          el.textContent=plan+' · 기간 미설정';
+          el.className='conn-badge conn-loading';
+          return;
+        }
+        const expiry=new Date(me.expires_at);
+        const diff=expiry.getTime()-Date.now();
+        const days=Math.max(0,Math.ceil(diff/86400000));
+        if(diff<=0){
+          el.textContent=plan+' · 만료됨';
+          el.className='conn-badge conn-no';
+        }else if(days<=1){
+          el.textContent=plan+' · 오늘 만료';
+          el.className='conn-badge conn-no';
+        }else{
+          el.textContent=plan+' · '+days+'일 남음';
+          el.className='conn-badge conn-yes';
+        }
+        el.title='이용권 만료일: '+expiry.toLocaleString('ko-KR');
+      }catch(e){
+        el.textContent='이용권 확인 실패';
+        el.className='conn-badge conn-no';
+      }
+    })();
+  </script>
   <script src="app.js"></script>
   <script src="naverConnect.js"></script>
   <script src="threadsMaterialUi.js"></script>

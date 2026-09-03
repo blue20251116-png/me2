@@ -65,33 +65,6 @@ function transformScheduler(src) {
   if (out.includes(buildCommentOld)) out = out.replace(buildCommentOld, buildCommentNew);
   else console.warn('[Comment][COMPACT] buildCommentText block not found');
 
-  const retryFnRe = /async function retryFailedComments\(account,now\)\{[\s\S]*?\}\nfunction startPublishJob\(\)/;
-  if (retryFnRe.test(out)) {
-    const delayedRunner = "async function retryFailedComments(account,now){const pending=db.prepare(`SELECT * FROM posts WHERE account_id=? AND status='posted' AND auto_comment_enabled=1 AND comment_status='pending' AND comment_media_id IS NULL AND threads_media_id IS NOT NULL AND comment_next_retry_at IS NOT NULL AND comment_next_retry_at<=? ORDER BY posted_at ASC LIMIT 3`).all(account.id,now);for(const post of pending){console.log(`[댓글 5분 지연 실행] account #${account.id} post #${post.id}`);await postAffiliateComment(account,post,post.threads_media_id,{isRetry:false});await new Promise(r=>setTimeout(r,1500));}}\nfunction startPublishJob()";
-    out = out.replace(retryFnRe, delayedRunner);
-    console.log('[Comment][DELAY] pending 댓글만 5분 후 1회 실행');
-  } else {
-    console.warn('[Comment][DELAY] retryFailedComments block not found');
-  }
-
-  const immediatePattern = /await new Promise\(r=>setTimeout\(r,3000\)\);const freshPost=db\.prepare\(`SELECT \* FROM posts WHERE id=\?`\)\.get\(post\.id\)\|\|post;await postAffiliateComment\(account,freshPost,mediaId\);/;
-  if (immediatePattern.test(out)) {
-    const delayedCode = "const hasAutoComment=!!post.auto_comment_enabled&&!!(post.link||post.recipe_comment_text);if(hasAutoComment){const commentAt=new Date(Date.now()+5*60*1000).toISOString();db.prepare(`UPDATE posts SET comment_status='pending', comment_next_retry_at=?, comment_error_message=NULL, comment_retry_count=0 WHERE id=?`).run(commentAt,post.id);console.log(`[댓글 예약] account #${account.id} post #${post.id} - 본문 발행 5분 후 ${commentAt}`);}";
-    out = out.replace(immediatePattern, delayedCode);
-    console.log('[Comment][DELAY] 본문 직후 즉시댓글 제거 · 5분 예약 저장');
-  } else {
-    console.warn('[Comment][DELAY] immediate comment block not found');
-  }
-
-  const retryOld = "const retryCount=Number(post.comment_retry_count||0)+1;const nextRetry=retryCount<3?nextCommentRetryIso(retryCount):null;";
-  const retryNew = "const retryCount=3;const nextRetry=null;";
-  if (out.includes(retryOld)) {
-    out = out.replace(retryOld, retryNew);
-    console.log('[Comment][NO RETRY] 댓글 실패 시 자동 재시도 없음');
-  } else {
-    console.warn('[Comment][NO RETRY] retry counter block not found');
-  }
-
   applied = true;
   return out;
 }
@@ -106,4 +79,4 @@ Module._extensions['.js'] = function bodyPreserveLoader(mod, filename) {
   return originalLoader(mod, filename);
 };
 
-console.log('[Threads][BODY PRESERVE] patch armed · comment 5min/once/compact450 · persistent scheduler uploads enabled');
+console.log('[Threads][BODY PRESERVE] patch armed · comment formatting compact450 · persistent scheduler uploads enabled');

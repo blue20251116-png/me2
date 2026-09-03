@@ -5,6 +5,7 @@ const fs = require('fs');
 const multer = require('multer');
 const crypto = require('crypto');
 const session = require('express-session');
+const SQLiteSessionStore = require('./sessionStore');
 const {
   db,
   listAccounts,
@@ -50,16 +51,23 @@ const frameVision = require('./frameVision');
 bootstrapAdmin();
 
 const app = express();
+if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) throw new Error('SESSION_SECRET is required in production');
 app.use(express.json());
 app.set('trust proxy', 1); // Railway 등 프록시 뒤에서 세션 쿠키가 정상 동작하도록
+app.get('/healthz', (req,res)=>{
+  try { db.prepare('SELECT 1').get(); res.json({ok:true}); }
+  catch { res.status(503).json({ok:false}); }
+});
 
 app.use(
   session({
+    store: new SQLiteSessionStore(),
     secret: process.env.SESSION_SECRET || 'threads-scheduler-dev-secret-change-me',
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
+      sameSite: 'lax',
       maxAge: 1000 * 60 * 60 * 24 * 30, // 30일
       secure: process.env.NODE_ENV === 'production',
     },
@@ -112,7 +120,7 @@ app.post('/api/auth/signup', (req, res) => {
   }
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', require('./loginRateLimit'), (req, res, next) => {
   const { email, password } = req.body || {};
   const user = getUserByEmail(email);
   if (!user || !verifyPassword(password, user.password_hash)) {
@@ -123,8 +131,11 @@ app.post('/api/auth/login', (req, res) => {
   if (effectiveStatus !== 'active') {
     return res.status(403).json({ error: '로그인할 수 없는 계정 상태입니다', status: effectiveStatus });
   }
-  req.session.userId = user.id;
-  res.json({ ok: true, role: user.role });
+  req.session.regenerate(err=>{
+    if(err)return next(err);
+    req.session.userId=user.id;
+    req.session.save(err=>err?next(err):res.json({ok:true,role:user.role}));
+  });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -159,6 +170,16 @@ app.use('/uploads', express.static(uploadsDir));
 // ---------- 여기부터는 로그인 + 승인(active) 상태여야만 통과 ----------
 app.use(requireAuth);
 
+app.get('/api/admin/automation-health', requireAdmin, (req,res)=>{
+  const { budgetState }=require('./automationState');
+  const states=db.prepare('SELECT * FROM automation_state ORDER BY account_id').all();
+  const posts=db.prepare("SELECT status,COUNT(*) count FROM posts GROUP BY status").all();
+  const comments=db.prepare("SELECT comment_status status,COUNT(*) count FROM posts WHERE status='posted' GROUP BY comment_status").all();
+  const review=db.prepare("SELECT id,account_id,status,comment_status,error_message,comment_error_message FROM posts WHERE error_message LIKE '%REVIEW%' OR error_message LIKE '%OUTCOME_UNKNOWN%' OR comment_error_message LIKE '%OUTCOME_UNKNOWN%' ORDER BY id DESC LIMIT 50").all();
+  res.set('Cache-Control','no-store');
+  res.json({states,posts,comments,review,budget:budgetState(),uptimeSec:Math.floor(process.uptime())});
+});
+
 app.get('/admin', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 app.get('/admin.html', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
@@ -185,6 +206,16 @@ app.post('/api/admin/users/:id/grant', requireAdmin, (req, res) => {
   const days = Number(req.body?.days) || 30;
   const newExpiry = extendUserExpiry(Number(req.params.id), days);
   res.json({ ok: true, expires_at: newExpiry });
+});
+
+app.post('/api/admin/users/:id/reset-password', requireAdmin, (req, res) => {
+  const userId = Number(req.params.id);
+  const user = getUserById(userId);
+  if (!user) return res.status(404).json({ error: '회원이 없습니다' });
+  if (user.role === 'admin') return res.status(400).json({ error: '관리자 계정은 이 메뉴에서 초기화할 수 없습니다' });
+  const temporaryPassword = crypto.randomBytes(6).toString('base64url').slice(0, 10);
+  db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(temporaryPassword), userId);
+  res.json({ ok: true, temporary_password: temporaryPassword });
 });
 
 // 계좌/오픈카톡/안내문구 — 회원가입 화면에 보여줄 내용을 관리자가 직접 쓰고 고칠 수 있게
