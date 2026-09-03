@@ -143,3 +143,9 @@ test('start command no longer loads deleted voice-only patches',()=>{
     assert.ok(!start.includes(name));assert.equal(fs.existsSync(path.join(__dirname,name+'.js')),false);
   }
 });
+
+test('source-grounded reactions are not censored by a fixed laugh count or family keyword',()=>{
+  const text='애 재우라고 아빠 들여보냈더니\n둘이서 그림자놀이 배틀 뜨고 있어ㅋㅋㅋ\n재우러 간 사람이 더 신났네ㅋㅋ\n잠은 언제 잘 건데 진짜ㅋㅋㅋㅋ';
+  assert.equal(policy.assertVoice(text),text);
+  assert.equal(policy.assertVoice('눈 저렇게 부었는데\n꿀은 끝까지 먹고 있네ㅋㅋ\n진짜 포기를 모르네'),'눈 저렇게 부었는데\n꿀은 끝까지 먹고 있네ㅋㅋ\n진짜 포기를 모르네');
+});
