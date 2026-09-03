@@ -1,6 +1,25 @@
 'use strict';
 const { fork, spawn } = require('node:child_process');
 const path = require('node:path');
+const fs = require('node:fs');
+
+function descendantsOf(rootPid) {
+  if (process.platform !== 'linux') return [];
+  const children=new Map();
+  for(const entry of fs.readdirSync('/proc')) {
+    if(!/^\d+$/.test(entry))continue;
+    try {
+      const stat=fs.readFileSync(`/proc/${entry}/stat`,'utf8');
+      const parent=Number(stat.slice(stat.lastIndexOf(')')+2).split(' ')[1]);
+      if(!children.has(parent))children.set(parent,[]);
+      children.get(parent).push(Number(entry));
+    }catch{} // Process may exit while enumerating.
+  }
+  const result=[];
+  function visit(pid){for(const child of children.get(pid)||[]){visit(child);result.push(child);}}
+  visit(rootPid);
+  return result;
+}
 
 // Wait for OS exit before releasing the caller. A timed-out browser cannot keep
 // holding the shared scheduler lock or later return a stale result.
@@ -17,6 +36,12 @@ function runWorker(workerFile, payload, timeoutMs) {
       if (process.platform === 'win32') {
         spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
       } else {
+        // Chromium may create a separate session/process group. Kill descendants
+        // while the worker is still alive, before they can be reparented to init.
+        for(const pid of descendantsOf(child.pid)) {
+          try { process.kill(-pid,'SIGKILL'); } catch {}
+          try { process.kill(pid,'SIGKILL'); } catch {}
+        }
         try { process.kill(-child.pid, 'SIGKILL'); } catch (err) {
           if (err.code !== 'ESRCH') child.kill('SIGKILL');
         }

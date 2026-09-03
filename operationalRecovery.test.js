@@ -23,10 +23,10 @@ function node(code, preloads=false) {
   return JSON.parse(line.slice(7));
 }
 
-test('stuck worker and descendants stop before next task starts', async () => {
-  const marker=path.join(temp,'late-write');
+for (const detached of [false, true]) test(`stuck worker stops ${detached ? 'detached' : 'same-group'} descendants before next task`, {skip: detached && !fs.existsSync(`/proc/${process.pid}/stat`) ? 'Requires a real Linux procfs; exercised by Ubuntu CI' : false}, async () => {
+  const marker=path.join(temp,`late-write-${detached}`);
   const worker=path.join(temp,'hung-worker.js');
-  fs.writeFileSync(worker,`require('child_process').spawn(process.execPath,['-e',${JSON.stringify(`setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'late'),700)`)}],{stdio:'ignore'});setInterval(()=>{},1000);`);
+  fs.writeFileSync(worker,`require('child_process').spawn(process.execPath,['-e',${JSON.stringify(`setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'late'),700)`)}],{stdio:'ignore',detached:${detached}});setInterval(()=>{},1000);`);
   await assert.rejects(runWorker(worker,{},200),{code:'BROWSER_TASK_TIMEOUT'});
   await new Promise(resolve=>setTimeout(resolve,800));
   assert.equal(fs.existsSync(marker),false,'descendant must not survive timeout');
