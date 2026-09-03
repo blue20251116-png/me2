@@ -1,3 +1,4 @@
+const { normalizeVoice, voiceGuide, voiceProblems } = require('./threadsVoicePolicy');
 const axios = require('axios');
 const engine = require('./autopilotMaterialEngine');
 const { getAccount, getSystemApiSettings } = require('./db');
@@ -6,7 +7,7 @@ const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 
 function clean(v){ return String(v || '').trim(); }
 function stripTerminalPeriods(text){
-  return String(text || '').replace(/\r/g,'').split('\n').map(line => line.replace(/\.\s*$/g,'').trimEnd()).join('\n').replace(/\n{3,}/g,'\n\n').trim();
+  return String(text || '').replace(/\r/g,'').split('\n').map(line => line.trimEnd()).join('\n').replace(/\n{3,}/g,'\n\n').trim();
 }
 function getOpenAIKey(accountId){
   const a = getAccount(accountId), s = getSystemApiSettings();
@@ -82,3 +83,4 @@ engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutop
 };
 
 console.log('[Autopilot][RECIPE SOURCE CHECK] 원본 핵심재료 보존 + 재료/조리법 일치 + 가짜 비밀재료 금지 활성화');
+
