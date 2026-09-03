@@ -1,4 +1,5 @@
 'use strict';
+const { normalizeVoice, voiceGuide, voiceProblems } = require('./threadsVoicePolicy');
 
 const engine = require('./autopilotMaterialEngine');
 const { db } = require('./db');
@@ -10,8 +11,6 @@ const CACHE_MS = 30 * 60 * 1000;
 function clean(text) {
   return String(text || '')
     .replace(/\r/g, '')
-    .replace(/,/g, '')
-    .replace(/(^|[^0-9])\.(?![0-9])/g, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
@@ -61,3 +60,4 @@ engine.buildThreadsFirstAutopilot = async function(accountId,args={}){
 
 console.log('[AutopilotV3][STYLE PROFILE] v11 관찰 전용 · 본문 줄/빈줄 변경 금지');
 module.exports={buildProfile,getStyleProfile,clean,localProfileAdjust};
+
