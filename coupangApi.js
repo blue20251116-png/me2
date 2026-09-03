@@ -215,6 +215,7 @@ async function signedGet(accountId, pathWithQuery, label) {
     assertPartnersSuccess(accountId, res.data, label, res.status);
     return res.data;
   } catch (err) {
+    err.service = 'coupang';
     if (err.isCoupangRateLimit) throw err;
     const status = err.response?.status;
     const data = err.response?.data;
@@ -273,6 +274,7 @@ async function createDeeplink(accountId, urls) {
     assertPartnersSuccess(accountId, res.data, '쿠팡 딥링크', res.status);
     return (res.data?.data || []).map((d) => ({ originalUrl: d.originalUrl, shortenUrl: d.shortenUrl, landingUrl: d.landingUrl }));
   } catch (err) {
+    err.service = 'coupang';
     if (err.isCoupangRateLimit) throw err;
     const data = err.response?.data;
     const status = err.response?.status;

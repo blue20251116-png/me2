@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const Module = require('module');
+const crypto = require('crypto');
 const cron = require('node-cron');
 const dbMod = require('./db');
 const coupangApi = require('./coupangApi');
@@ -13,7 +14,9 @@ const BATCH = Math.max(1, Number(process.env.AUTOPILOT_TIMED_BATCH || 2));
 const REFILL_CRON = String(process.env.AUTOPILOT_TIMED_REFILL_CRON || '*/10 * * * *');
 const REBALANCE_SAFETY_MINUTES = Math.max(10, Number(process.env.AUTOPILOT_REBALANCE_SAFETY_MINUTES || 15));
 const COUPANG_PREFLIGHT_TTL_MS = Math.max(10 * 60000, Number(process.env.COUPANG_PREFLIGHT_TTL_MS || 6 * 60 * 60 * 1000));
-const COUPANG_INVALID_TTL_MS = Math.max(10 * 60000, Number(process.env.COUPANG_INVALID_TTL_MS || 6 * 60 * 60 * 1000));
+// An auth failure must recover without restarting the process. Retry on a later refill tick.
+const invalidTtl = Number(process.env.COUPANG_INVALID_TTL_MS || 5 * 60000);
+const COUPANG_INVALID_TTL_MS = Number.isFinite(invalidTtl) ? Math.min(10 * 60000, Math.max(60000, invalidTtl)) : 5 * 60000;
 const runningAccounts = new Set();
 const coupangPreflightCache = new Map();
 let refillTickRunning = false;
@@ -106,7 +109,23 @@ function rebalanceExistingFuturePending() {
 }
 
 function credentialFingerprint(account) {
-  return `${String(account?.coupang_access_key || '').trim().slice(0,6)}:${String(account?.coupang_secret_key || '').trim().length}`;
+  return crypto.createHash('sha256').update(JSON.stringify([
+    String(account?.coupang_access_key || '').trim(),
+    String(account?.coupang_secret_key || '').trim(),
+  ])).digest('hex');
+}
+function isCoupangAuthError(err) {
+  // A 401 from OpenAI, Threads, or a media URL is not a Coupang credential failure.
+  let fromCoupang = err?.service === 'coupang';
+  try {
+    const config = err?.config || err?.response?.config;
+    fromCoupang ||= new URL(config?.url, config?.baseURL).hostname === 'api-gateway.coupang.com';
+  } catch {}
+  if (!fromCoupang) return false;
+  const status = Number(err?.response?.status || 0);
+  const data = err?.response?.data;
+  const msg = String(data?.message || data?.rMessage || err?.message || '');
+  return status === 401 || String(data?.rCode) === '401' || /invalid signature|unauthorized|invalid.*(?:access.?key|secret.?key)/i.test(msg);
 }
 async function ensureCoupangReady(accountId, account) {
   const fp = credentialFingerprint(account);
@@ -129,7 +148,7 @@ async function ensureCoupangReady(accountId, account) {
   } catch (err) {
     const status = Number(err?.response?.status || 0);
     const msg = String(err?.response?.data?.message || err?.response?.data?.rMessage || err?.message || err || '');
-    if (status === 401 || /invalid signature|unauthorized|access.?key|secret.?key/i.test(msg)) {
+    if (isCoupangAuthError(err)) {
       coupangPreflightCache.set(accountId, { ok:false, reason:'invalid_signature', fp, until:Date.now()+COUPANG_INVALID_TTL_MS });
       console.error(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} AUTH INVALID → OpenAI/Vision 생성 중단 reason="${msg.slice(0,160)}"`);
       return false;
@@ -202,12 +221,13 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
             const msg = String(err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || err || '');
             const status = Number(err?.response?.status || 0);
             console.error(`[Autopilot][TIMED PREFILL] generation failed account #${accountId}:`, err?.response?.data || err?.message || err);
-            if (status === 401 || /invalid signature/i.test(msg)) {
+            if (isCoupangAuthError(err)) {
               coupangPreflightCache.set(accountId, { ok:false, reason:'invalid_signature', fp:credentialFingerprint(account), until:Date.now()+COUPANG_INVALID_TTL_MS });
               console.error(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} runtime AUTH INVALID → 남은 슬롯 중단 + 다음 계정 이동`);
               break;
             }
-            if (err?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED' || err?.__openAiNoRetry || /no credits remaining|OPENAI_HOURLY_BUDGET_EXCEEDED/i.test(msg)) break;
+            // Stop this account's batch, but never poison the Coupang auth cache.
+            if (status === 401 || err?.isContentQualityHold || err?.code==='CONTENT_QUALITY_HOLD' || err?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED' || err?.__openAiNoRetry || /no credits remaining|OPENAI_HOURLY_BUDGET_EXCEEDED/i.test(msg)) break;
             console.log(`[Autopilot][TIMED PREFILL] account #${accountId} 실패 1건은 건너뛰고 다음 예약 슬롯 계속 시도`);
           } finally {
             if (global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID === accountId) delete global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID;
