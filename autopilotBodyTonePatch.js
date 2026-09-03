@@ -1,4 +1,5 @@
 'use strict';
+const { normalizeVoice, voiceGuide, voiceProblems } = require('./threadsVoicePolicy');
 
 const engine = require('./autopilotMaterialEngine');
 const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
@@ -6,8 +7,6 @@ const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 function cleanBody(text) {
   return String(text || '')
     .replace(/\r/g, '')
-    .replace(/,/g, '')
-    .replace(/(^|[^0-9])\.(?![0-9])/g, '$1')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{4,}/g, '\n\n\n')
@@ -46,12 +45,10 @@ function localBodyCleanup(text) {
     }
     const kept = [];
     for (const line of piece.split('\n').map(x=>x.trim()).filter(Boolean)) {
-      if (total >= 12) break;
       kept.push(line);
       total++;
     }
     if (kept.length) out.push(kept.join('\n'));
-    if (total >= 12) break;
   }
   return out.join('').replace(/\n{4,}/g,'\n\n\n').trim();
 }
@@ -65,3 +62,4 @@ engine.buildThreadsFirstAutopilot = async function(accountId, args = {}) {
 };
 console.log('[AutopilotV3][BODY TONE] v12 사건형 행 합치지 않음 · 빈줄2개/최대12행 보존');
 module.exports = { needsNaturalRewrite, cleanBody, localBodyCleanup };
+
