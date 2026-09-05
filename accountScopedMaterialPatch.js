@@ -7,7 +7,6 @@ if (!global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__) {
   global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__ = true;
 
   // Material success/failure history must never exhaust the benchmark pool.
-  // Drop the legacy used-post table and make benchmark used tracking a no-op.
   try {
     db.exec(`DROP TABLE IF EXISTS threads_benchmark_used_posts`);
     console.log('[Autopilot][ACCOUNT MATERIAL] used-post DB 제거 완료 · 성공/실패 소재 저장 안 함 · benchmark 재사용 허용');
@@ -29,13 +28,44 @@ if (!global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__) {
     if (source.includes(oldFns)) {
       source = source.replace(oldFns, noDbFns);
     } else {
-      // Fail closed at startup if benchmarkAccounts changes unexpectedly: do not silently
-      // re-enable persistent material consumption.
       throw new Error('[ACCOUNT MATERIAL] benchmark mark/is used 패턴을 찾지 못했습니다');
     }
 
+    // Railway's anonymous Chromium is currently being sent to Threads' login/error shell.
+    // Reuse an authenticated Playwright storageState from the persistent /app/db volume.
+    // Bootstrap can be supplied once through THREADS_STORAGE_STATE_JSON; refreshed cookies
+    // are written back before each context closes, so deploy/restart does not discard them.
+    const browserMarker = "  const context = await browser.newContext({\n    locale:'ko-KR',\n    viewport:{width:1100,height:1500},\n    userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36'\n  });\n  return { browser, context };";
+    const browserReplacement = [
+      "  const statePath=process.env.THREADS_STORAGE_STATE_PATH||'/app/db/threads-storage-state.json';",
+      "  let storageState=null;",
+      "  try {",
+      "    if (fs.existsSync(statePath)) storageState=JSON.parse(fs.readFileSync(statePath,'utf8'));",
+      "    else if (process.env.THREADS_STORAGE_STATE_JSON) {",
+      "      storageState=JSON.parse(process.env.THREADS_STORAGE_STATE_JSON);",
+      "      fs.mkdirSync(path.dirname(statePath),{recursive:true});",
+      "      fs.writeFileSync(statePath,JSON.stringify(storageState),{mode:0o600});",
+      "    }",
+      "  } catch(e) { console.error('[Threads][SESSION] storageState load failed:',e.message); storageState=null; }",
+      "  const context = await browser.newContext({",
+      "    locale:'ko-KR',",
+      "    viewport:{width:1100,height:1500},",
+      "    userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',",
+      "    ...(storageState?{storageState}:{})",
+      "  });",
+      "  const originalClose=context.close.bind(context);",
+      "  context.close=async()=>{",
+      "    try { fs.mkdirSync(path.dirname(statePath),{recursive:true}); await context.storageState({path:statePath}); try{fs.chmodSync(statePath,0o600);}catch{} }",
+      "    catch(e){ console.error('[Threads][SESSION] storageState save failed:',e.message); }",
+      "    return originalClose();",
+      "  };",
+      "  console.log(`[Threads][SESSION] collector session=${storageState?'RESTORED':'ANONYMOUS'} path=${statePath}`);",
+      "  return { browser, context };"
+    ].join('\n');
+    if (!source.includes(browserMarker)) throw new Error('[ACCOUNT MATERIAL] Threads browser session marker not found');
+    source = source.replace(browserMarker, browserReplacement);
+
     // This loader is the effective owner of benchmarkAccounts.js in isolated workers.
-    // Instrument the collector here so diagnostics cannot be bypassed by loader ordering.
     const evalStart = "    return await page.evaluate(({username,limit}) => {";
     const evalStartReplacement = [
       "    const __profileDiag=await page.evaluate(()=>({",
@@ -65,6 +95,7 @@ if (!global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__) {
     source = source.replace(evalStart, evalStartReplacement).replace(evalEnd, evalEndReplacement);
 
     console.log('[Autopilot][ACCOUNT MATERIAL] DB 사용이력 필터 OFF · markUsedPost=NOOP · isUsedPost=false');
+    console.log('[Threads][SESSION] persistent collector storageState support armed');
     console.log('[Threads][COLLECTOR DIAG] effective worker diagnostics armed');
     mod._compile(source, filename);
   };
