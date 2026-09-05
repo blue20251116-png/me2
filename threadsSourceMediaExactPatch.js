@@ -12,6 +12,26 @@ function patchBenchmarkAccounts(source) {
   let profilePatched = false;
   let detailPatched = false;
   let profileCallPatched = false;
+  let depthPatched = false;
+  let poolPatched = false;
+
+  // Recovery: the old collector only loaded ~8 recent posts per profile and then
+  // filtered already-used URLs. Once every account consumed those visible posts,
+  // all 12 benchmark profiles could report pools=0 forever. Scroll deeper and
+  // collect a wider window before applying the account-scoped used-post filter.
+  const oldScroll = "    await page.waitForTimeout(1600);\n    for (let i=0;i<3;i++) {\n      await page.mouse.wheel(0,900);\n      await page.waitForTimeout(350);\n    }";
+  const newScroll = "    await page.waitForTimeout(1600);\n    const scrollRounds=Math.max(6,Math.min(24,Math.ceil(Number(limit||2)/2)+4));\n    for (let i=0;i<scrollRounds;i++) {\n      await page.mouse.wheel(0,1200);\n      await page.waitForTimeout(i<4?350:220);\n    }";
+  if (out.includes(oldScroll)) {
+    out = out.replace(oldScroll, newScroll);
+    depthPatched = true;
+  }
+
+  const oldPerAccount = 'const perAccount=Math.max(8,Math.ceil(limit/Math.max(1,sample.length))+4);';
+  const newPerAccount = 'const perAccount=Math.max(30,Math.ceil(limit/Math.max(1,sample.length))+12);';
+  if (out.includes(oldPerAccount)) {
+    out = out.replace(oldPerAccount, newPerAccount);
+    poolPatched = true;
+  }
 
   const profileRe = /const mediaFromRoot=root=>\{[\s\S]*?return\{images:images\.slice\(0,10\),hasVideo:videos\.length>0,videoCount:videos\.length\};\n      \};/;
   if (profileRe.test(out)) {
@@ -75,7 +95,7 @@ function patchBenchmarkAccounts(source) {
     detailPatched = true;
   }
 
-  console.log(`[Threads][SOURCE MEDIA EXACT] benchmarkAccounts profile=${profilePatched?'OK':'MISS'} profileCall=${profileCallPatched?'OK':'MISS'} detail=${detailPatched?'OK':'MISS'} · 원문 post 첨부 미디어만 허용`);
+  console.log(`[Threads][SOURCE MEDIA EXACT] benchmarkAccounts profile=${profilePatched?'OK':'MISS'} profileCall=${profileCallPatched?'OK':'MISS'} detail=${detailPatched?'OK':'MISS'} depth=${depthPatched?'OK':'MISS'} pool=${poolPatched?'OK':'MISS'} · 원문 post 첨부 미디어만 허용`);
   return out;
 }
 
@@ -87,4 +107,4 @@ Module.prototype._compile = function sourceMediaExactCompile(source, filename) {
   return originalCompile.call(this, source, filename);
 };
 
-console.log('[Threads][SOURCE MEDIA EXACT] patch armed · 댓글/추천글/프로필/영상오버레이 이미지 제외');
+console.log('[Threads][SOURCE MEDIA EXACT] patch armed · 댓글/추천글/프로필/영상오버레이 이미지 제외 · benchmark exhaustion recovery');
