@@ -31,20 +31,21 @@ if (!global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__) {
       throw new Error('[ACCOUNT MATERIAL] benchmark mark/is used 패턴을 찾지 못했습니다');
     }
 
-    // Railway's anonymous Chromium is currently being sent to Threads' login/error shell.
     // Reuse an authenticated Playwright storageState from the persistent /app/db volume.
-    // Bootstrap can be supplied once through THREADS_STORAGE_STATE_JSON; refreshed cookies
-    // are written back before each context closes, so deploy/restart does not discard them.
+    // IMPORTANT: this text is injected into benchmarkAccounts.js and therefore must bind
+    // its own fs/path modules instead of referencing this patch module's lexical scope.
     const browserMarker = "  const context = await browser.newContext({\n    locale:'ko-KR',\n    viewport:{width:1100,height:1500},\n    userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36'\n  });\n  return { browser, context };";
     const browserReplacement = [
+      "  const __threadsFs=require('fs');",
+      "  const __threadsPath=require('path');",
       "  const statePath=process.env.THREADS_STORAGE_STATE_PATH||'/app/db/threads-storage-state.json';",
       "  let storageState=null;",
       "  try {",
-      "    if (fs.existsSync(statePath)) storageState=JSON.parse(fs.readFileSync(statePath,'utf8'));",
+      "    if (__threadsFs.existsSync(statePath)) storageState=JSON.parse(__threadsFs.readFileSync(statePath,'utf8'));",
       "    else if (process.env.THREADS_STORAGE_STATE_JSON) {",
       "      storageState=JSON.parse(process.env.THREADS_STORAGE_STATE_JSON);",
-      "      fs.mkdirSync(path.dirname(statePath),{recursive:true});",
-      "      fs.writeFileSync(statePath,JSON.stringify(storageState),{mode:0o600});",
+      "      __threadsFs.mkdirSync(__threadsPath.dirname(statePath),{recursive:true});",
+      "      __threadsFs.writeFileSync(statePath,JSON.stringify(storageState),{mode:0o600});",
       "    }",
       "  } catch(e) { console.error('[Threads][SESSION] storageState load failed:',e.message); storageState=null; }",
       "  const context = await browser.newContext({",
@@ -55,7 +56,7 @@ if (!global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__) {
       "  });",
       "  const originalClose=context.close.bind(context);",
       "  context.close=async()=>{",
-      "    try { fs.mkdirSync(path.dirname(statePath),{recursive:true}); await context.storageState({path:statePath}); try{fs.chmodSync(statePath,0o600);}catch{} }",
+      "    try { __threadsFs.mkdirSync(__threadsPath.dirname(statePath),{recursive:true}); await context.storageState({path:statePath}); try{__threadsFs.chmodSync(statePath,0o600);}catch{} }",
       "    catch(e){ console.error('[Threads][SESSION] storageState save failed:',e.message); }",
       "    return originalClose();",
       "  };",
