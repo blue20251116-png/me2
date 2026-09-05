@@ -3,8 +3,10 @@
 const Module = require('module');
 const path = require('path');
 
+// Keep Railway/container flags minimal. --single-process forces Chromium into
+// an atypical process model and was present on every observed SIGTRAP launch.
+// The parent isolatedTask circuit breaker now owns service-wide crash control.
 const SAFE_ARGS = [
-  '--single-process',
   '--no-sandbox',
   '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
@@ -18,26 +20,24 @@ let cooldownUntil = 0;
 const waiters = [];
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-function mergeSafeArgs(args = []) { return [...new Set([...(Array.isArray(args) ? args : []), ...SAFE_ARGS])]; }
+function mergeSafeArgs(args = []) {
+  const incoming = (Array.isArray(args) ? args : []).filter(arg => arg !== '--single-process');
+  return [...new Set([...incoming, ...SAFE_ARGS])];
+}
 
 async function acquireBrowserSlot() {
   while (true) {
     const remaining = cooldownUntil - Date.now();
     if (remaining > 0) await sleep(remaining);
-    if (activeBrowsers < MAX_BROWSER_CONCURRENCY) {
-      activeBrowsers += 1;
-      return;
-    }
+    if (activeBrowsers < MAX_BROWSER_CONCURRENCY) { activeBrowsers += 1; return; }
     await new Promise(resolve => waiters.push(resolve));
   }
 }
-
 function releaseBrowserSlot() {
   activeBrowsers = Math.max(0, activeBrowsers - 1);
   const next = waiters.shift();
   if (next) next();
 }
-
 function isLaunchCrash(err) {
   const msg = String(err?.message || err || '');
   return /SIGTRAP|Target page, context or browser has been closed|browserType\.launch/i.test(msg);
@@ -50,34 +50,20 @@ function patchPlaywright(exp) {
   chromium.launch = async function guardedLaunch(options = {}) {
     await acquireBrowserSlot();
     let released = false;
-    const release = () => {
-      if (released) return;
-      released = true;
-      releaseBrowserSlot();
-    };
+    const release = () => { if (!released) { released = true; releaseBrowserSlot(); } };
     try {
-      const launchOptions = {
-        ...options,
-        headless: options.headless !== false,
-        args: mergeSafeArgs(options.args),
-      };
+      const launchOptions = { ...options, headless: options.headless !== false, args: mergeSafeArgs(options.args) };
       const browser = await originalLaunch(launchOptions);
       const originalClose = typeof browser.close === 'function' ? browser.close.bind(browser) : null;
-      if (originalClose) {
-        browser.close = async (...args) => {
-          try { return await originalClose(...args); }
-          finally { release(); }
-        };
-      }
+      if (originalClose) browser.close = async (...args) => { try { return await originalClose(...args); } finally { release(); } };
       if (typeof browser.once === 'function') browser.once('disconnected', release);
       return browser;
     } catch (err) {
       if (isLaunchCrash(err)) {
         cooldownUntil = Math.max(cooldownUntil, Date.now() + FAILURE_COOLDOWN_MS);
-        console.error(`[Railway Browser Guard] Chromium launch crash detected; cooldown=${FAILURE_COOLDOWN_MS}ms`);
+        console.error(`[Railway Browser Guard] Chromium launch crash detected; workerCooldown=${FAILURE_COOLDOWN_MS}ms`);
       }
-      release();
-      throw err;
+      release(); throw err;
     }
   };
   Object.defineProperty(chromium, '__me2RailwayGuarded', { value: true });
@@ -87,7 +73,6 @@ function patchPlaywright(exp) {
 
 if (!global.__ME2_RAILWAY_BROWSER_GUARD__) {
   global.__ME2_RAILWAY_BROWSER_GUARD__ = true;
-
   const originalLoad = Module._load;
   Module._load = function railwayBrowserGuardLoad(request, parent, isMain) {
     const exp = originalLoad.apply(this, arguments);
@@ -95,8 +80,6 @@ if (!global.__ME2_RAILWAY_BROWSER_GUARD__) {
     return exp;
   };
 
-  // Account #15 has a known invalid Coupang signature. Prevent recurring API
-  // preflight noise and wasted work until its credentials are corrected.
   const previousCompile = Module.prototype._compile;
   Module.prototype._compile = function railwayBrowserGuardCompile(content, filename) {
     let source = String(content || '');
@@ -111,8 +94,4 @@ if (!global.__ME2_RAILWAY_BROWSER_GUARD__) {
   };
 }
 
-module.exports = {
-  SAFE_ARGS,
-  mergeSafeArgs,
-  isLaunchCrash,
-};
+module.exports = { SAFE_ARGS, mergeSafeArgs, isLaunchCrash };
