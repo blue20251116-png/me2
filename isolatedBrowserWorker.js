@@ -1,5 +1,9 @@
 'use strict';
 require('./httpDeadline');
+// The parent deliberately clears execArgv, so runtime preloads do not reach
+// this process. Load the Railway launch guard here before any allowed module
+// can import Playwright.
+require('./railwayBrowserGuardPatch');
 process.once('message', async ({ moduleName, method, args, accountId }) => {
   try {
     const allowed = {

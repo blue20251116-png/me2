@@ -3,6 +3,26 @@ const { fork, spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 
+// Browser work happens in separate Node processes, so an in-process limiter in
+// the Playwright patch cannot coordinate them. Keep the service-wide queue in
+// this parent module, where every isolated browser task passes through.
+const MAX_BROWSER_WORKERS = Math.max(1, Number(process.env.PLAYWRIGHT_MAX_CONCURRENCY || 1));
+let activeBrowserWorkers = 0;
+const browserWorkerWaiters = [];
+
+async function acquireBrowserWorker() {
+  if (activeBrowserWorkers >= MAX_BROWSER_WORKERS) {
+    await new Promise(resolve => browserWorkerWaiters.push(resolve));
+  }
+  activeBrowserWorkers += 1;
+}
+
+function releaseBrowserWorker() {
+  activeBrowserWorkers = Math.max(0, activeBrowserWorkers - 1);
+  const next = browserWorkerWaiters.shift();
+  if (next) next();
+}
+
 function descendantsOf(rootPid) {
   if (process.platform !== 'linux') return [];
   const children=new Map();
@@ -23,14 +43,20 @@ function descendantsOf(rootPid) {
 
 // Wait for OS exit before releasing the caller. A timed-out browser cannot keep
 // holding the shared scheduler lock or later return a stale result.
-function runWorker(workerFile, payload, timeoutMs) {
+async function runWorker(workerFile, payload, timeoutMs) {
+  await acquireBrowserWorker();
   return new Promise((resolve, reject) => {
     const child = fork(workerFile, [], {
       execArgv: [], detached: process.platform !== 'win32',
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
       env: { ...process.env, ME2_BROWSER_WORKER: '1' },
     });
-    let result, failure, finished = false;
+    let result, failure, finished = false, slotReleased = false;
+    function releaseSlot() {
+      if (slotReleased) return;
+      slotReleased = true;
+      releaseBrowserWorker();
+    }
     function stop() {
       if (!child.pid) return;
       if (process.platform === 'win32') {
@@ -58,10 +84,11 @@ function runWorker(workerFile, payload, timeoutMs) {
       finished = true;
       stop(); // Includes Chromium descendants even when browser.close() failed.
     });
-    child.once('error', err => { failure = err; clearTimeout(timer); reject(err); });
+    child.once('error', err => { failure = err; clearTimeout(timer); releaseSlot(); reject(err); });
     child.once('exit', (code, signal) => {
       clearTimeout(timer);
       stop();
+      releaseSlot();
       if (failure) reject(failure);
       else if (finished) resolve(result);
       else reject(new Error(`Browser worker exited without a result (${code ?? signal})`));
@@ -76,4 +103,4 @@ function isolatedBrowserTask(moduleName, method, args, timeoutMs = 120000) {
     accountId: Number(global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID || 0),
   }, timeoutMs);
 }
-module.exports = { isolatedBrowserTask, runWorker };
+module.exports = { isolatedBrowserTask, runWorker, MAX_BROWSER_WORKERS };
