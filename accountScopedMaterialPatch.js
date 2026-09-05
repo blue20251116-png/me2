@@ -31,9 +31,15 @@ if (!global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__) {
       throw new Error('[ACCOUNT MATERIAL] benchmark mark/is used 패턴을 찾지 못했습니다');
     }
 
+    // SaaS collector: do not let one unlucky 12-account sample stop every tenant.
+    // Walk the shuffled benchmark pool in bounded batches until enough source posts
+    // are collected, while keeping browser pressure bounded and source URLs unique.
+    const oldCollector = "  const sample=accounts.slice(0,Math.min(accounts.length,12));\n  let browser,context;\n  try{\n    ({browser,context}=await openBrowser());\n    const perAccount=Math.max(8,Math.ceil(limit/Math.max(1,sample.length))+4);\n    const scanned=await mapWithConcurrency(sample,4,async account=>(await collectProfilePostsWithContext(context,account.username,{limit:perAccount})).filter(x=>!isUsedPost(x.url)));\n    const pools=scanned.filter(Array.isArray).filter(x=>x.length),all=[];let round=0;\n    while(all.length<limit&&pools.some(p=>p.length>round)){\n      for(const pool of shuffle(pools)){if(all.length>=limit)break;if(pool[round])all.push(pool[round]);}\n      round++;\n    }\n    console.log(`[Threads benchmark] accounts=${sample.length} pools=${pools.length} collected=${all.length} requested=${limit}`);\n    return all.slice(0,limit);";
+    const resilientCollector = "  const batchSize=Math.max(4,Math.min(12,Number(process.env.THREADS_BENCHMARK_BATCH_SIZE||12)));\n  const maxAccounts=Math.max(batchSize,Math.min(accounts.length,Number(process.env.THREADS_BENCHMARK_MAX_SCAN||Math.min(accounts.length,72))));\n  let browser,context;\n  try{\n    ({browser,context}=await openBrowser());\n    const all=[],seen=new Set(); let scannedAccounts=0,successfulPools=0;\n    for(let offset=0;offset<maxAccounts&&all.length<limit;offset+=batchSize){\n      const batch=accounts.slice(offset,Math.min(offset+batchSize,maxAccounts));\n      if(!batch.length)break;\n      const perAccount=Math.max(12,Math.ceil((limit-all.length)/Math.max(1,batch.length))+8);\n      const scanned=await mapWithConcurrency(batch,2,async account=>(await collectProfilePostsWithContext(context,account.username,{limit:perAccount})).filter(x=>!isUsedPost(x.url)));\n      scannedAccounts+=batch.length;\n      const pools=scanned.filter(Array.isArray).filter(x=>x.length); successfulPools+=pools.length;\n      let round=0;\n      while(all.length<limit&&pools.some(p=>p.length>round)){\n        for(const pool of shuffle(pools)){\n          if(all.length>=limit)break; const item=pool[round]; if(!item||seen.has(item.url))continue; seen.add(item.url); all.push(item);\n        }\n        round++;\n      }\n      console.log(`[Threads benchmark batch] scanned=${scannedAccounts}/${maxAccounts} pools=${successfulPools} collected=${all.length}/${limit}`);\n    }\n    console.log(`[Threads benchmark] accounts=${scannedAccounts} pools=${successfulPools} collected=${all.length} requested=${limit}`);\n    return all.slice(0,limit);";
+    if (!source.includes(oldCollector)) throw new Error('[ACCOUNT MATERIAL] benchmark collector marker not found');
+    source = source.replace(oldCollector, resilientCollector);
+
     // Reuse an authenticated Playwright storageState from the persistent /app/db volume.
-    // IMPORTANT: this text is injected into benchmarkAccounts.js and therefore must bind
-    // its own fs/path modules instead of referencing this patch module's lexical scope.
     const browserMarker = "  const context = await browser.newContext({\n    locale:'ko-KR',\n    viewport:{width:1100,height:1500},\n    userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36'\n  });\n  return { browser, context };";
     const browserReplacement = [
       "  const __threadsFs=require('fs');",
@@ -66,7 +72,6 @@ if (!global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__) {
     if (!source.includes(browserMarker)) throw new Error('[ACCOUNT MATERIAL] Threads browser session marker not found');
     source = source.replace(browserMarker, browserReplacement);
 
-    // This loader is the effective owner of benchmarkAccounts.js in isolated workers.
     const evalStart = "    return await page.evaluate(({username,limit}) => {";
     const evalStartReplacement = [
       "    const __profileDiag=await page.evaluate(()=>({",
@@ -90,13 +95,12 @@ if (!global.__ME2_ACCOUNT_SCOPED_MATERIAL_PATCH__) {
       "  } finally { try{await page.close();}catch{} }"
     ].join('\n');
 
-    if (!source.includes(evalStart) || !source.includes(evalEnd)) {
-      throw new Error('[ACCOUNT MATERIAL] Threads profile diagnostic markers not found');
-    }
+    if (!source.includes(evalStart) || !source.includes(evalEnd)) throw new Error('[ACCOUNT MATERIAL] Threads profile diagnostic markers not found');
     source = source.replace(evalStart, evalStartReplacement).replace(evalEnd, evalEndReplacement);
 
     console.log('[Autopilot][ACCOUNT MATERIAL] DB 사용이력 필터 OFF · markUsedPost=NOOP · isUsedPost=false');
     console.log('[Threads][SESSION] persistent collector storageState support armed');
+    console.log('[Threads][COLLECTOR] adaptive SaaS benchmark scan armed · bounded batches · no 12-account single point of failure');
     console.log('[Threads][COLLECTOR DIAG] effective worker diagnostics armed');
     mod._compile(source, filename);
   };
