@@ -14,6 +14,12 @@ process.once('message', async ({ moduleName, method, args, accountId }) => {
     };
     if (!allowed[moduleName]?.includes(method)) throw new Error('Unsupported browser task');
     global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID = accountId;
+    // Runtime -r preloads do not propagate to isolated workers. Arm the
+    // collector diagnostic loader here, before any patch can load
+    // benchmarkAccounts.js, so empty Threads profile responses are observable.
+    if (moduleName === 'benchmarkAccounts') {
+      require('./threadsCollectorDiagnosticPatch');
+    }
     require('./threadsSourceMediaExactPatch');
     require('./accountScopedMaterialPatch');
     require('./threadsVideoIntegrityPatch');
