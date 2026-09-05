@@ -41,6 +41,19 @@ test('AI hourly budget survives process restart and expires naturally', () => {
   assert.equal(node(`const s=require('./automationState');require('./db').db.prepare('UPDATE ai_request_budget SET at_ms=?').run(Date.now()-3600001);console.log('RESULT:'+JSON.stringify(s.budgetState().used));process.exit();`),0);
 });
 
+test('isolated browser workers are serialized by the parent limiter', async () => {
+  const worker=path.join(temp,'serialized-worker.js');
+  fs.writeFileSync(worker,"process.on('message',()=>setTimeout(()=>process.send({ok:true,value:1}),150));");
+  const started=Date.now();
+  assert.deepEqual(await Promise.all([runWorker(worker,{},2000),runWorker(worker,{},2000)]),[1,1]);
+  assert.ok(Date.now()-started >= 250,'workers must not overlap at default concurrency=1');
+});
+
+test('browser worker loads Railway guard before task modules', () => {
+  const source=fs.readFileSync(path.join(__dirname,'isolatedBrowserWorker.js'),'utf8');
+  assert.ok(source.indexOf("require('./railwayBrowserGuardPatch')") < source.indexOf("require(`./${moduleName}`)"));
+});
+
 test('session survives restart and expired sessions are rejected', () => {
   node(`const Store=require('./sessionStore');new Store().set('test',{userId:7,cookie:{expires:new Date(Date.now()+60000)}},e=>{if(e)throw e;console.log('RESULT:true');process.exit();});`);
   assert.equal(node(`new (require('./sessionStore'))().get('test',(e,s)=>{if(e)throw e;console.log('RESULT:'+JSON.stringify(s.userId));process.exit();});`),7);
@@ -117,5 +130,4 @@ test('real HTTP startup, admin authentication and health endpoint work', async (
     await new Promise(resolve=>{if(child.exitCode!==null||child.signalCode)resolve();else child.once('exit',resolve);});
   }
 });
-
 
