@@ -10,8 +10,11 @@ function isOpenAI(url) {
   return String(url || '') === 'https://api.openai.com/v1/chat/completions';
 }
 
-function requestKey(data) {
+function requestKey(data, config) {
+  const authorization = String(config?.headers?.Authorization || config?.headers?.authorization || '');
+  const credentialScope = crypto.createHash('sha256').update(authorization).digest('hex');
   const stable = JSON.stringify({
+    credentialScope,
     model: data?.model,
     temperature: data?.temperature,
     max_tokens: data?.max_tokens,
@@ -24,7 +27,7 @@ function requestKey(data) {
 axios.post = function dedupedOpenAiPost(url, data, config) {
   if (!isOpenAI(url)) return guardedPost(url, data, config);
 
-  const key = requestKey(data);
+  const key = requestKey(data, config);
   const existing = inFlight.get(key);
   if (existing) {
     console.log(`[OpenAI][IN-FLIGHT DEDUPE] key=${key.slice(0,10)} reused=yes`);
@@ -40,4 +43,4 @@ axios.post = function dedupedOpenAiPost(url, data, config) {
   return task;
 };
 
-console.log('[OpenAI][IN-FLIGHT DEDUPE] enabled; identical concurrent requests share one budgeted call');
+console.log('[OpenAI][IN-FLIGHT DEDUPE] enabled; identical concurrent requests share one credential-scoped budgeted call');
