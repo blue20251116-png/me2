@@ -1,0 +1,1 @@
+Safe standalone connector joins can now complete locally with zero semantic repair calls; all other validation behavior remains fail-closed.
