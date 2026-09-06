@@ -1,0 +1,1 @@
+Implementation is deliberately narrow: safe local join first, then unchanged validation and bounded AI repair. This preserves fail-closed behavior while avoiding an upstream call when no semantic rewrite is necessary.
