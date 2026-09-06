@@ -1,0 +1,1 @@
+This optimization intentionally does not locally rewrite overlong semantic sentences. Those remain AI-repair candidates because shortening them without semantic judgment risks changing meaning or hook quality.
