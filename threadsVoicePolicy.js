@@ -5,7 +5,6 @@ const MAX_LINE_CHARS = 18;
 const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 const codePointLength = value => Array.from(String(value || '')).length;
 const CONNECTOR_ONLY = /^(?:그리고|근데|그래서|하지만|또|또는|혹은|및)$/;
-const SHORT_DANGLING_END = /(?:은|는|이|가|을|를|의|에|에서|에게|한테|와|과|랑|으로|로|도|만|부터|까지|보다|처럼|때문에)$/;
 
 function normalizeVoice(text) {
   return String(text || '')
@@ -25,14 +24,10 @@ function incompleteLineReasons(text) {
     const line = lines[i].trim();
     const next = lines[i + 1].trim();
     if (!line || !next) continue;
-    // This guard is intentionally conservative. Korean viral copy often ends a
-    // perfectly readable beat with a particle-like syllable, so treating every
-    // such ending as incomplete caused valid posts to be repaired and eventually
-    // dropped. Only reject obvious connector fragments or very short dangling
-    // fragments; the 18-char/10-line hard limits remain unchanged.
-    if (CONNECTOR_ONLY.test(line) || (codePointLength(line) <= 4 && SHORT_DANGLING_END.test(line))) {
-      reasons.push(`미완결 줄:${i + 1}`);
-    }
+    // Reject only standalone connectors. Korean short-form copy commonly uses
+    // compact beats such as "나는" or "이거는" naturally; particle endings
+    // alone are not reliable evidence that a line was mechanically split.
+    if (CONNECTOR_ONLY.test(line)) reasons.push(`미완결 줄:${i + 1}`);
   }
   return reasons;
 }
