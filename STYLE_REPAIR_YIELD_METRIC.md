@@ -1,0 +1,1 @@
+Expected runtime effect: posts whose only style defect is a safely mergeable standalone connector line avoid the final OpenAI format-repair request. Other defects continue through the existing bounded repair path.
