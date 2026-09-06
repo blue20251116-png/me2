@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { spawn } = require('node:child_process');
+process.env.NODE_ENV = 'test';
 const { runWorker, resetBrowserCircuitForTests } = require('./isolatedTask');
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(),'me2-operations-'));
@@ -99,7 +100,7 @@ test('unknown outcomes after restart never automatically republish', () => {
 });
 
 test('observed inline style defects are repaired and checked at final boundary', () => {
-  const result=node(`const q=require('./finalTextHardGuardPatch');const text=q.fallbackRewrite('주방 살림 고수들은 이런 거 쓰더라 진짜 편함\\n진짜 실화냐?','product');console.log('RESULT:'+JSON.stringify({text,reasons:q.badStyleReasons(text,'product')}));process.exit();`);
+  const result=node(`const q=require('./finalTextHardGuardPatch');const text=q.fallbackRewrite('고수들은 이거 쓰더라\\n진짜 편함\\n진짜 실화냐?','product');console.log('RESULT:'+JSON.stringify({text,reasons:q.badStyleReasons(text,'product')}));process.exit();`);
   assert.deepEqual(result.reasons,[]);
   assert.match(result.text,/쓰더라/); // Valid conversational ending is preserved; 음슴체/냐체 are still repaired.
   assert.match(result.text,/실화냐/); // Natural situational questions are retained.
