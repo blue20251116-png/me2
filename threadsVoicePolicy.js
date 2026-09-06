@@ -24,12 +24,31 @@ function incompleteLineReasons(text) {
     const line = lines[i].trim();
     const next = lines[i + 1].trim();
     if (!line || !next) continue;
-    // Reject only standalone connectors. Korean short-form copy commonly uses
-    // compact beats such as "나는" or "이거는" naturally; particle endings
-    // alone are not reliable evidence that a line was mechanically split.
     if (CONNECTOR_ONLY.test(line)) reasons.push(`미완결 줄:${i + 1}`);
   }
   return reasons;
+}
+
+// A standalone connector split from the following line is a deterministic
+// formatting defect. Join it locally only when the merged line still fits the
+// hard 18-code-point boundary; otherwise leave it for semantic AI repair.
+function repairConnectorOnlyBreaks(text) {
+  const lines = normalizeVoice(text).split('\n');
+  const repaired = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const next = i + 1 < lines.length ? lines[i + 1].trim() : '';
+    if (line && next && CONNECTOR_ONLY.test(line)) {
+      const merged = `${line} ${next}`;
+      if (codePointLength(merged) <= MAX_LINE_CHARS) {
+        repaired.push(merged);
+        i++;
+        continue;
+      }
+    }
+    repaired.push(line);
+  }
+  return normalizeVoice(repaired.join('\n'));
 }
 
 function voiceGuide() {
@@ -106,6 +125,15 @@ async function reviewSourceVoice(text, context = {}, request) {
     reject(['고위험 효능 주장']);
   }
 
+  if (problems.includes('미완결 줄바꿈')) {
+    const locallyRepaired = repairConnectorOnlyBreaks(out);
+    const localProblems = voiceProblems(locallyRepaired, context);
+    if (localProblems.length < problems.length) {
+      out = locallyRepaired;
+      problems = localProblems;
+    }
+  }
+
   if (!problems.length) return out;
   if (typeof request !== 'function') reject(problems);
   const evidence = [context.sourceText, context.authorReplies, context.visualEvidence]
@@ -125,4 +153,4 @@ async function reviewSourceVoice(text, context = {}, request) {
   return out;
 }
 
-module.exports = { MAX_LINES, MAX_LINE_CHARS, MAX_FORMAT_REPAIR_ATTEMPTS, normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, reviewSourceVoice, incompleteLineReasons };
+module.exports = { MAX_LINES, MAX_LINE_CHARS, MAX_FORMAT_REPAIR_ATTEMPTS, normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, reviewSourceVoice, incompleteLineReasons, repairConnectorOnlyBreaks };
