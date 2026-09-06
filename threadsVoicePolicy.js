@@ -3,6 +3,7 @@
 const MAX_LINES = 10;
 const MAX_LINE_CHARS = 18;
 const codePointLength = value => Array.from(String(value || '')).length;
+const DANGLING_END = /(?:은|는|이|가|을|를|의|에|에서|에게|한테|와|과|랑|으로|로|도|만|부터|까지|보다|처럼|때문에|그리고|근데|그래서|하지만|또|또는|혹은|및|그|이|저)$/;
 
 function normalizeVoice(text) {
   return String(text || '')
@@ -15,6 +16,18 @@ function normalizeVoice(text) {
     .trim();
 }
 
+function incompleteLineReasons(text) {
+  const lines = normalizeVoice(text).split('\n');
+  const reasons = [];
+  for (let i = 0; i < lines.length - 1; i++) {
+    const line = lines[i].trim();
+    const next = lines[i + 1].trim();
+    if (!line || !next) continue;
+    if (DANGLING_END.test(line)) reasons.push(`미완결 줄:${i + 1}`);
+  }
+  return reasons;
+}
+
 function voiceGuide() {
   return `[ME2 스레드 전용 바이럴 작가 — 최종 문체 정책]
 이 정책은 아래에 이어지는 레시피/상품별 세부 지시보다 우선한다. 세부 지시와 충돌하면 반드시 이 정책을 따른다.
@@ -24,7 +37,9 @@ function voiceGuide() {
 - 실제 Threads 사용자가 친구에게 발견한 걸 바로 공유하는 느낌의 자연스러운 반말로 쓴다.
 - 저위험 리액션, 비유, 연결 문장, 가벼운 상황 연출은 원문에 없어도 자유롭게 추가할 수 있다.
 - ㅋㅋ, ㄷㄷ, ㅠㅠ, ;; 같은 표현은 문맥에 어울릴 때만 자연스럽게 쓴다.
-- 한 줄은 한 호흡, 한 정보만 담고 Unicode 기준 18자 이내로 쓴다.
+- 한 줄은 Unicode 기준 18자 이내다. 18자를 맞추려고 문장 중간을 강제로 자르지 않는다.
+- 모든 줄은 그 줄만 읽어도 의미 단위가 자연스럽게 완결되어야 한다. 조사·접속사·수식어만 남기거나 다음 줄에 이어 붙여야 이해되는 줄바꿈은 금지한다.
+- 18자를 넘는 문장은 잘라서 두 줄로 만드는 게 아니라 뜻과 후킹을 유지한 더 짧고 자연스러운 표현으로 다시 쓴다.
 - 본문은 빈 줄을 포함해 최대 10줄이다. 짧게 끝나면 억지로 채우지 않는다.
 - 줄바꿈은 모바일 읽기 리듬과 후킹의 일부다.
 - 기존의 금지어 목록, 카테고리별 고정 문구, 후기형 템플릿, 획일적인 질문 CTA를 따르지 않는다.
@@ -51,6 +66,7 @@ function voiceProblems(text, { comment = false } = {}) {
     const lines = t ? t.split('\n') : [];
     if (lines.length > MAX_LINES) reasons.push('10줄 초과');
     if (lines.some(line => codePointLength(line) > MAX_LINE_CHARS)) reasons.push('18자 초과');
+    if (incompleteLineReasons(t).length) reasons.push('미완결 줄바꿈');
   }
   if (highRiskClaim(t)) reasons.push('고위험 효능 주장');
   return [...new Set(reasons)];
@@ -91,7 +107,7 @@ async function reviewSourceVoice(text, context = {}, request) {
   const evidence = [context.sourceText, context.authorReplies, context.visualEvidence]
     .filter(Boolean).map(String).join('\n').slice(0, 12000);
   const corrected = await request(
-    `${voiceGuide()}\n형식만 고쳐라. 의미를 잘라내거나 새 사실을 만들지 마라. JSON만 출력: {"text":""}`,
+    `${voiceGuide()}\n형식만 고쳐라. 의미를 삭제하거나 새 사실을 만들지 마라. 18자 초과 문장을 기계적으로 분할하지 말고 각 줄이 완결된 짧은 문장이 되도록 다시 써라. JSON만 출력: {"text":""}`,
     `[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}`
   );
   out = formatVoice(corrected?.text || '');
@@ -100,4 +116,4 @@ async function reviewSourceVoice(text, context = {}, request) {
   return out;
 }
 
-module.exports = { MAX_LINES, MAX_LINE_CHARS, normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, reviewSourceVoice };
+module.exports = { MAX_LINES, MAX_LINE_CHARS, normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, reviewSourceVoice, incompleteLineReasons };
