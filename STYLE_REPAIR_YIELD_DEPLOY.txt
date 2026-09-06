@@ -1,0 +1,1 @@
+After green merge, deploy me2 and inspect normal Railway logs; do not force a production Threads post.
