@@ -1,0 +1,1 @@
+Rollback is isolated to `threadsVoicePolicy.js` plus its regression coverage. No database, Railway variable, authentication, Coupang identity, source-link, or publishing API behavior is changed by this patch.
