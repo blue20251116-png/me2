@@ -2,6 +2,7 @@
 
 const MAX_LINES = 10;
 const MAX_LINE_CHARS = 18;
+const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 const codePointLength = value => Array.from(String(value || '')).length;
 const DANGLING_END = /(?:은|는|이|가|을|를|의|에|에서|에게|한테|와|과|랑|으로|로|도|만|부터|까지|보다|처럼|때문에|그리고|근데|그래서|하지만|또|또는|혹은|및|그|이|저)$/;
 
@@ -106,14 +107,19 @@ async function reviewSourceVoice(text, context = {}, request) {
   if (typeof request !== 'function') reject(problems);
   const evidence = [context.sourceText, context.authorReplies, context.visualEvidence]
     .filter(Boolean).map(String).join('\n').slice(0, 12000);
-  const corrected = await request(
-    `${voiceGuide()}\n형식만 고쳐라. 의미를 삭제하거나 새 사실을 만들지 마라. 18자 초과 문장을 기계적으로 분할하지 말고 각 줄이 완결된 짧은 문장이 되도록 다시 써라. JSON만 출력: {"text":""}`,
-    `[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}`
-  );
-  out = formatVoice(corrected?.text || '');
-  problems = voiceProblems(out, context);
+
+  for (let attempt = 1; attempt <= MAX_FORMAT_REPAIR_ATTEMPTS && problems.length; attempt++) {
+    const corrected = await request(
+      `${voiceGuide()}\n형식 교정 전용이다. 핵심 의미와 후킹은 보존하되 18자 초과 문장을 기계적으로 분할하지 말고 더 짧은 완결 문장으로 다시 써라. 모든 물리적 줄은 18자 이하여야 하고 그 줄만 읽어도 자연스럽게 끝나야 한다. 최대 10줄이다. 새 고위험 사실을 만들지 마라. JSON만 출력: {"text":""}`,
+      `[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}\n[교정 시도]\n${attempt}/${MAX_FORMAT_REPAIR_ATTEMPTS}`
+    );
+    const candidate = formatVoice(corrected?.text || '');
+    if (candidate) out = candidate;
+    problems = voiceProblems(out, context);
+  }
+
   if (problems.length) reject(problems);
   return out;
 }
 
-module.exports = { MAX_LINES, MAX_LINE_CHARS, normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, reviewSourceVoice, incompleteLineReasons };
+module.exports = { MAX_LINES, MAX_LINE_CHARS, MAX_FORMAT_REPAIR_ATTEMPTS, normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, reviewSourceVoice, incompleteLineReasons };
