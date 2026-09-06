@@ -1,0 +1,1 @@
+This patch reduces only deterministic connector-only style repair calls. It does not address Coupang exact-identity rejection rates, source-link resolution, or OpenAI calls required for vision/content analysis; those remain separate work items.
