@@ -46,6 +46,41 @@ test('formatter does not silently truncate or hard-wrap generated copy', () => {
   assert.throws(() => policy.assertVoice(long), { code: 'CONTENT_STYLE_REJECTED' });
 });
 
+test('runtime review repairs an overlong line instead of discarding the material', async () => {
+  let calls = 0;
+  const original = '이 뒤집개 하나면 프라이팬 요리가 진짜 편해짐';
+  const out = await policy.reviewSourceVoice(original, { mode: 'product', sourceText: '집게형 실리콘 뒤집개 영상' }, async () => {
+    calls++;
+    return { text: '집게랑 뒤집개가 합쳐짐\n요리할 때 진짜 편함' };
+  });
+  assert.equal(calls, 1);
+  assert.equal(out, '집게랑 뒤집개가 합쳐짐\n요리할 때 진짜 편함');
+  assertThreadsShape(out);
+});
+
+test('runtime review retries one more time when first format repair still fails', async () => {
+  let calls = 0;
+  const out = await policy.reviewSourceVoice('가'.repeat(19), { mode: 'product' }, async () => {
+    calls++;
+    if (calls === 1) return { text: '나'.repeat(19) };
+    return { text: '이건 진짜 신기함\n써보면 바로 이해됨' };
+  });
+  assert.equal(calls, 2);
+  assertThreadsShape(out);
+});
+
+test('runtime review is bounded and rejects after two failed repairs', async () => {
+  let calls = 0;
+  await assert.rejects(
+    policy.reviewSourceVoice('가'.repeat(19), { mode: 'product' }, async () => {
+      calls++;
+      return { text: '나'.repeat(19) };
+    }),
+    { code: 'CONTENT_STYLE_REJECTED' }
+  );
+  assert.equal(calls, policy.MAX_FORMAT_REPAIR_ATTEMPTS);
+});
+
 test('old style blacklist is gone while safety checks remain', () => {
   for (const expressive of [
     '여러분은 어때?',
