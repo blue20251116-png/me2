@@ -1,0 +1,1 @@
+Documentation marker files are branch-only metadata and should not be part of the final production diff.
