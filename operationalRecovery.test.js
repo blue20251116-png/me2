@@ -6,7 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { spawn } = require('node:child_process');
-const { runWorker } = require('./isolatedTask');
+process.env.NODE_ENV = 'test';
+const { runWorker, resetBrowserCircuitForTests } = require('./isolatedTask');
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(),'me2-operations-'));
 for (const file of fs.readdirSync(__dirname)) {
@@ -24,12 +25,14 @@ function node(code, preloads=false) {
 }
 
 for (const detached of [false, true]) test(`stuck worker stops ${detached ? 'detached' : 'same-group'} descendants before next task`, {skip: detached && !fs.existsSync(`/proc/${process.pid}/stat`) ? 'Requires a real Linux procfs; exercised by Ubuntu CI' : false}, async () => {
+  resetBrowserCircuitForTests();
   const marker=path.join(temp,`late-write-${detached}`);
   const worker=path.join(temp,'hung-worker.js');
   fs.writeFileSync(worker,`require('child_process').spawn(process.execPath,['-e',${JSON.stringify(`setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'late'),700)`)}],{stdio:'ignore',detached:${detached}});setInterval(()=>{},1000);`);
   await assert.rejects(runWorker(worker,{},200),{code:'BROWSER_TASK_TIMEOUT'});
   await new Promise(resolve=>setTimeout(resolve,800));
   assert.equal(fs.existsSync(marker),false,'descendant must not survive timeout');
+  resetBrowserCircuitForTests();
   const healthy=path.join(temp,'healthy-worker.js');
   fs.writeFileSync(healthy,"process.on('message',()=>process.send({ok:true,value:42}));");
   assert.equal(await runWorker(healthy,{},2000),42);
@@ -42,6 +45,7 @@ test('AI hourly budget survives process restart and expires naturally', () => {
 });
 
 test('isolated browser workers are serialized by the parent limiter', async () => {
+  resetBrowserCircuitForTests();
   const worker=path.join(temp,'serialized-worker.js');
   fs.writeFileSync(worker,"process.on('message',()=>setTimeout(()=>process.send({ok:true,value:1}),150));");
   const started=Date.now();
@@ -96,7 +100,7 @@ test('unknown outcomes after restart never automatically republish', () => {
 });
 
 test('observed inline style defects are repaired and checked at final boundary', () => {
-  const result=node(`const q=require('./finalTextHardGuardPatch');const text=q.fallbackRewrite('주방 살림 고수들은 이런 거 쓰더라 진짜 편함\\n진짜 실화냐?','product');console.log('RESULT:'+JSON.stringify({text,reasons:q.badStyleReasons(text,'product')}));process.exit();`);
+  const result=node(`const q=require('./finalTextHardGuardPatch');const text=q.fallbackRewrite('고수들은 이거 쓰더라\\n진짜 편함\\n진짜 실화냐?','product');console.log('RESULT:'+JSON.stringify({text,reasons:q.badStyleReasons(text,'product')}));process.exit();`);
   assert.deepEqual(result.reasons,[]);
   assert.match(result.text,/쓰더라/); // Valid conversational ending is preserved; 음슴체/냐체 are still repaired.
   assert.match(result.text,/실화냐/); // Natural situational questions are retained.
