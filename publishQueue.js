@@ -4,7 +4,7 @@ const api = require('./threadsApi');
 const cron = require('node-cron');
 const { setState } = require('./automationState');
 const { classifyPublishFailure, publishRetryable } = require('./publishRetryPolicy');
-for (const definition of ['publish_started_at TEXT','publish_creation_id TEXT','publish_retry_count INTEGER DEFAULT 0','publish_next_retry_at TEXT','comment_started_at TEXT','comment_creation_id TEXT']) {
+for (const definition of ['publish_started_at TEXT','publish_creation_id TEXT','publish_retry_count INTEGER DEFAULT 0','publish_next_retry_at TEXT','comment_started_at TEXT','comment_creation_id TEXT','comment_retry_count INTEGER DEFAULT 0','comment_next_retry_at TEXT','recipe_comment_text TEXT']) {
   const name = definition.split(' ')[0];
   if (!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name===name)) db.exec(`ALTER TABLE posts ADD COLUMN ${definition}`);
 }
