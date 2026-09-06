@@ -1,0 +1,2 @@
+Target: main
+Scope: me2 Threads voice policy only
