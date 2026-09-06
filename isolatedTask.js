@@ -29,6 +29,11 @@ function getBrowserCircuitState() {
   const now = Date.now();
   return { open: browserCircuitOpenUntil > now, retryAfterMs: Math.max(0, browserCircuitOpenUntil - now), activeWorkers: activeBrowserWorkers };
 }
+function resetBrowserCircuitForTests() {
+  if (process.env.NODE_ENV !== 'test') throw new Error('Browser circuit reset is test-only');
+  browserFailureTimes = [];
+  browserCircuitOpenUntil = 0;
+}
 function assertBrowserCircuitClosed() {
   const now = Date.now();
   if (browserCircuitOpenUntil > now) {
@@ -77,4 +82,4 @@ async function runWorker(workerFile, payload, timeoutMs) {
   });
 }
 function isolatedBrowserTask(moduleName, method, args, timeoutMs = 120000) { return runWorker(path.join(__dirname, 'isolatedBrowserWorker.js'), { moduleName, method, args, accountId: Number(global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID || 0) }, timeoutMs); }
-module.exports = { isolatedBrowserTask, runWorker, MAX_BROWSER_WORKERS, browserInfraFailure, getBrowserCircuitState };
+module.exports = { isolatedBrowserTask, runWorker, MAX_BROWSER_WORKERS, browserInfraFailure, getBrowserCircuitState, resetBrowserCircuitForTests };
