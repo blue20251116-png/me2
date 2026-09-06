@@ -43,8 +43,9 @@ test('blank lines count toward the ten-line publishing boundary', () => {
 test('incomplete-line guard rejects only obvious fragments, not normal Korean beats', () => {
   assert.deepEqual(policy.incompleteLineReasons('이 조합은 의외인데\n먹어보면 바로 이해됨'), []);
   assert.deepEqual(policy.incompleteLineReasons('이거는\n진짜 신기함'), []);
+  assert.deepEqual(policy.incompleteLineReasons('나는\n진짜 신기함'), []);
   assert.ok(policy.incompleteLineReasons('그리고\n진짜 신기함').length > 0);
-  assert.ok(policy.incompleteLineReasons('나는\n진짜 신기함').length > 0);
+  assert.ok(policy.incompleteLineReasons('하지만\n결과는 완전 다름').length > 0);
 });
 
 test('formatter does not silently truncate or hard-wrap generated copy', () => {
