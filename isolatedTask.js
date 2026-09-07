@@ -7,6 +7,7 @@ const MAX_BROWSER_WORKERS = Math.max(1, Number(process.env.PLAYWRIGHT_MAX_CONCUR
 const FAILURE_THRESHOLD = Math.max(1, Number(process.env.PLAYWRIGHT_CIRCUIT_FAILURES || 2));
 const FAILURE_WINDOW_MS = Math.max(10000, Number(process.env.PLAYWRIGHT_CIRCUIT_WINDOW_MS || 120000));
 const CIRCUIT_COOLDOWN_MS = Math.max(30000, Number(process.env.PLAYWRIGHT_CIRCUIT_COOLDOWN_MS || 300000));
+const WORKER_KILL_GRACE_MS = Math.max(250, Number(process.env.PLAYWRIGHT_WORKER_KILL_GRACE_MS || 1500));
 let activeBrowserWorkers = 0;
 const browserWorkerWaiters = [];
 let browserFailureTimes = [];
@@ -55,6 +56,12 @@ function descendantsOf(rootPid) {
   for(const entry of entries) { if(!/^\d+$/.test(entry))continue; try { const stat=fs.readFileSync(`/proc/${entry}/stat`,'utf8'); const parent=Number(stat.slice(stat.lastIndexOf(')')+2).split(' ')[1]); if(!children.has(parent))children.set(parent,[]); children.get(parent).push(Number(entry)); }catch{} }
   const result=[]; function visit(pid){for(const child of children.get(pid)||[]){visit(child);result.push(child);}} visit(rootPid); return result;
 }
+function killWorkerTree(child, signal = 'SIGKILL') {
+  if (!child?.pid) return;
+  if (process.platform === 'win32') { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch {} return; }
+  for (const pid of descendantsOf(child.pid)) { try { process.kill(pid, signal); } catch {} }
+  try { process.kill(-child.pid, signal); } catch (err) { if (err.code !== 'ESRCH') { try { child.kill(signal); } catch {} } }
+}
 async function runWorker(workerFile, payload, timeoutMs) {
   await acquireBrowserWorker();
   return new Promise((resolve, reject) => {
@@ -62,19 +69,27 @@ async function runWorker(workerFile, payload, timeoutMs) {
     try {
       child = fork(workerFile, [], { execArgv: [], detached: process.platform !== 'win32', stdio: ['ignore', 'inherit', 'inherit', 'ipc'], env: { ...process.env, ME2_BROWSER_WORKER: '1' } });
     } catch (err) { releaseBrowserWorker(); recordBrowserFailure(err); reject(err); return; }
-    let result, failure, finished = false, slotReleased = false, settled = false;
+    let result, failure, finished = false, slotReleased = false, settled = false, killTimer = null;
     function releaseSlot() { if (!slotReleased) { slotReleased = true; releaseBrowserWorker(); } }
     function stop() {
-      if (!child?.pid) return;
-      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-      else { for(const pid of descendantsOf(child.pid)) { try { process.kill(pid,'SIGKILL'); } catch {} } try { process.kill(-child.pid, 'SIGKILL'); } catch (err) { if (err.code !== 'ESRCH') try { child.kill('SIGKILL'); } catch {} } }
+      if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
+      killWorkerTree(child, 'SIGTERM');
+      if (!killTimer) killTimer = setTimeout(() => killWorkerTree(child, 'SIGKILL'), WORKER_KILL_GRACE_MS);
     }
-    function fail(err) { if (settled) return; settled=true; clearTimeout(timer); stop(); releaseSlot(); recordBrowserFailure(err); reject(err); }
+    function fail(err) { if (settled) return; settled=true; clearTimeout(timer); if(killTimer)clearTimeout(killTimer); stop(); releaseSlot(); recordBrowserFailure(err); reject(err); }
     const timer = setTimeout(() => { failure = Object.assign(new Error(`Browser task exceeded ${timeoutMs}ms`), { code: 'BROWSER_TASK_TIMEOUT' }); stop(); }, timeoutMs);
-    child.on('message', message => { if (failure || finished) return; if (message.ok) result = message.value; else failure = Object.assign(new Error(message.error?.message || 'Browser task failed'), { code: message.error?.code }); finished = true; stop(); });
+    child.on('message', message => {
+      if (failure || finished) return;
+      if (message.ok) result = message.value; else failure = Object.assign(new Error(message.error?.message || 'Browser task failed'), { code: message.error?.code });
+      finished = true;
+      // Disconnect IPC first so a worker that has already closed Playwright can exit
+      // naturally; stop() remains a bounded fallback for leaked Chromium children.
+      try { if (child.connected) child.disconnect(); } catch {}
+      stop();
+    });
     child.once('error', fail);
     child.once('exit', (code, signal) => {
-      if (settled) return; settled=true; clearTimeout(timer); stop(); releaseSlot();
+      if (settled) return; settled=true; clearTimeout(timer); if(killTimer)clearTimeout(killTimer); releaseSlot();
       if (!failure && !finished) failure = new Error(`Browser worker exited without a result (${code ?? signal})`);
       if (failure) { recordBrowserFailure(failure); reject(failure); } else resolve(result);
     });
@@ -82,4 +97,4 @@ async function runWorker(workerFile, payload, timeoutMs) {
   });
 }
 function isolatedBrowserTask(moduleName, method, args, timeoutMs = 120000) { return runWorker(path.join(__dirname, 'isolatedBrowserWorker.js'), { moduleName, method, args, accountId: Number(global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID || 0) }, timeoutMs); }
-module.exports = { isolatedBrowserTask, runWorker, MAX_BROWSER_WORKERS, browserInfraFailure, getBrowserCircuitState, resetBrowserCircuitForTests };
+module.exports = { isolatedBrowserTask, runWorker, MAX_BROWSER_WORKERS, browserInfraFailure, getBrowserCircuitState, resetBrowserCircuitForTests, descendantsOf, killWorkerTree };
