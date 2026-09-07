@@ -22,7 +22,7 @@ function patchSource(src, filename) {
 
   const searchMarker = "      console.log(`[AutopilotV3][COUPANG SEARCH] 최종 검색어=${analysis.searchTerms.join(' / ')} (최대 2회)`);\n      const found=await findProduct(accountId,analysis.searchTerms);";
   if (src.includes(searchMarker)) src = src.replace(searchMarker,"      const soldIdentity=clean(vision?.soldObject||analysis?.topic||'');\n      analysis.searchTerms=buildSoldFirstTerms(analysis,vision);\n      console.log(`[AutopilotV3][COUPANG SEARCH][SOLD-FIRST] sold=\"${soldIdentity||'-'}\" 최종 검색어=${analysis.searchTerms.join(' / ')} (최대 2회)`);\n      const found=await findProduct(accountId,analysis.searchTerms,soldIdentity);"); else console.warn('[Autopilot][COUPANG SOLD-FIRST] search marker not found');
-  console.log('[Autopilot][COUPANG SOLD-FIRST] v4 EXACT PRODUCT IDENTITY + identity/context 분리 + category compatibility + 국가 단서 + fail-closed');
+  console.log('[Autopilot][COUPANG SOLD-FIRST] v4 EXACT PRODUCT IDENTITY + identity/context 분리 + category compatibility + 국가 단서 불일치 fail-closed');
   return src;
 }
 
