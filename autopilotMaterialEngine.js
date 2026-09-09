@@ -227,12 +227,12 @@ async function repairRecipeComment(accountId,{commentLead,material,analysis,prod
 async function generatePost(accountId,{material,analysis,product,target}){
   const productName=clean(product?.name);
   const d=await callOpenAI(accountId,
-`너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 원 Threads의 내용과 말맛을 중심으로 가볍게 편집한다.
+`너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 아래 문체 정책에 따라 원 소재를 가장 바이럴한 각도로 재구성한다.
 
 ${voiceGuide()}
 
 [레시피]
-- 본문 text는 원문 내용과 흐름을 살리고 필요한 상황 반응만 보탠다. 궁금증이나 후킹을 억지로 만들지 않는다.
+- 본문 text는 위 문체 정책대로 가장 강한 후킹 포인트를 중심으로 재구성한다. 다만 재료/조리법 같은 레시피 사실은 원문 근거를 벗어나지 않는다.
 - 정확한 제휴 소스/핵심재료 이름은 숨긴다.
 - 본문 마지막에 댓글 유도 문구를 자동으로 붙이지 않는다.
 - commentLead는 반드시 '🥘 재료'와 '🍳 만드는 법' 두 섹션으로 쓴다.
@@ -240,7 +240,7 @@ ${voiceGuide()}
 - 쿠팡 연결 핵심재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다.
 
 [일반상품/생활]
-- 본문 text는 원문 흐름을 유지한다. 확인된 상황을 살리는 한마디는 필요할 때만 추가한다.
+- 본문 text는 위 문체 정책대로 원문에서 가장 강한 포인트 하나를 중심으로 재구성한다. 확인되지 않은 사실은 새로 만들지 않는다.
 - 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.
 - commentLead는 확인된 정보 하나를 자연스러운 반말 1~2문장으로 보충한다. 추가 정보가 없으면 빈 문자열로 둔다.
 
