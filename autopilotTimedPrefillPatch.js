@@ -20,6 +20,19 @@ const runningAccounts = new Set();
 const coupangPreflightCache = new Map();
 let refillTickRunning = false;
 let lastAccountId = 0;
+// A single account's refill must never be able to hang the whole tick forever (e.g. a browser
+// task deep in collectBenchmarkMaterials that never settles) — that would leave
+// refillTickRunning stuck true, and since cron itself is also forced to noOverlap, no future
+// tick could ever run again until the process restarts. This bounds every account to a hard
+// ceiling so the tick — and therefore the whole scheduler — always completes.
+const ACCOUNT_REFILL_TIMEOUT_MS = Math.max(60000, Number(process.env.AUTOPILOT_ACCOUNT_TIMEOUT_MS || 6 * 60000));
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(message), { code: 'AUTOPILOT_ACCOUNT_TIMEOUT' })), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 function dayKeyKst(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
@@ -249,7 +262,7 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
               return;
             }
             lastAccountId = Number(row.id);
-            try { await refillAccount(lastAccountId); }
+            try { await withTimeout(refillAccount(lastAccountId), ACCOUNT_REFILL_TIMEOUT_MS, `account #${lastAccountId} refill exceeded ${ACCOUNT_REFILL_TIMEOUT_MS}ms`); }
             catch (err) { setState(lastAccountId,'retry',err.code||'PREFLIGHT_FAILED'); console.error(`[Autopilot][ACCOUNT ERROR] #${lastAccountId}: ${err.message}`); }
             if (Date.now()-startedAt >= 8*60000) break;
           }

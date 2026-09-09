@@ -8,8 +8,17 @@ const FAILURE_THRESHOLD = Math.max(1, Number(process.env.PLAYWRIGHT_CIRCUIT_FAIL
 const FAILURE_WINDOW_MS = Math.max(10000, Number(process.env.PLAYWRIGHT_CIRCUIT_WINDOW_MS || 120000));
 const CIRCUIT_COOLDOWN_MS = Math.max(30000, Number(process.env.PLAYWRIGHT_CIRCUIT_COOLDOWN_MS || 300000));
 const WORKER_KILL_GRACE_MS = Math.max(250, Number(process.env.PLAYWRIGHT_WORKER_KILL_GRACE_MS || 1500));
+// A worker slot must never be lost forever. If killWorkerTree ever fails to actually reap a
+// child (container/PID-namespace edge case, process stuck past SIGKILL, etc.) the 'exit' event
+// that normally releases the slot never fires, and every future browser task queues forever —
+// this is what silently wedges the whole autopilot scheduler after long uptime. Two independent
+// backstops below make that unrecoverable-forever state impossible: a bounded queue wait, and a
+// stale-slot reaper that reclaims a slot no later than its own task timeout plus a grace period.
+const SLOT_WAIT_TIMEOUT_MS = Math.max(30000, Number(process.env.PLAYWRIGHT_SLOT_WAIT_TIMEOUT_MS || 5 * 60000));
+const SLOT_STALE_GRACE_MS = Math.max(5000, Number(process.env.PLAYWRIGHT_SLOT_STALE_GRACE_MS || 30000));
 let activeBrowserWorkers = 0;
 const browserWorkerWaiters = [];
+const activeSlotDeadlines = [];
 let browserFailureTimes = [];
 let browserCircuitOpenUntil = 0;
 
@@ -43,12 +52,43 @@ function assertBrowserCircuitClosed() {
   }
   if (browserCircuitOpenUntil) { console.log('[Browser Circuit] HALF-OPEN · allowing one probe worker'); browserCircuitOpenUntil = 0; browserFailureTimes = []; }
 }
-async function acquireBrowserWorker() {
-  assertBrowserCircuitClosed();
-  if (activeBrowserWorkers >= MAX_BROWSER_WORKERS) { await new Promise(resolve => browserWorkerWaiters.push(resolve)); assertBrowserCircuitClosed(); }
-  activeBrowserWorkers += 1;
+function reapStaleSlots() {
+  const now = Date.now();
+  let reclaimed = 0;
+  while (activeSlotDeadlines.length && now >= activeSlotDeadlines[0]) { activeSlotDeadlines.shift(); reclaimed++; }
+  if (!reclaimed) return;
+  activeBrowserWorkers = Math.max(0, activeBrowserWorkers - reclaimed);
+  console.error(`[Browser Circuit] STALE SLOT reclaimed count=${reclaimed} — a worker never released its slot after its own timeout; forcing recovery so future tasks are not stuck forever`);
+  for (let i = 0; i < reclaimed; i++) { const next = browserWorkerWaiters.shift(); if (next) next(); }
 }
-function releaseBrowserWorker() { activeBrowserWorkers = Math.max(0, activeBrowserWorkers - 1); const next = browserWorkerWaiters.shift(); if (next) next(); }
+async function acquireBrowserWorker(timeoutMs) {
+  assertBrowserCircuitClosed();
+  reapStaleSlots();
+  if (activeBrowserWorkers >= MAX_BROWSER_WORKERS) {
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const waitTimer = setTimeout(() => {
+        if (settled) return; settled = true;
+        const idx = browserWorkerWaiters.indexOf(waiter);
+        if (idx !== -1) browserWorkerWaiters.splice(idx, 1);
+        reject(Object.assign(new Error(`Timed out after ${SLOT_WAIT_TIMEOUT_MS}ms waiting for a browser worker slot`), { code: 'BROWSER_SLOT_WAIT_TIMEOUT' }));
+      }, SLOT_WAIT_TIMEOUT_MS);
+      const waiter = () => { if (settled) return; settled = true; clearTimeout(waitTimer); resolve(); };
+      browserWorkerWaiters.push(waiter);
+    });
+    assertBrowserCircuitClosed();
+  }
+  activeBrowserWorkers += 1;
+  const deadline = Date.now() + timeoutMs + SLOT_STALE_GRACE_MS;
+  activeSlotDeadlines.push(deadline);
+  activeSlotDeadlines.sort((a, b) => a - b);
+  return deadline;
+}
+function releaseBrowserWorker(deadline) {
+  activeBrowserWorkers = Math.max(0, activeBrowserWorkers - 1);
+  if (deadline != null) { const idx = activeSlotDeadlines.indexOf(deadline); if (idx !== -1) activeSlotDeadlines.splice(idx, 1); }
+  const next = browserWorkerWaiters.shift(); if (next) next();
+}
 function descendantsOf(rootPid) {
   if (process.platform !== 'linux') return [];
   const children=new Map();
@@ -63,14 +103,14 @@ function killWorkerTree(child, signal = 'SIGKILL') {
   try { process.kill(-child.pid, signal); } catch (err) { if (err.code !== 'ESRCH') { try { child.kill(signal); } catch {} } }
 }
 async function runWorker(workerFile, payload, timeoutMs) {
-  await acquireBrowserWorker();
+  const slotDeadline = await acquireBrowserWorker(timeoutMs);
   return new Promise((resolve, reject) => {
     let child;
     try {
       child = fork(workerFile, [], { execArgv: [], detached: process.platform !== 'win32', stdio: ['ignore', 'inherit', 'inherit', 'ipc'], env: { ...process.env, ME2_BROWSER_WORKER: '1' } });
-    } catch (err) { releaseBrowserWorker(); recordBrowserFailure(err); reject(err); return; }
+    } catch (err) { releaseBrowserWorker(slotDeadline); recordBrowserFailure(err); reject(err); return; }
     let result, failure, finished = false, slotReleased = false, settled = false, killTimer = null;
-    function releaseSlot() { if (!slotReleased) { slotReleased = true; releaseBrowserWorker(); } }
+    function releaseSlot() { if (!slotReleased) { slotReleased = true; releaseBrowserWorker(slotDeadline); } }
     function stop() {
       if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
       killWorkerTree(child, 'SIGTERM');
