@@ -48,6 +48,16 @@ test('incomplete-line guard rejects only obvious fragments, not normal Korean be
   assert.ok(policy.incompleteLineReasons('하지만\n결과는 완전 다름').length > 0);
 });
 
+test('a bound-noun exclamation ("토할" / "뻔!") split across lines is caught and repaired, not shipped', () => {
+  const broken = '올라오고... 진짜 토할\n뻔! 근데 이 세제';
+  assert.ok(policy.incompleteLineReasons(broken).length > 0, 'must flag the mid-phrase split');
+  assert.ok(policy.voiceProblems(broken).includes('미완결 줄바꿈'));
+  const { repairConnectorOnlyBreaks } = require('./threadsVoiceLocalRepair');
+  const fixed = repairConnectorOnlyBreaks(broken, policy.MAX_LINE_CHARS);
+  assert.deepEqual(policy.incompleteLineReasons(fixed), []);
+  assert.equal(fixed.split('\n').length, 1, 'the exclamation must end up on one line, not split');
+});
+
 test('formatter does not silently truncate or hard-wrap generated copy', () => {
   const long = '가'.repeat(25);
   assert.equal(policy.formatVoice(long), long);

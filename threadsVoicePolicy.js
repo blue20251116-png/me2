@@ -6,13 +6,27 @@ const MAX_LINE_CHARS = 24;
 const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 const codePointLength = value => Array.from(String(value || '')).length;
 const CONNECTOR_ONLY = /^(?:그리고|근데|그래서|하지만|또|또는|혹은|및)$/;
+// A line ending mid-exclamation ("토할" then "뻔!" on the next line) is not caught by
+// CONNECTOR_ONLY — the giveaway is that the *next* line opens with punctuation that can only
+// belong to the sentence the previous line already started.
+const DANGLING_PUNCTUATION_START = /^[!?~.…]/;
+// "뻔", "만큼", "듯" etc. are bound nouns: grammatically they can only ever attach to the verb
+// form right before them ("토할 뻔"), never start a clause on their own — so seeing one open a
+// line is itself proof the previous line was cut mid-phrase, even when it's followed by more
+// text ("뻔! 근데 이 세제...") rather than bare punctuation.
+const DANGLING_BOUND_NOUN_START = /^(?:뻔|만큼|듯|채|김에|바람에|탓에|터라|뿐|데다|채로|셈|법|리|참|겸)(?=[!?~.…,\s]|$)/;
 
 function normalizeVoice(text) {
   return String(text || '').replace(/\r/g, '').replace(/\\n/g, '\n').split('\n').map(line => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 function incompleteLineReasons(text) {
   const lines = normalizeVoice(text).split('\n'); const reasons = [];
-  for (let i=0;i<lines.length-1;i++) { const line=lines[i].trim(), next=lines[i+1].trim(); if(line&&next&&CONNECTOR_ONLY.test(line)) reasons.push(`미완결 줄:${i+1}`); }
+  for (let i=0;i<lines.length-1;i++) {
+    const line=lines[i].trim(), next=lines[i+1].trim();
+    if (!line || !next) continue;
+    if (CONNECTOR_ONLY.test(line)) reasons.push(`미완결 줄:${i+1}`);
+    else if (DANGLING_PUNCTUATION_START.test(next) || DANGLING_BOUND_NOUN_START.test(next)) reasons.push(`문장 분리:${i+1}`);
+  }
   return reasons;
 }
 function voiceGuide() { return `[ME2 스레드 전용 바이럴 작가 — 최종 문체 정책]
@@ -33,6 +47,9 @@ function voiceGuide() { return `[ME2 스레드 전용 바이럴 작가 — 최�
 - "장단점이 있다", "개인차가 있을 수 있다"처럼 지나치게 공정하고 안전한 어조로 물러서지 않는다. 확실한 개인 반응과 감정으로 쓴다.
 - 물음표·느낌표를 필요하면 겹쳐 쓰거나(??, !!) 말줄임(...)을 자연스럽게 섞어도 된다. 모든 문장이 마침표로 깔끔하게 끝나지 않아도 된다.
 - 한 줄은 Unicode 기준 24자 이내다. 24자를 맞추려고 문장 중간을 강제로 자르지 않는다.
+- 하나의 감탄구·관용구를 줄바꿈으로 쪼개지 않는다. 나쁜 예: "...진짜 토할" 다음 줄에 "뻔! 🤢 근데..." — "토할 뻔!"은 한 덩어리이므로 반드시 같은 줄이거나, 안 되면 그 앞에서 줄을 끊는다.
+- 다음 문장의 주어·시작 어절을 이전 줄 끝에 붙이지 않는다. 나쁜 예: "...싹 사라짐ㅋㅋ 옷이" 다음 줄에 "이렇게 깨끗해질 줄이야" — "옷이"는 다음 문장의 주어이므로 이전 줄이 아니라 다음 줄 맨 앞에 와야 한다.
+- 줄을 끊기 전에 그 줄 끝 어절이 지금 문장에 속하는지 다음 문장에 속하는지 먼저 판단한다. 애매하면 문장/절 경계에서 끊는다.
 - 모든 줄은 그 줄만 읽어도 의미 단위가 자연스럽게 완결되어야 한다. 조사·접속사·수식어만 남기거나 다음 줄에 이어 붙여야 이해되는 줄바꿈은 금지한다.
 - 24자를 넘는 문장은 잘라서 두 줄로 만드는 게 아니라 뜻과 후킹을 유지한 더 짧고 자연스러운 표현으로 다시 쓴다.
 - 본문은 빈 줄을 포함해 최대 10줄이다. 짧게 끝나면 억지로 채우지 않는다.
