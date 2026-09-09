@@ -3,7 +3,7 @@
 const CONNECTOR_ONLY = /^(?:그리고|근데|그래서|하지만|또|또는|혹은|및)$/;
 const codePointLength = value => Array.from(String(value || '')).length;
 
-function repairConnectorOnlyBreaks(text, maxLineChars = 18) {
+function repairConnectorOnlyBreaks(text, maxLineChars = 24) {
   const lines = String(text || '').replace(/\r/g, '').split('\n').map(line => line.trim());
   const repaired = [];
   for (let i = 0; i < lines.length; i++) {

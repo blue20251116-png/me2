@@ -8,7 +8,7 @@ const count = s => Array.from(String(s)).length;
 function assertThreadsShape(text) {
   const lines = String(text).split('\n');
   assert.ok(lines.length <= 10, `too many lines: ${lines.length}`);
-  for (const line of lines) assert.ok(count(line) <= 18, `line too long (${count(line)}): ${line}`);
+  for (const line of lines) assert.ok(count(line) <= 24, `line too long (${count(line)}): ${line}`);
 }
 
 test('persona is a Threads viral writer, not a source-faithful summarizer', () => {
@@ -19,7 +19,7 @@ test('persona is a Threads viral writer, not a source-faithful summarizer', () =
   assert.doesNotMatch(guide, /원문 90%|새 사건을 덧붙였는지|지어내지 않는다/);
 });
 
-test('hard format is maximum ten lines and eighteen Unicode code points per line', () => {
+test('hard format is maximum ten lines and twenty-four Unicode code points per line', () => {
   const valid = '이거 처음 봤는데\n생각보다 훨씬 신기함\n마지막이 진짜 포인트';
   assertThreadsShape(policy.assertVoice(valid));
 
@@ -27,9 +27,9 @@ test('hard format is maximum ten lines and eighteen Unicode code points per line
   assert.ok(policy.voiceProblems(eleven).includes('10줄 초과'));
   assert.throws(() => policy.assertVoice(eleven), { code: 'CONTENT_STYLE_REJECTED' });
 
-  const nineteen = '가'.repeat(19);
-  assert.ok(policy.voiceProblems(nineteen).includes('18자 초과'));
-  assert.throws(() => policy.assertVoice(nineteen), { code: 'CONTENT_STYLE_REJECTED' });
+  const twentyFive = '가'.repeat(25);
+  assert.ok(policy.voiceProblems(twentyFive).includes('24자 초과'));
+  assert.throws(() => policy.assertVoice(twentyFive), { code: 'CONTENT_STYLE_REJECTED' });
 
   assert.equal(count('가나다😀'), 4, 'emoji must count as one Unicode code point');
 });
@@ -49,7 +49,7 @@ test('incomplete-line guard rejects only obvious fragments, not normal Korean be
 });
 
 test('formatter does not silently truncate or hard-wrap generated copy', () => {
-  const long = '가'.repeat(19);
+  const long = '가'.repeat(25);
   assert.equal(policy.formatVoice(long), long);
   assert.throws(() => policy.assertVoice(long), { code: 'CONTENT_STYLE_REJECTED' });
 });
@@ -68,9 +68,9 @@ test('runtime review repairs an overlong line instead of discarding the material
 
 test('runtime review retries one more time when first format repair still fails', async () => {
   let calls = 0;
-  const out = await policy.reviewSourceVoice('가'.repeat(19), { mode: 'product' }, async () => {
+  const out = await policy.reviewSourceVoice('가'.repeat(25), { mode: 'product' }, async () => {
     calls++;
-    if (calls === 1) return { text: '나'.repeat(19) };
+    if (calls === 1) return { text: '나'.repeat(25) };
     return { text: '이건 진짜 신기함\n써보면 바로 이해됨' };
   });
   assert.equal(calls, 2);
@@ -80,9 +80,9 @@ test('runtime review retries one more time when first format repair still fails'
 test('runtime review is bounded and rejects after two failed repairs', async () => {
   let calls = 0;
   await assert.rejects(
-    policy.reviewSourceVoice('가'.repeat(19), { mode: 'product' }, async () => {
+    policy.reviewSourceVoice('가'.repeat(25), { mode: 'product' }, async () => {
       calls++;
-      return { text: '나'.repeat(19) };
+      return { text: '나'.repeat(25) };
     }),
     { code: 'CONTENT_STYLE_REJECTED' }
   );
