@@ -34,10 +34,8 @@ require.extensions['.js'] = function visionActionContextLoader(mod, filename) {
   );
 
   source = source.replace(
-    "[판매대상 검수]\\n${visionText}`,
-",
-    "[판매대상 검수]\\n${visionText}\\n\\n[시각 행동 절대규칙]\\n판매대상 검수에 actualAction/mainHook이 있으면 그 실제 행동과 장면을 글의 중심 사실로 사용한다. unusualUse=true면 제품 일반후기보다 그 의외의 활용법을 우선한다. 시각자료에서 확인되지 않은 향/맛/성능/효과/사용감을 임의로 추가하지 않는다. 예: 치실로 사과 껍질을 벗기는 장면이면 치실의 민트향 후기가 아니라 치실로 사과를 깎는 행동을 소재로 쓴다.`,
-"
+    "[판매대상 검수]\\n${visionText}`,\n",
+    "[판매대상 검수]\\n${visionText}\\n\\n[시각 행동 절대규칙]\\n판매대상 검수에 actualAction/mainHook이 있으면 그 실제 행동과 장면을 글의 중심 사실로 사용한다. unusualUse=true면 제품 일반후기보다 그 의외의 활용법을 우선한다. 시각자료에서 확인되지 않은 향/맛/성능/효과/사용감을 임의로 추가하지 않는다. 예: 치실로 사과 껍질을 벗기는 장면이면 치실의 민트향 후기가 아니라 치실로 사과를 깎는 행동을 소재로 쓴다.`,\n"
   );
   if (source.includes('[시각 행동 절대규칙]')) changed++;
 
