@@ -86,9 +86,10 @@ async function collectProfilePostsWithContext(context, username, {limit=2}={}) {
     page.setDefaultTimeout(12000);
     await page.goto(`https://www.threads.com/@${encodeURIComponent(username)}`, { waitUntil:'domcontentloaded', timeout:12000 });
     await page.waitForTimeout(1600);
-    for (let i=0;i<3;i++) {
-      await page.mouse.wheel(0,900);
-      await page.waitForTimeout(350);
+    const scrollRounds=Math.max(6,Math.min(24,Math.ceil(Number(limit||2)/2)+4));
+    for (let i=0;i<scrollRounds;i++) {
+      await page.mouse.wheel(0,1200);
+      await page.waitForTimeout(i<4?350:220);
     }
     const __profileDiag=await page.evaluate(()=>({ finalUrl:location.href, title:String(document.title||'').slice(0,160), anchors:document.querySelectorAll('a').length, postLinks:document.querySelectorAll('a[href*="/post/"]').length, articles:document.querySelectorAll('article,[role="article"]').length, hrefSamples:[...document.querySelectorAll('a[href]')].map(a=>{try{return new URL(a.href,location.origin).pathname}catch{return ''}}).filter(Boolean).slice(0,12), bodyText:String(document.body?.innerText||'').replace(/\s+/g,' ').trim().slice(0,220) }));
     const __profileResult=await page.evaluate(({username,limit}) => {
@@ -109,7 +110,7 @@ async function collectProfilePostsWithContext(context, username, {limit=2}={}) {
         }
         return best;
       };
-      const mediaFromRoot=root=>{
+      const mediaFromRoot=(root,target)=>{
         if(!root)return{images:[],hasVideo:false,videoCount:0};
         const videos=[...root.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>=180&&r.height>=180;});
         const videoRects=videos.map(v=>v.getBoundingClientRect());
@@ -118,6 +119,10 @@ async function collectProfilePostsWithContext(context, username, {limit=2}={}) {
           const r=img.getBoundingClientRect(),src=img.currentSrc||img.src||'',alt=(img.alt||'').toLowerCase();
           if(!src||r.width<180||r.height<180)continue;
           if(/profile|프로필|avatar|사용자/.test(alt))continue;
+          const nestedArticle=img.closest('article,[role="article"]');
+          if(nestedArticle&&nestedArticle!==root)continue;
+          const postAnchor=img.closest('a[href*="/post/"]');
+          if(postAnchor&&canonical(postAnchor.href||'')!==target)continue;
           if(videoRects.some(vr=>rectOverlap(r,vr)>=0.55))continue;
           if(img.closest('video')||img.parentElement?.querySelector?.('video'))continue;
           if(!images.includes(src))images.push(src);
@@ -134,7 +139,7 @@ async function collectProfilePostsWithContext(context, username, {limit=2}={}) {
         if(!/\/post\//i.test(p))continue;
         const root=findRoot(a,href);if(!root)continue;
         const text=clean(root.innerText||'').slice(0,1800);if(text.length<8)continue;
-        const media=mediaFromRoot(root);
+        const media=mediaFromRoot(root,href);
         out.push({url:href,text,username,images:media.images,thumbnail:media.images[0]||'',imageCount:media.images.length,hasVideo:media.hasVideo,videoCount:media.videoCount});
       }
       return out;
@@ -258,12 +263,21 @@ async function collectPostDetails(url, username) {
 
       const images=[],videos=[];
       if(main){
-        for(const v of main.querySelectorAll('video')){const src=v.currentSrc||v.src||'';if(src&&!videos.includes(src))videos.push(src);}
+        const rectOverlap=(a,b)=>{const x=Math.max(0,Math.min(a.right,b.right)-Math.max(a.left,b.left));const y=Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top));const inter=x*y;if(!inter)return 0;return inter/Math.max(1,Math.min(a.width*a.height,b.width*b.height));};
+        const videoEls=[...main.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>=160&&r.height>=160;});
+        const videoRects=videoEls.map(v=>v.getBoundingClientRect());
+        for(const v of videoEls){const src=v.currentSrc||v.src||'';if(src&&!videos.includes(src))videos.push(src);}
         for(const img of main.querySelectorAll('img')){
           const src=img.currentSrc||img.src||'',alt=(img.alt||'').toLowerCase();
           const r=img.getBoundingClientRect();
           if(!src||r.width<160||r.height<160)continue;
           if(/profile|프로필|avatar|사용자/.test(alt))continue;
+          const nestedArticle=img.closest('article,[role="article"]');
+          if(nestedArticle&&nestedArticle!==main)continue;
+          const postAnchor=img.closest('a[href*="/post/"]');
+          if(postAnchor&&canonical(postAnchor.href||'')!==targetUrl)continue;
+          if(videoRects.some(vr=>rectOverlap(r,vr)>=0.55))continue;
+          if(img.closest('video')||img.parentElement?.querySelector?.('video'))continue;
           if(!images.includes(src))images.push(src);
         }
       }
