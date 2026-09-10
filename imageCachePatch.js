@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const threadsApi = require('./threadsApi');
 
-const uploadsDir = path.join(__dirname, 'uploads');
+const uploadsDir = path.join(__dirname, 'db', 'uploads');
 const MEDIA_BUNDLE_PREFIX = '__THREADS_MEDIA_BUNDLE__';
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
