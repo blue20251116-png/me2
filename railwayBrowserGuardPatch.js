@@ -6,11 +6,27 @@ const path = require('path');
 // Keep Railway/container flags minimal. --single-process forces Chromium into
 // an atypical process model and was present on every observed SIGTRAP launch.
 // The parent isolatedTask circuit breaker now owns service-wide crash control.
+//
+// 2026-09-10: production logs showed repeated `pthread_create: Resource
+// temporarily unavailable (11)` (EAGAIN) with 2GB+ RAM available, pointing at
+// a process/thread-count ceiling (container PID/ulimit), not memory — and the
+// GPU process specifically crash-looped 6x before Chromium gave up entirely
+// ("GPU process isn't usable. Goodbye"), which then cascaded into the
+// isolatedTask circuit breaker blocking every other account for 5 minutes.
+// --in-process-gpu folds GPU work into the browser process instead of
+// spawning (and crash-looping) a separate one; --renderer-process-limit=1
+// caps renderer process count directly. Both are standalone Chromium flags
+// that don't touch --disable-features, so they can't silently cancel
+// Playwright's own default feature disables the way appending another
+// --disable-features=... value would. Deliberately not revisiting
+// --single-process — that was already tried and reverted per the note above.
 const SAFE_ARGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
   '--disable-gpu',
+  '--in-process-gpu',
+  '--renderer-process-limit=1',
 ];
 const MAX_BROWSER_CONCURRENCY = Math.max(1, Number(process.env.PLAYWRIGHT_MAX_CONCURRENCY || 1));
 const FAILURE_COOLDOWN_MS = Math.max(5000, Number(process.env.PLAYWRIGHT_FAILURE_COOLDOWN_MS || 30000));
