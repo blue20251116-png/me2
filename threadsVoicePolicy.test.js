@@ -174,6 +174,18 @@ test('health claims still use a separate factual safety audit', async () => {
   assert.ok(calls >= 1);
 });
 
+test('a health claim the factual audit clears is not rejected outright', async () => {
+  // Regression: reviewSourceVoice used to call the audit and then reject
+  // unconditionally regardless of its result, making the audit pointless -
+  // any text matching the blunt highRiskClaim regex was always rejected
+  // even when the model confirmed it was accurate/sourced.
+  const text = '한 달 만에 12kg 빠졌어\n진짜 신기함ㅋㅋ';
+  const out = await policy.reviewSourceVoice(text, { sourceText: '체중 12kg 감량 인증 게시물' }, async () => {
+    return { issues: [], sourceAnchors: ['체중 12kg 감량 인증 게시물'] };
+  });
+  assert.equal(out, text);
+});
+
 test('recipe comment reveal is conditional, not a global requirement', () => {
   const body = '계란찜에 이거 넣음\n맛이 확 달라짐ㅋㅋ\n비밀재료는 댓글에';
   assertThreadsShape(policy.assertVoice(body, { mode: 'recipe' }));
