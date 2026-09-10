@@ -124,6 +124,23 @@ test('a formulaic "너도 해봐~🙂" ad-CTA sign-off is rejected, even split a
   assert.deepEqual(policy.voiceProblems('이거 진짜 신기함\n다음에도 또 봐야지'), []);
 });
 
+test('the persona guide never recommends the exact CTA pattern it also bans', () => {
+  const guide = policy.voiceGuide();
+  // The closing-pattern example list once suggested "너도 꼭 써봐!" as a good ending while a
+  // later rule banned "너도 해봐/도전해봐/써봐" ad-CTAs outright — a self-contradiction that could
+  // lead the model straight into the exact ending GENERIC_CTA_ENDING rejects. Only check the
+  // "패턴 예시" (recommended pattern) lines, not the ban rule's own quoted counter-examples.
+  const exampleLines = guide.split('\n').filter(line => /\[(?:오프닝|마무리) 패턴 예시/.test(line));
+  assert.ok(exampleLines.length >= 2, 'expected both opening and closing pattern-example lines');
+  for (const line of exampleLines) {
+    const quotedExamples = [...line.matchAll(/"([^"]+)"/g)].map(m => m[1]);
+    for (const example of quotedExamples) {
+      assert.deepEqual(policy.voiceProblems(example).filter(r => r === '뻔한 CTA 마무리'), [],
+        `voiceGuide() recommended example is a CTA it also bans: "${example}"`);
+    }
+  }
+});
+
 test('old style blacklist is gone while safety checks remain', () => {
   for (const expressive of [
     '여러분은 어때?',
