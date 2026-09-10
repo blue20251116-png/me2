@@ -99,6 +99,17 @@ test('runtime review is bounded and rejects after two failed repairs', async () 
   assert.equal(calls, policy.MAX_FORMAT_REPAIR_ATTEMPTS);
 });
 
+test('a formulaic "너도 해봐~🙂" ad-CTA sign-off is rejected, even split across the last two lines', () => {
+  const splitAcrossLines = '이거 진짜 신기함ㅋㅋ\n진짜 가능할 듯! 너도\n도전해봐~😊';
+  assert.ok(policy.voiceProblems(splitAcrossLines).includes('뻔한 CTA 마무리'));
+  assert.throws(() => policy.assertVoice(splitAcrossLines), { code: 'CONTENT_STYLE_REJECTED' });
+
+  const sameLine = '이거 완전 신기함ㅋㅋ\n너도 한번 해봐~😆';
+  assert.ok(policy.voiceProblems(sameLine).includes('뻔한 CTA 마무리'));
+
+  assert.deepEqual(policy.voiceProblems('이거 진짜 신기함\n다음에도 또 봐야지'), []);
+});
+
 test('old style blacklist is gone while safety checks remain', () => {
   for (const expressive of [
     '여러분은 어때?',
