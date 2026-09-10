@@ -1,6 +1,6 @@
 const { normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, reviewSourceVoice } = require('./threadsVoicePolicy');
 const axios = require('axios');
-const { getAccount, getSystemApiSettings } = require('./db');
+const { db, getAccount, getSystemApiSettings } = require('./db');
 const { collectBenchmarkMaterials, collectPostDetails, markUsedPost } = require('./benchmarkAccounts');
 const coupangApi = require('./coupangApi');
 
@@ -19,11 +19,28 @@ async function callOpenAI(accountId,system,user,{maxTokens=1800,temperature=.55}
   if(!raw)throw new Error('AI 결과가 비어 있습니다');
   return JSON.parse(raw);
 }
+async function prepareVisionImageUrls(imageUrls){
+  const out=[];
+  for(const raw of (imageUrls||[]).filter(Boolean).slice(0,2)){
+    try{
+      if(/^data:image\//i.test(String(raw))){out.push(raw);continue;}
+      const r=await axios.get(String(raw),{responseType:'arraybuffer',timeout:15000,maxRedirects:5,maxContentLength:12*1024*1024,maxBodyLength:12*1024*1024,headers:{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',referer:'https://www.threads.com/',accept:'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'},validateStatus:s=>s>=200&&s<400});
+      const type=String(r.headers?.['content-type']||'').split(';')[0].trim().toLowerCase();
+      const body=Buffer.from(r.data||[]);
+      if(!type.startsWith('image/')||body.length<512)throw new Error('invalid image response');
+      out.push('data:'+type+';base64,'+body.toString('base64'));
+      console.log('[AutopilotV3][VISION CACHE] source='+new URL(String(raw)).hostname+' bytes='+body.length);
+    }catch(e){console.warn('[AutopilotV3][VISION CACHE] 이미지 로컬화 실패: '+(e.response?.status||'-')+' '+e.message);}
+  }
+  return out;
+}
 async function callOpenAIVision(accountId,system,text,imageUrls,{maxTokens=1400,temperature=.15}={}){
   const apiKey=getOpenAIKey(accountId);
   if(!apiKey)throw new Error('OpenAI API 키가 설정되지 않았습니다');
   const content=[{type:'text',text}];
-  for(const url of (imageUrls||[]).filter(Boolean).slice(0,3))content.push({type:'image_url',image_url:{url}});
+  const safeImageUrls=await prepareVisionImageUrls(imageUrls);
+  if(!safeImageUrls.length)throw new Error('VISION_IMAGE_CACHE_EMPTY');
+  for(const url of safeImageUrls)content.push({type:'image_url',image_url:{url}});
   const r=await axios.post('https://api.openai.com/v1/chat/completions',{
     model:'gpt-4o-mini',temperature,max_tokens:maxTokens,response_format:{type:'json_object'},
     messages:[{role:'system',content:system},{role:'user',content}]
@@ -33,6 +50,37 @@ async function callOpenAIVision(accountId,system,text,imageUrls,{maxTokens=1400,
   return JSON.parse(raw);
 }
 function clean(v){return String(v||'').replace(/\s+/g,' ').trim();}
+function decodeEscapedNewlines(v){return String(v||'').replace(/\\r\\n/g,'\n').replace(/\\n/g,'\n').replace(/\\r/g,'\n').replace(/\n{3,}/g,'\n\n').trim();}
+const CONTENT_MODE_SEQUENCE=[
+  {mode:'product',specialStory:false},
+  {mode:'recipe',specialStory:false},
+  {mode:'product',specialStory:false},
+  {mode:'recipe',specialStory:false},
+  {mode:'product',specialStory:false},
+  {mode:'recipe',specialStory:false},
+  {mode:'product',specialStory:false},
+  {mode:'recipe',specialStory:false},
+  {mode:'product',specialStory:false},
+  {mode:'recipe',specialStory:false},
+  {mode:'product',specialStory:false},
+  {mode:'recipe',specialStory:false},
+  {mode:'product',specialStory:false},
+  {mode:'recipe',specialStory:false},
+  {mode:'product',specialStory:false},
+  {mode:'recipe',specialStory:false},
+  {mode:'product',specialStory:false},
+  {mode:'recipe',specialStory:false},
+  {mode:'product',specialStory:false},
+  {mode:'recipe',specialStory:false}
+];
+const contentModeCursor=new Map();
+function persistentContentSeed(accountId){try{const row=db.prepare('SELECT COUNT(*) AS c FROM posts WHERE account_id=?').get(accountId);return Number(row?.c||0)%CONTENT_MODE_SEQUENCE.length;}catch(e){console.warn('[AutopilotV3][CONTENT MIX SEED] DB seed 실패 → account seed 사용 '+e.message);return Math.abs(Number(accountId)||0)%CONTENT_MODE_SEQUENCE.length;}}
+function currentContentCursor(accountId){if(!contentModeCursor.has(accountId)){const seed=persistentContentSeed(accountId);contentModeCursor.set(accountId,seed);console.log('[AutopilotV3][CONTENT MIX SEED] account='+accountId+' persistentSlot='+seed+'/'+CONTENT_MODE_SEQUENCE.length);}return Number(contentModeCursor.get(accountId)||0)%CONTENT_MODE_SEQUENCE.length;}
+function preferredContentSlot(accountId){return CONTENT_MODE_SEQUENCE[currentContentCursor(accountId)];}
+function advanceContentMode(accountId){contentModeCursor.set(accountId,(currentContentCursor(accountId)+1)%CONTENT_MODE_SEQUENCE.length);}
+function specialStorySignals(v){const t=clean(v);if(!t)return 0;let s=0;for(const r of[/(고체|젤형|캡슐|스틱|패치|롤온)/i,/(자동|센서|감지|무선|진공|압축)/i,/(접이|폴딩|회전|자석|마그넷|걸이|틈새|슬라이드)/i,/(미니|휴대|포켓|벽걸이|부착|클립)/i,/(전용|일체형|분리형|다기능)/i])if(r.test(t))s++;return s;}
+function specialStoryScore(material,analysis,vision){const evidence=[analysis?.topic,analysis?.secretTerm,...(analysis?.searchTerms||[]),vision?.soldObject,vision?.evidence,material?.sourceText,material?.authorReplies].filter(Boolean).join(' ');let s=specialStorySignals(evidence);if(/(냄새|악취|얼룩|물때|곰팡|먼지|정리|수납|젖|습기|빨래|청소|신발|화장실|욕실|주방|차량|침대|옷장|냉장고|반려|집들이)/i.test(evidence))s+=1;if(/(뭐지|신기|처음|이런 게|특이|놀|ㅋㅋ|;;|ㅠㅠ)/i.test(evidence))s+=1;return s;}
+function isSpecialStoryCandidate(material,analysis,vision){return specialStoryScore(material,analysis,vision)>=2;}
 function normalized(v){return clean(v).toLowerCase().replace(/[\s\-_/()[\]{}.,!?~'"“”‘’]/g,'');}
 function hasExternalLink(t){return/(?:https?:\/\/|www\.)\S+/i.test(String(t||''))||/\b(?:link\.coupang\.com|naver\.me)\b/i.test(String(t||''));}
 function hasAffiliateLink(t){
@@ -79,7 +127,7 @@ function materialScore(i){
   return s+Math.random();
 }
 async function pickThreadsMaterials(){
-  const m=await collectBenchmarkMaterials({limit:60});
+  const m=await collectBenchmarkMaterials({limit:10});
   const filtered=(m||[]).filter(x=>x?.url&&clean(x.text).length>=12&&!hasExternalLink(x.text)&&!isEngagementBait(x.text));
   const u=dedupeMaterials(filtered);
   if(!u.length)throw new Error('Threads에서 사용할 소재를 찾지 못했습니다');
@@ -97,18 +145,18 @@ async function enrichThreadsMaterial(i){
     if(Array.isArray(d?.videos))videos=d.videos.filter(Boolean);
   }
   if(isEngagementBait(sourceText)||isEngagementBait(authorReplies))throw new Error('팔로우/맞팔/리포스트 유도형 소재');
-  if(!hasAffiliateLink(authorReplies))throw new Error('작성자 댓글에 쿠팡/네이버 쇼핑 링크가 없는 소재');
+  /* NO-LINK-FILTER: affiliate reply link is optional */
   return{...i,sourceText,authorReplies,images,videos};
 }
-async function collectQualifiedThreadsMaterials(maxQualified=6){
+async function collectQualifiedThreadsMaterials(maxQualified=3){
   const candidates=await pickThreadsMaterials();
   const out=[];
   let lastError=null;
-  for(const candidate of candidates.slice(0,60)){
+  for(const candidate of candidates.slice(0,10)){
     try{
       const material=await enrichThreadsMaterial(candidate);
       out.push(material);
-      console.log(`[AutopilotV3][Material] 후보채택 ${out.length}/${maxQualified} @${material.username||'-'} 쇼핑링크 확인 source=${material.url}`);
+      console.log(`[AutopilotV3][Material] 후보채택 ${out.length}/${maxQualified} @${material.username||'-'} 소재 후보채택 source=${material.url}`);
       if(out.length>=maxQualified)break;
     }catch(e){
       lastError=e;
@@ -124,14 +172,14 @@ function grounded(term,evidence){
   const tokens=clean(term).split(/\s+/).map(normalized).filter(x=>x.length>=2);
   return tokens.length>0&&tokens.every(x=>e.includes(x));
 }
-function commerceTargetPrompt(){return `너는 Threads 쇼핑 소재의 실제 판매/추천 대상을 식별하는 검수자다. 본문과 작성자 댓글을 우선 보고, 이미지가 제공되면 보조 근거로만 사용한다. 화면에 보이는 주변 물건을 판매 대상으로 착각하지 않는다. 음식이면 완성요리와 실제 제휴 핵심재료/소스/조미료를 구분한다. 브랜드/모델은 근거가 있을 때만 쓴다. searchTerms는 쿠팡에서 실제 상품을 찾기 좋은 검색어 최대 2개다. 단순 주제어(예: 운동, 다이어트, 일상)만 쓰지 말고 실제 구매 가능한 물건/식품명이어야 한다. JSON만 출력: {"kind":"product|food|recipe|lifestyle","soldObject":"","dish":"","promotedIngredient":"","searchTerms":[""],"confidence":0,"evidence":""}`;}
+function commerceTargetPrompt(){return `너는 Threads 쇼핑 소재의 실제 판매/추천 대상을 식별하는 검수자다. 본문과 작성자 댓글을 우선 보고, 이미지가 제공되면 보조 근거로만 사용한다. 화면에 보이는 주변 물건을 판매 대상으로 착각하지 않는다. 음식이면 완성요리와 실제 제휴 핵심재료/소스/조미료를 구분한다. 브랜드/모델은 근거가 있을 때만 쓴다. searchTerms는 쿠팡에서 실제 상품을 찾기 좋은 검색어 최대 2개다. 단순 주제어(예: 운동, 다이어트, 일상)만 쓰지 말고 실제 구매 가능한 물건/식품명이어야 한다. confidence는 반드시 0~100 사이 정수로 쓰고, 판매 대상이 본문·작성자 댓글·이미지 중 둘 이상의 근거로 명확하면 70 이상을 준다. JSON만 출력: {"kind":"product|food|recipe|lifestyle","soldObject":"","dish":"","promotedIngredient":"","searchTerms":[""],"confidence":0,"evidence":""}`;}
 function commerceTargetText(m){return `[Threads 본문]\n${m.sourceText.slice(0,4500)}\n\n[작성자 댓글]\n${m.authorReplies.slice(0,3500)||'(없음)'}`;}
 function normalizeVisionResult(d){
   return{
     kind:['product','food','recipe','lifestyle'].includes(d?.kind)?d.kind:'product',
     soldObject:clean(d?.soldObject),dish:clean(d?.dish),promotedIngredient:clean(d?.promotedIngredient),
     searchTerms:[...new Set((Array.isArray(d?.searchTerms)?d.searchTerms:[]).map(clean).filter(Boolean))].slice(0,2),
-    confidence:Math.max(0,Math.min(100,Number(d?.confidence)||0)),evidence:clean(d?.evidence).slice(0,300)
+    confidence:(()=>{let n=Number(d?.confidence);if(Number.isFinite(n)&&n>0&&n<=1)n*=100;if(!Number.isFinite(n)||n<0)n=0;n=Math.min(100,n);if(n===0){const sold=clean(d?.soldObject),dish=clean(d?.dish),ingredient=clean(d?.promotedIngredient),terms=(Array.isArray(d?.searchTerms)?d.searchTerms:[]).map(clean).filter(Boolean);if(sold&&terms.length)n=75;else if(dish&&ingredient&&terms.length)n=70;else if((sold||dish)&&terms.length)n=60;}return n;})(),evidence:clean(d?.evidence).slice(0,300)
   };
 }
 async function identifyCommerceTarget(accountId,m){
@@ -158,6 +206,23 @@ async function identifyCommerceTarget(accountId,m){
     return{kind:'product',soldObject:'',dish:'',promotedIngredient:'',searchTerms:[],confidence:0,evidence:''};
   }
 }
+function confidence01(v){const n=Number(v)||0;return n>1?Math.min(1,n/100):Math.max(0,n);}
+function sameCommerceCategory(a,b){const x=normalized(a),y=normalized(b);if(!x||!y)return false;const groups=[['올리브오일','올리브유','엑스트라버진올리브오일','압착올리브유'],['입욕제','배쓰밤','배스밤','바스밤','목욕입욕제','온천입욕제'],['니플패드','니플밴드','유두패드','유두밴드'],['얼룩제거제','부분세제','스팟리무버','얼룩제거펜'],['의류복원제','세탁복원제','옷복원제']];return groups.some(g=>g.some(v=>x.includes(normalized(v)))&&g.some(v=>y.includes(normalized(v))));}
+function productMatchOk(vision,product){const sold=clean(vision?.soldObject);const name=clean(product?.name);if(!sold||!name)return true;if(sameCommerceCategory(sold,name))return true;const stop=new Set(['도구','제품','상품','아이템','용품','만들기','재료','요리']);const tokens=sold.split(/\s+/).map(normalized).filter(x=>x.length>=2&&!stop.has(x));const n=normalized(name);if(tokens.length&&tokens.some(t=>n.includes(t)))return true;const soldFood=/(떡볶이|김밥|라면|롤케이크|빵|케이크|수육|고기|한우|치킨|닭|커피|무스|오이무침)/i.test(sold);const productAddon=/(소스|양념|분말|가루|시즈닝|믹스|띠지|포장|용기)/i.test(name);if(soldFood&&productAddon&&!/(소스|양념|분말|가루|시즈닝|믹스)/i.test(sold))return false;return tokens.length===0;}
+function buildSoldFirstTermsBase(analysis,vision){const sold=clean(vision?.soldObject||analysis?.topic||'');const original=[...(analysis?.searchTerms||[])].map(clean).filter(Boolean);const out=[];const push=v=>{v=clean(v);if(v&&!out.includes(v))out.push(v);};if(sold)push(sold);for(const t of original){if(out.length>=2)break;const ns=normalized(sold),nt=normalized(t);if(!sold||nt.includes(ns)||ns.includes(nt)||sameCommerceCategory(sold,t)){push(t);continue;}const soldTokens=sold.split(/\s+/).map(normalized).filter(x=>x.length>=2);if(soldTokens.some(tok=>nt.includes(tok)))push(t);}if(out.length<2&&sold){const tokens=sold.split(/\s+/).filter(Boolean);if(tokens.length>1)push(tokens.slice(-2).join(' '));}return out.slice(0,2);}
+const COUNTRY_IDENTITY_HINTS=['일본','중국','미국','독일','프랑스','이탈리아','영국','스페인','스위스','호주','뉴질랜드','태국','베트남','대만','홍콩','캐나다','터키','인도','인도네시아','말레이시아','싱가포르'];
+function countryIdentityHints(values){const joined=' '+(values||[]).map(clean).filter(Boolean).join(' ')+' ';return COUNTRY_IDENTITY_HINTS.filter(x=>joined.includes(x));}
+function requiredCountriesFor(analysis,vision){return countryIdentityHints([clean(vision?.soldObject),...((vision?.searchTerms)||[]).map(clean),...((analysis?.searchTerms)||[]).map(clean),clean(analysis?.topic),clean(vision?.evidence)]);}
+function nameHasCountries(name,countries){const n=normalized(name);return (countries||[]).every(c=>n.includes(normalized(c)));}
+function buildSoldFirstTerms(analysis,vision){const base=buildSoldFirstTermsBase(analysis,vision);const req=requiredCountriesFor(analysis,vision);if(!req.length)return base;if(base.some(t=>nameHasCountries(t,req)))return base;const lead=clean(req.join(' ')+' '+(base[0]||clean(vision?.soldObject||analysis?.topic||'')));const out=[lead];for(const t of base){if(out.length>=2)break;if(!out.includes(t))out.push(t);}console.log(`[AutopilotV3][COUPANG COUNTRY IDENTITY] required=${req.join('/')} terms=${out.join(' / ')}`);return out.slice(0,2);}
+function identityTokens(text){const s=clean(String(text||'').replace(/https?:\/\/\S+/gi,' '));return s.split(/[\s,\/·\-_()\[\]{}]+/).map(x=>clean(x)).filter(Boolean).filter(x=>!/^[0-9]+(?:[.][0-9]+)?(?:개입|개|입|팩|박스|매|장|병|캔|포|봉|g|kg|ml|l|리터|호|인치|cm|mm)?$/i.test(x)).filter(x=>!COUNTRY_IDENTITY_HINTS.includes(x)).filter(x=>{const n=normalized(x);return /^[a-z]+$/.test(n)?n.length>=3:n.length>=2;});}
+function isLatinToken(t){return /^[a-z]+$/.test(normalized(t));}
+function strongCandidateToken(t,sold){const n=normalized(t);if(!n)return false;if(isLatinToken(t))return true;const ns=normalized(sold);if(!ns)return true;return !ns.includes(n)&&!n.includes(ns);}
+function extractStrongIdentity(material,vision,analysis){const replies=clean(material?.authorReplies);if(!replies)return[];const sold=clean(vision?.soldObject||analysis?.topic||'');const inReplies=new Set(identityTokens(replies).map(normalized));if(!inReplies.size)return[];const evidence=identityTokens([...((vision?.searchTerms)||[]),...((analysis?.searchTerms)||[]),clean(analysis?.secretTerm),clean(vision?.soldObject)].join(' '));const strong=[];for(const t of evidence){const n=normalized(t);if(!inReplies.has(n))continue;if(!strongCandidateToken(t,sold))continue;if(!strong.some(x=>normalized(x)===n))strong.push(t);}return strong.slice(0,4);}
+const VARIANT_IDENTITY_TOKEN=/^(미니|대용량|소용량|리필|세트|묶음|정품|신상|기획|한정|스페셜|라지|스몰|빅|점보|낱개|증정)$/;
+function isVariantToken(t){return VARIANT_IDENTITY_TOKEN.test(clean(t));}
+function coreStrongTokens(strong){return (strong||[]).filter(t=>!isVariantToken(t));}
+function nameHasStrongIdentity(name,strong,sold){if(!strong||!strong.length)return true;if(sameCommerceCategory(sold,name))return true;const core=coreStrongTokens(strong);if(!core.length)return true;const n=normalized(name);return core.every(t=>n.includes(normalized(t)));}
 function purchasableTerm(term){
   const t=clean(term);
   if(!t)return false;
@@ -168,7 +233,7 @@ async function analyzeMaterial(accountId,m,target,vision){
   const evidence=`${m.sourceText}\n${m.authorReplies}`;
   const visionText=vision&&vision.confidence>=45?JSON.stringify(vision):'(Vision/Text 타겟 확신 부족 또는 없음)';
   const d=await callOpenAI(accountId,
-    `너는 한국 Threads 쇼핑 소재를 쿠팡파트너스 상품과 연결하는 편집자다. 실제 구매 가능한 상품을 식별한다. mode(recipe/product/lifestyle), topic, secretTerm, searchTerms, facts, hookStyle을 판단한다. searchTerms는 최대 2개이며 반드시 쿠팡에서 구매 가능한 구체적인 물건/식품/소스명이어야 한다. '운동','다이어트','일상','레시피' 같은 추상 주제어만 출력하면 안 된다. 작성자 댓글에 쇼핑 링크가 있다는 점을 고려해 무엇을 판매하는 글인지 최대한 구체적으로 추론하되 근거 없는 브랜드/모델은 만들지 않는다. JSON만 출력: {"mode":"recipe|product|lifestyle","topic":"","secretTerm":"","hideInBody":true,"searchTerms":[""],"facts":[""],"hookStyle":""}`,
+    `너는 한국 Threads 쇼핑 소재를 쿠팡파트너스 상품과 연결하는 편집자다. 실제 구매 가능한 상품을 식별한다. mode(recipe/product/lifestyle), topic, secretTerm, searchTerms, facts, hookStyle을 판단한다. searchTerms는 최대 2개이며 반드시 쿠팡에서 구매 가능한 구체적인 물건/식품/소스명이어야 한다. '운동','다이어트','일상','레시피' 같은 추상 주제어만 출력하면 안 된다. 본문·작성자 댓글·이미지/영상에서 실제 구매 가능한 대상을 최대한 구체적으로 추론하되 근거 없는 브랜드/모델은 만들지 않는다. 작성자 댓글에 쇼핑 링크가 없어도 정상 소재로 처리한다. JSON만 출력: {"mode":"recipe|product|lifestyle","topic":"","secretTerm":"","hideInBody":true,"searchTerms":[""],"facts":[""],"hookStyle":""}`,
     `타겟:${target||'전체'}\n[원 게시물]\n${m.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${m.authorReplies.slice(0,5000)||'(없음)'}\n[판매대상 검수]\n${visionText}`,
     {maxTokens:1200,temperature:.15}
   );
@@ -182,12 +247,20 @@ async function analyzeMaterial(accountId,m,target,vision){
   }
   return{mode:['recipe','product','lifestyle'].includes(d.mode)?d.mode:'lifestyle',topic:clean(d.topic)||vision?.soldObject||vision?.dish||'Threads 소재',secretTerm:clean(d.secretTerm)||vision?.promotedIngredient||'',hideInBody:d.mode==='recipe'?true:d.hideInBody!==false,searchTerms:terms,facts:Array.isArray(d.facts)?d.facts.map(clean).filter(Boolean).slice(0,10):[],hookStyle:clean(d.hookStyle),vision};
 }
-async function findProduct(accountId,terms){
+async function findProduct(accountId,terms,strongIdentity,soldObject){
   for(const term of(terms||[]).slice(0,2)){
-    const p=await coupangApi.searchProducts(accountId,term,8);if(!p.length)continue;
+    let p;try{p=await coupangApi.searchProducts(accountId,term,8);}catch(e){const status=Number(e?.response?.status||0);if(status===401)console.error('[Coupang][401] stage=search account='+accountId+' term="'+term+'" message="'+(e?.response?.data?.message||e.message)+'"');throw e;}if(!p.length)continue;
     const tokens=clean(term).split(/\s+/).map(normalized).filter(x=>x.length>=2);
     const exact=p.find(x=>{const n=normalized(x.name);return tokens.length&&tokens.every(t=>n.includes(t));});
-    return{product:exact||p[0],searchTerm:term};
+    const reqCountries=countryIdentityHints([term]);
+    const strong=Array.isArray(strongIdentity)?strongIdentity:[];
+    if(!reqCountries.length&&!strong.length)return{product:exact||p[0],searchTerm:term};
+    const okCandidate=x=>nameHasCountries(x?.name,reqCountries)&&nameHasStrongIdentity(x?.name,strong,soldObject);
+    if(exact&&okCandidate(exact)){console.log(`[AutopilotV3][COUPANG EXACT IDENTITY] country=${reqCountries.join('/')||'-'} strong=${strong.join('/')||'-'} candidate="${clean(exact.name)}" result=PASS`);return{product:exact,searchTerm:term};}
+    const alt=p.find(okCandidate);
+    if(alt){console.log(`[AutopilotV3][COUPANG EXACT IDENTITY] country=${reqCountries.join('/')||'-'} strong=${strong.join('/')||'-'} candidate="${clean(alt.name)}" result=PASS`);return{product:alt,searchTerm:term};}
+    console.warn(`[AutopilotV3][COUPANG EXACT IDENTITY] country=${reqCountries.join('/')||'-'} strong=${strong.join('/')||'-'} candidates=${p.length} result=REJECT → 다음 검색어`);
+    continue;
   }
   return{product:null,searchTerm:null};
 }
@@ -270,33 +343,83 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
   console.log(`[AutopilotV3][SOURCE VOICE v2] text="${text.replace(/\n/g,' / ')}"`);
   return{text,commentLead};
 }
+function localStrongContentMode(material){
+  const t=String((material?.sourceText||material?.text||'')+'\n'+(material?.authorReplies||'')).toLowerCase();
+  if(!t.trim())return null;
+  const recipeSignals=[/레시피/,/재료/,/만드는\s*법/,/큰술|작은술|스푼|\d+\s*(?:g|ml|그램)/i,/볶(?:아|기|음)|굽(?:고|기)|끓(?:여|이|기)|에어프라이어|오븐|프라이팬|팬에/i,/간장|고추장|된장|다진\s*마늘|설탕|식초|참기름|들기름/i];
+  let hits=0;for(const re of recipeSignals)if(re.test(t))hits++;
+  if(hits>=2)return 'recipe';
+  return null;
+}
 async function buildThreadsFirstAutopilot(accountId,{target}){
-  const materials=await collectQualifiedThreadsMaterials(6);
+  const materials=await collectQualifiedThreadsMaterials(3);
+  const preferredSlot=preferredContentSlot(accountId);
+  const preferredMode=preferredSlot.mode;
+  const specialStoryWanted=preferredSlot.specialStory===true;
+  console.log(`[AutopilotV3][CONTENT MIX] account=${accountId} target=50/50/0 preferred=${preferredMode} specialStory=${specialStoryWanted?'ON':'OFF'} sourceVoice=v2 lifestyle=0%`);
   let lastError=null;
   for(let idx=0;idx<materials.length;idx++){
     const material=materials[idx];
     try{
       console.log(`[AutopilotV3][TRY] ${idx+1}/${materials.length} @${material.username||'-'} source=${material.url}`);
+      const sourceClaimsVideo=!!material.hasVideo||Number(material.videoCount||0)>0;
+      const playableVideos=Array.isArray(material.videos)?material.videos.filter(Boolean):[];
+      if(sourceClaimsVideo&&!playableVideos.length){
+        lastError=new Error('원본 영상 존재 확인됨 · 현재 영상 URL 추출 실패');
+        console.log(`[AutopilotV3][VIDEO QUALITY SKIP] @${material.username||'-'} hasVideo=yes playable=0 → 이미지 강등 금지 · 다음 소재`);
+        markUsedPost(material.url);
+        continue;
+      }
+      const localMode=localStrongContentMode(material);
+      if(localMode&&localMode!==preferredMode){
+        console.log(`[AutopilotV3][LOCAL PREFILTER DEFER] preferred=${preferredMode} local=${localMode} @${material.username||'-'} → 후보 유지 · Vision/실제 판정 계속`);
+      }
       const vision=await identifyCommerceTarget(accountId,material);
+      const conf=confidence01(vision?.confidence);
+      if(conf<0.5){
+        lastError=new Error(`판매 대상 신뢰도 부족 confidence=${vision?.confidence??0}`);
+        console.log(`[AutopilotV3][CONFIDENCE SKIP] @${material.username||'-'} confidence=${vision?.confidence??0} normalized=${conf.toFixed(2)} → 상품 연결 금지 · 다음 소재`);
+        markUsedPost(material.url);
+        continue;
+      }
       const analysis=await analyzeMaterial(accountId,material,target,vision);
+      if(preferredMode==='product'&&analysis.mode==='lifestyle'&&analysis.searchTerms.length>0){analysis.mode='product';console.log(`[AutopilotV3][CONTENT MIX PRODUCT LOCK] preferred=product got=lifestyle sellable=yes → source-preserve product`);}
+      if(preferredMode==='lifestyle'&&analysis.mode!=='lifestyle'){const detected=analysis.mode;analysis.mode='lifestyle';console.log(`[AutopilotV3][LIFESTYLE SLOT LOCK] preferred=lifestyle detected=${detected} → 10% lifestyle 슬롯 강제`);}
+      if(analysis.mode==='lifestyle'){console.log(`[AutopilotV3][NO LIFESTYLE SKIP] @${material.username||'-'} lifestyle 소재 → 발행 제외 · 다음 후보`);continue;}
+      if(analysis.mode!==preferredMode)console.log(`[AutopilotV3][CONTENT MIX SOFT FALLBACK] preferred=${preferredMode} got=${analysis.mode} → 후보 소모 없이 발행 시도`);
+      const specialStory=analysis.mode==='lifestyle'&&specialStoryWanted&&isSpecialStoryCandidate(material,analysis,vision);
+      if(analysis.mode==='lifestyle'&&specialStoryWanted&&!specialStory)console.log(`[AutopilotV3][SPECIAL STORY FALLBACK] score=${specialStoryScore(material,analysis,vision)} → 일반 lifestyle로 발행 시도`);
+      if(specialStory)console.log(`[AutopilotV3][SPECIAL STORY] selected score=${specialStoryScore(material,analysis,vision)} @${material.username||'-'}`);
       if(!analysis.searchTerms.length){
         lastError=new Error(`Threads 소재 "${analysis.topic}"에서 구매 가능한 상품 검색어를 찾지 못했습니다`);
         console.log(`[AutopilotV3][SKIP] ${lastError.message} → 다음 소재`);
         markUsedPost(material.url);
         continue;
       }
-      console.log(`[AutopilotV3][COUPANG SEARCH] 최종 검색어=${analysis.searchTerms.join(' / ')} (최대 2회)`);
-      const found=await findProduct(accountId,analysis.searchTerms);
+      analysis.searchTerms=buildSoldFirstTerms(analysis,vision);
+      console.log(`[AutopilotV3][COUPANG SEARCH][SOLD-FIRST] sold="${vision?.soldObject||'-'}" 최종 검색어=${analysis.searchTerms.join(' / ')} (최대 2회)`);
+      const __strong=extractStrongIdentity(material,vision,analysis);
+      if(__strong.length)console.log(`[AutopilotV3][EXACT PRODUCT IDENTITY] @${material.username||'-'} strong=${__strong.join(' / ')}`);
+      const found=await findProduct(accountId,analysis.searchTerms,__strong,vision?.soldObject||analysis?.topic||'');
       if(!found.product){
         lastError=new Error(`Threads 소재 기반 쿠팡 상품을 찾지 못했습니다: ${analysis.searchTerms.join(', ')}`);
         console.log(`[AutopilotV3][SKIP] ${lastError.message} → 다음 소재`);
         markUsedPost(material.url);
         continue;
       }
-      const generated=await generatePost(accountId,{material,analysis,product:found.product,target});
+      if(!productMatchOk(vision,found.product)){
+        lastError=new Error(`쿠팡 상품 매칭 불일치 sold="${vision?.soldObject||'-'}" product="${found.product.name||'-'}"`);
+        console.log(`[AutopilotV3][PRODUCT MATCH SKIP] @${material.username||'-'} sold="${vision?.soldObject||'-'}" product="${found.product.name||'-'}" → 다음 소재`);
+        markUsedPost(material.url);
+        continue;
+      }
+      const generated=await generatePost(accountId,{material,analysis:{...analysis,specialStory:Boolean(specialStory)},product:found.product,target});
       markUsedPost(material.url);
-      console.log(`[AutopilotV3][SUCCESS] @${material.username||'-'} product="${found.product.name}" mode=${analysis.mode}`);
-      return{text:generated.text,commentLead:generated.commentLead,product:found.product,productSearchTerm:found.searchTerm,mode:analysis.mode,topic:analysis.topic,secretTerm:analysis.secretTerm,sourceUrl:material.url,sourceUsername:material.username||null,sourceText:material.sourceText,authorReplies:material.authorReplies,sourceImages:Array.isArray(material.images)?material.images.filter(Boolean).slice(0,10):[],sourceVideos:Array.isArray(material.videos)?material.videos.filter(Boolean).slice(0,5):[],referenceImage:material.images?.[0]||null,visionTarget:vision};
+      console.log(`[AutopilotV3][SUCCESS] @${material.username||'-'} product="${found.product.name}" mode=${analysis.mode} specialStory=${Boolean(specialStory)} sourcePreserve=${analysis.mode==='lifestyle'?'OFF':'ON'}`);
+      advanceContentMode(accountId);
+      const textOnly=analysis.mode==='lifestyle';
+      if(textOnly)console.log('[AutopilotV3][LIFESTYLE TEXT ONLY] source media suppressed');
+      return{text:decodeEscapedNewlines(generated.text),commentLead:decodeEscapedNewlines(generated.commentLead),product:found.product,productSearchTerm:found.searchTerm,mode:analysis.mode,topic:analysis.topic,secretTerm:analysis.secretTerm,specialStory:Boolean(specialStory),sourceUrl:material.url,sourceUsername:material.username||null,sourceText:material.sourceText,authorReplies:material.authorReplies,sourceImages:textOnly?[]:(Array.isArray(material.images)?material.images.filter(Boolean).slice(0,10):[]),sourceVideos:textOnly?[]:(Array.isArray(material.videos)?material.videos.filter(Boolean).slice(0,5):[]),referenceImage:textOnly?null:(material.images?.[0]||null),visionTarget:vision};
     }catch(e){
       lastError=e;
       console.warn(`[AutopilotV3][TRY FAIL] @${material.username||'-'} ${e.response?.data?.error?.message||e.message} → 다음 소재`);
