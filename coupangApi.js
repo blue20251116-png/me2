@@ -42,8 +42,12 @@ function hasCredentials(accountOrId) {
   return !!(account?.coupang_access_key && account?.coupang_secret_key);
 }
 
+function normalizedCoupangCredentials(account) {
+  return { accessKey: String(account?.coupang_access_key || '').trim(), secretKey: String(account?.coupang_secret_key || '').trim() };
+}
 function accessKeyHash(account) {
-  return crypto.createHash('sha256').update(String(account?.coupang_access_key || '')).digest('hex');
+  const { accessKey } = normalizedCoupangCredentials(account);
+  return crypto.createHash('sha256').update(accessKey).digest('hex');
 }
 
 async function reserveApiSlot(account) {
@@ -96,8 +100,9 @@ function buildAuthHeader(account, method, pathWithQuery) {
     pad(now.getUTCSeconds()) +
     'Z';
   const message = signedDate + method + path + query;
-  const signature = crypto.createHmac('sha256', account.coupang_secret_key).update(message).digest('hex');
-  return `CEA algorithm=HmacSHA256, access-key=${account.coupang_access_key}, signed-date=${signedDate}, signature=${signature}`;
+  const { accessKey, secretKey } = normalizedCoupangCredentials(account);
+  const signature = crypto.createHmac('sha256', secretKey).update(message).digest('hex');
+  return `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${signedDate}, signature=${signature}`;
 }
 
 function makeRateLimitError(message, cooldownUntil) {
@@ -223,6 +228,11 @@ async function signedGet(accountId, pathWithQuery, label) {
       const msg = `${label} 실패: rCode=${data?.rCode ?? status} ${data?.rMessage || data?.message || err.message}`.trim();
       const until = setCooldown(accountId, msg, parseRetryTime(msg));
       throw makeRateLimitError(msg, until);
+    }
+    if (Number(err.response?.status || 0) === 401) {
+      const { accessKey, secretKey } = normalizedCoupangCredentials(account);
+      const fp = crypto.createHash('sha256').update(accessKey).digest('hex').slice(0, 8);
+      console.error(`[Coupang][AUTH INVALID] account=${accountId} accessLen=${accessKey.length} secretLen=${secretKey.length} accessFp=${fp} reason="${err.response?.data?.message || err.message}"`);
     }
     throw err;
   }

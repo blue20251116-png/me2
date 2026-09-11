@@ -163,7 +163,7 @@ app.get('/api/auth/me', (req, res) => {
 
 // 직접 업로드한 사진/영상 저장 폴더 (Threads API가 공개 URL을 요구하므로 정적 파일로 서빙 — 이건 Meta 서버가
 // 세션 쿠키 없이 접근해야 하므로 인증 게이트보다 반드시 앞에 있어야 함. 파일명이 랜덤이라 추측 접근은 어려움)
-const uploadsDir = path.join(__dirname, 'uploads');
+const uploadsDir = path.join(__dirname, 'db', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 

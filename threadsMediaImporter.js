@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const MAX_BYTES = 200 * 1024 * 1024;
+const MIN_VIDEO_BYTES = Math.max(64 * 1024, Number(process.env.THREADS_MIN_VIDEO_BYTES || 100 * 1024));
 const PAGE_TIMEOUT_MS = 20000;
 const VIDEO_TIMEOUT_MS = 120000;
 const BROWSER_TIMEOUT_MS = 30000;
@@ -325,7 +326,11 @@ async function downloadCandidate(videoUrl, outputDir, requestHeaders = {}) {
       writer.on('finish', resolve);
       response.data.pipe(writer);
     });
-    if (bytes < 1024) throw new Error('가져온 영상 파일이 비정상적으로 작습니다.');
+    if (bytes < MIN_VIDEO_BYTES) throw new Error(`가져온 영상 파일이 너무 작습니다: ${bytes} bytes (< ${MIN_VIDEO_BYTES}). 다음 후보를 확인합니다.`);
+    const head = fs.readFileSync(filepath, { encoding: null }).subarray(0, 32);
+    const ascii = head.toString('latin1');
+    const hasFtyp = head.length >= 12 && ascii.includes('ftyp');
+    if (!hasFtyp) throw new Error('MP4 컨테이너 헤더(ftyp)를 확인할 수 없습니다. 다음 후보를 확인합니다.');
     return { filename, filepath, size: bytes };
   } catch (err) {
     try { writer.destroy(); } catch {}
