@@ -1,6 +1,7 @@
 'use strict';
 
 const { repairConnectorOnlyBreaks } = require('./threadsVoiceLocalRepair');
+const { CONNECTOR_ONLY, DANGLING_PUNCTUATION_START, DANGLING_BOUND_NOUN_START } = require('./threadsVoiceLineGuards');
 const MAX_LINES = 14;
 // Not a per-line target — real Threads posts run a single complete sentence onto one line even
 // past 24-30 chars ("사촌오빠가 밥먹다 말고 물고기 밥주러 가야된다고 함"). Forcing every line under a
@@ -9,21 +10,10 @@ const MAX_LINES = 14;
 const MAX_LINE_CHARS = 40;
 const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 const codePointLength = value => Array.from(String(value || '')).length;
-const CONNECTOR_ONLY = /^(?:그리고|근데|그래서|하지만|또|또는|혹은|및)$/;
-// A line ending mid-exclamation ("토할" then "뻔!" on the next line) is not caught by
-// CONNECTOR_ONLY — the giveaway is that the *next* line opens with punctuation that can only
-// belong to the sentence the previous line already started.
-const DANGLING_PUNCTUATION_START = /^[!?~.…]/;
-// "뻔", "만큼", "듯" etc. are bound nouns: grammatically they can only ever attach to the verb
-// form right before them ("토할 뻔"), never start a clause on their own — so seeing one open a
-// line is itself proof the previous line was cut mid-phrase, even when it's followed by more
-// text ("뻔! 근데 이 세제...") rather than bare punctuation. "만큼"/"정도" almost always carry a
-// particle right after them in real generated text ("만큼이나", "정도로") rather than standing bare
-// before punctuation, so those two allow one trailing particle. "뻔"/"듯" are deliberately NOT
-// extended the same way — "뻔하다"/"듯하다" are also ordinary adjectives ("뻔한 얘기") with no bound-
-// noun relationship to the previous line, so matching their conjugated forms risks new false
-// positives without a real parser to tell the two senses apart.
-const DANGLING_BOUND_NOUN_START = /^(?:뻔|만큼(?:이나|만|도|은|는)?|듯|채(?:로)?|김에|바람에|탓에|터라|뿐|데다|셈|법|리|참|겸|정도(?:로|까지|는|도|의)?)(?=[!?~.…,\s]|$)/;
+// CONNECTOR_ONLY / DANGLING_PUNCTUATION_START / DANGLING_BOUND_NOUN_START live in
+// threadsVoiceLineGuards.js, shared with threadsVoiceLocalRepair.js's repair pass — see that
+// file for what each one catches and why. Keeping one copy means the detector here and the
+// local self-repair in reviewSourceVoice() below can never drift apart again.
 // A generic "you try it too~🙂" sign-off is exactly the formulaic ad-CTA the persona is meant
 // to avoid — catch it on the last line regardless of the model still slipping one in.
 const GENERIC_CTA_ENDING = /너도\s*(?:한\s*번\s*)?(?:해\s*보길|해\s*봐|도전\s*해\s*봐|써\s*보길|써\s*봐)[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;

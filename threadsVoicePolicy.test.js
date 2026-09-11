@@ -71,6 +71,23 @@ test('a bound-noun exclamation ("토할" / "뻔!") split across lines is caught 
   assert.equal(fixed.split('\n').length, 1, 'the exclamation must end up on one line, not split');
 });
 
+test('the local repair pass shares the same bound-noun regex as detection, not a stale copy', () => {
+  // Regression: threadsVoiceLocalRepair.js used to keep its own copy of
+  // DANGLING_BOUND_NOUN_START (and the other two line-guard regexes) instead
+  // of importing from threadsVoiceLineGuards.js. When that regex was widened
+  // to catch 만큼/정도 with a trailing particle (see the test above this
+  // one), the repair copy never got the update - so voiceProblems() flagged
+  // a "정도로"-led split as broken, but repairConnectorOnlyBreaks() silently
+  // failed to merge it back (returned the text unchanged), because its own
+  // stale regex didn't recognize "정도" at all.
+  const broken = '진짜 놀랄 정도\n정도로 맛있었음';
+  assert.ok(policy.voiceProblems(broken).includes('미완결 줄바꿈'), 'must be flagged as broken');
+  const { repairConnectorOnlyBreaks } = require('./threadsVoiceLocalRepair');
+  const fixed = repairConnectorOnlyBreaks(broken, policy.MAX_LINE_CHARS);
+  assert.deepEqual(policy.voiceProblems(fixed), [], 'the repair must actually fix what detection flagged');
+  assert.equal(fixed.split('\n').length, 1, 'the split bound-noun phrase must end up merged onto one line');
+});
+
 test('bound-noun detection is not fooled by ordinary words that share a first syllable', () => {
   // Synthetic-sentence check: 채, 리, 참, 겸, 셈, 법 are bound nouns only when they stand
   // bare before punctuation - as the first syllable of an ordinary word (채소, 리뷰, 참고,
