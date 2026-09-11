@@ -40,10 +40,12 @@ async function __me2NormalizeCarouselVideoUrl(rawUrl){
 
 // Threads 본문은 발행 직전에 한 번 더 정리한다
 // 이미 DB에 저장된 예약글/대기글도 이 단계를 지나므로 생성 시점이 오래됐어도 마침표가 제거된다
-// 숫자 소수점(1.5)처럼 숫자 사이의 점은 보존한다
+// 숫자 소수점(1.5)처럼 숫자 사이의 점은 보존하고, 말줄임(...)도 온전히 보존한다 —
+// 예전 정규식은 전역 매치가 소비한 문자를 다시 조건절로 쓰면서 말줄임 맨 끝 점 하나를 갉아먹었다
+// (예: "완전 신기함..." → "완전 신기함.."), voiceGuide()가 명시적으로 허용하는 말줄임 표현과 충돌했다.
 function sanitizePublishedThreadsText(value){
   return String(value||'')
-    .replace(/(^|[^\d])\.(?=\s|$)/g,'$1')
+    .replace(/(^|[^.\d])\.(?!\.)(?=\s|$)/g,'$1')
     .replace(/[ \t]+\n/g,'\n')
     .trim();
 }
@@ -341,4 +343,4 @@ async function getMediaInsights(accountId,mediaId){
   try{const res=await axios.get(`${GRAPH_BASE}/${mediaId}/insights`,{params:{metric:'views,likes,replies,reposts,quotes',access_token:account.threads_access_token},timeout:20000});const data={};for(const item of res.data?.data||[])data[item.name]=item.values?.[0]?.value??item.total_value?.value??0;return data;}catch(err){logThreadsError('INSIGHTS',err,{accountId,mediaId});throw err;}
 }
 
-module.exports={getAuthUrl,exchangeCodeForToken,exchangeForLongLivedToken,refreshLongLivedToken,fetchProfile,publishPost,publishCarouselPost,publishMediaItemsPost,publishReply,getMediaInsights};
+module.exports={getAuthUrl,exchangeCodeForToken,exchangeForLongLivedToken,refreshLongLivedToken,fetchProfile,publishPost,publishCarouselPost,publishMediaItemsPost,publishReply,getMediaInsights,sanitizePublishedThreadsText};
