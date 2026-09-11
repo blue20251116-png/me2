@@ -129,7 +129,7 @@ async function generateLifestyleImage(accountId, { productName, productImageUrl,
   const b64 = editRes.data?.data?.[0]?.b64_json;
   if (!b64) throw new Error('OpenAI에서 이미지를 받지 못했습니다');
 
-  const uploadsDir = path.join(__dirname, 'uploads');
+  const uploadsDir = path.join(__dirname, 'db', 'uploads');
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
   const filename = `lifestyle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
   fs.writeFileSync(path.join(uploadsDir, filename), Buffer.from(b64, 'base64'));
