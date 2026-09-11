@@ -124,6 +124,19 @@ async function visionCheck(accountId, dish, imageUrl) {
   }
 }
 
+// voiceGuide()의 "모든 글의 마무리를 동일한 문구로 반복하지 않는다" 규칙과 같은 이유로,
+// 이 무인 자동발행 경로(쿠팡 키 없는 계정)도 댓글 유도 문장을 매번 똑같이 고정하지 않는다.
+const RECIPE_COMMENT_TEASERS = [
+  '재료랑 만드는 순서는 댓글에 적어둘게.',
+  '자세한 재료랑 순서는 댓글에 남겨둠.',
+  '레시피는 댓글에 정리해둘게.',
+  '만드는 법은 댓글 확인하면 됨.',
+  '재료 계량이랑 순서는 댓글 참고.',
+];
+function pickRecipeCommentTeaser() {
+  return RECIPE_COMMENT_TEASERS[Math.floor(Math.random() * RECIPE_COMMENT_TEASERS.length)];
+}
+
 async function collectApproved(accountId, dish, photos, approved) {
   for (const p of photos || []) {
     if (!p?.imageUrl || approved.some(x => x.imageUrl === p.imageUrl)) continue;
@@ -197,7 +210,7 @@ JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","am
       if (!img.photos.length) { console.log(`[ContentOnly][Recipe] 이미지 없음 → 다음 주제: ${dishName}`); continue; }
       let hook = String(r.hook || `${dishName} 이거 생각보다 간단하네ㅋㅋ`).trim();
       hook = await humanizeHook(accountId, hook, dishName);
-      const text = `${hook}\n\n재료랑 만드는 순서는 댓글에 적어둘게.`;
+      const text = `${hook}\n\n${pickRecipeCommentTeaser()}`;
       const ing = ingredients.map(x => `▪ ${String(x.name).trim()} ${String(x.amount).trim()}`).join('\n');
       const cooking = steps.map((s, i) => `${i + 1}. ${s}`).join('\n');
       const recipeCommentText = `✅ ${dishName} (${String(r.servings || '2인분').trim()} 기준)\n\n${ing}\n\n✅ 만드는 법\n${cooking}`;
@@ -229,4 +242,4 @@ ${voiceGuide()}
   return { text, link: null, imageUrl: null, extraImageUrl: null, keyword: '일상', trendNote: '쿠팡 API 없음 · 순수 일상형', target };
 }
 
-module.exports = { generateRecipe, generateDailyStory };
+module.exports = { generateRecipe, generateDailyStory, RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser };
