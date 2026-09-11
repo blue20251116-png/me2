@@ -16,7 +16,14 @@ const codePointLength = value => Array.from(String(value || '')).length;
 // local self-repair in reviewSourceVoice() below can never drift apart again.
 // A generic "you try it too~🙂" sign-off is exactly the formulaic ad-CTA the persona is meant
 // to avoid — catch it on the last line regardless of the model still slipping one in.
-const GENERIC_CTA_ENDING = /너도\s*(?:한\s*번\s*)?(?:해\s*보길|해\s*봐|도전\s*해\s*봐|써\s*보길|써\s*봐)[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
+// voiceGuide() itself only *names* 해봐/도전해봐/써봐 as examples ("너도 해봐, 너도 도전해봐,
+// 너도 써봐**처럼**"), but the banned shape is any "너도 <verb>봐/보길" tacked-on CTA - the same
+// hardcoded-verb-list bug this session already found and fixed once for highRiskClaim(). A
+// hardcoded stem list let the identical CTA through unpunished for every other verb this bot's
+// many product categories actually use (발라봐 skincare, 만들어봐/먹어봐 food, 사봐 general
+// purchase, …), so this matches any short verb-like run between "너도" and the 보다-auxiliary
+// ending instead of enumerating stems.
+const GENERIC_CTA_ENDING = /너도\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보길|봐)[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
 
 function normalizeVoice(text) {
   return String(text || '').replace(/\r/g, '').replace(/\\n/g, '\n').split('\n').map(line => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();

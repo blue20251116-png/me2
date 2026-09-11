@@ -171,6 +171,25 @@ test('a formulaic "너도 해봐~🙂" ad-CTA sign-off is rejected, even split a
   assert.deepEqual(policy.voiceProblems('이거 진짜 신기함\n다음에도 또 봐야지'), []);
 });
 
+test('the ad-CTA guard catches "너도 <verb>봐" for verbs other than 해/써, not just the two named as examples', () => {
+  // Regression: voiceGuide() only *names* 해봐/도전해봐/써봐 as illustrative examples of the
+  // banned CTA shape ("너도 해봐, 너도 도전해봐, 너도 써봐처럼"), but the old regex hardcoded
+  // exactly those verb stems - so the identical formulaic CTA slipped through untouched for
+  // every other verb this bot's product categories actually use: 발라봐 (skincare), 만들어봐/
+  // 먹어봐 (food/recipe), 사봐 (a general purchase nudge), 들어봐 (media).
+  for (const verbEnding of ['너도 발라봐~😊', '너도 만들어봐~', '너도 사봐!', '너도 먹어봐~', '너도 들어봐', '너도 발라보길']) {
+    const post = '이거 진짜 좋았음\n' + verbEnding;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${verbEnding}"`);
+  }
+});
+
+test('the generalized ad-CTA guard does not flag ordinary sentences that merely contain "너도"', () => {
+  for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬']) {
+    const post = '완전 신기했음\n' + safe;
+    assert.deepEqual(policy.voiceProblems(post).filter(r => r === '뻔한 CTA 마무리'), [], `should not catch: "${safe}"`);
+  }
+});
+
 test('the persona guide never recommends the exact CTA pattern it also bans', () => {
   const guide = policy.voiceGuide();
   // The closing-pattern example list once suggested "너도 꼭 써봐!" as a good ending while a
