@@ -184,6 +184,35 @@ test('old style blacklist is gone while safety checks remain', () => {
   assert.ok(policy.voiceProblems('이거 먹으면 암이 치료돼').includes('고위험 효능 주장'));
 });
 
+test('high-risk weight-loss claims are caught with 키로/킬로 units, not just kg', () => {
+  // Regression: the weight-loss branch only matched the "kg" spelling, so the
+  // same claim written with the equally common Korean unit spellings slipped
+  // through the safety guard untouched.
+  assert.ok(policy.voiceProblems('일주일 만에 3키로 빠짐').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('한 달 만에 5킬로 감량했어').includes('고위험 효능 주장'));
+});
+
+test('high-risk cure claims are caught in their natural casual conjugations, not just "낫음"', () => {
+  // Regression: "낫다" is ㅅ-irregular - the ㅅ drops before a vowel-starting
+  // ending, so the grammatically correct casual forms are 나아/나았/나음/나은
+  // (never 낫아/낫음). The old regex only matched the ungrammatical "낫음",
+  // so real cured-of-illness claims written the way voiceGuide() itself
+  // prefers (짧고 담백한 반말체) never tripped the guard at all.
+  assert.ok(policy.voiceProblems('염증이 싹 나았어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('통증이 다 나음').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('염증이 나아졌음').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('당뇨가 다 나은 느낌').includes('고위험 효능 주장'));
+});
+
+test('the unrelated "낫다" comparison sense does not falsely trigger the cure-claim guard', () => {
+  // "나아/나은" also mean "better than" in a plain comparison with no illness
+  // involved. The cure branch always requires a disease/symptom keyword in
+  // the same clause, so ordinary comparisons must stay clear.
+  assert.deepEqual(policy.voiceProblems('이 옷이 저 옷보다 나아'), []);
+  assert.deepEqual(policy.voiceProblems('나이가 좀 있는 편인데'), []);
+  assert.deepEqual(policy.voiceProblems('나아갈 방향을 고민 중'), []);
+});
+
 test('source is a creative seed: invented low-risk connective copy is allowed', async () => {
   const text = '처음엔 별거 아닌데\n보다가 계속 보게 됨ㅋㅋ';
   const out = await policy.reviewSourceVoice(text, { sourceText: '금붕어가 먹이를 먹는 영상' }, async () => {
