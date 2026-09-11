@@ -71,6 +71,36 @@ test('a bound-noun exclamation ("토할" / "뻔!") split across lines is caught 
   assert.equal(fixed.split('\n').length, 1, 'the exclamation must end up on one line, not split');
 });
 
+test('bound-noun detection is not fooled by ordinary words that share a first syllable', () => {
+  // Synthetic-sentence check: 채, 리, 참, 겸, 셈, 법 are bound nouns only when they stand
+  // bare before punctuation - as the first syllable of an ordinary word (채소, 리뷰, 참고,
+  // 겸사겸사, 셈이다, 법적으로) they must NOT be flagged as a dangling split.
+  const safe = [
+    '오늘 장 보고 왔는데\n채소를 많이 샀음ㅋㅋ',
+    '이거 써보고\n리뷰 남겨볼게',
+    '가격 보고\n참고로 말하면 반값 세일함',
+    '청소하고\n겸사겸사 정리도 했음',
+    '이거\n법적으로 문제없다고 하더라',
+    '어차피 사려고 했던\n셈이니까 잘됐다',
+    '집에 와서\n정리하고 씻었음',
+  ];
+  for (const text of safe) assert.deepEqual(policy.incompleteLineReasons(text), [], `false positive on: ${text}`);
+});
+
+test('bound nouns with a trailing particle (만큼이나, 정도로) are still caught as a dangling split', () => {
+  // Regression: real generated text almost always attaches a particle straight onto 만큼/정도
+  // ("만큼이나", "정도로") rather than leaving it bare before punctuation - the original bound-noun
+  // check missed all of these, and 정도 itself was missing from the list entirely.
+  const broken = [
+    '이거\n만큼이나 좋아함',
+    '먹을\n만큼만 담았음',
+    '한 박스 다 먹을\n만큼 맛있음',
+    '소름 돋을\n정도로 좋음',
+    '살 뺀\n정도는 아니지만',
+  ];
+  for (const text of broken) assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+});
+
 test('formatter does not silently truncate or hard-wrap generated copy', () => {
   const long = '가'.repeat(45);
   assert.equal(policy.formatVoice(long), long);
