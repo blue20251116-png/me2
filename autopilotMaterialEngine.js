@@ -291,8 +291,10 @@ async function analyzeMaterial(accountId,m,target,vision){
   return{mode:['recipe','product','lifestyle'].includes(d.mode)?d.mode:'lifestyle',topic:clean(d.topic)||vision?.soldObject||vision?.dish||'Threads 소재',secretTerm:clean(d.secretTerm)||vision?.promotedIngredient||'',hideInBody:d.mode==='recipe'?true:d.hideInBody!==false,searchTerms:terms,facts:Array.isArray(d.facts)?d.facts.map(clean).filter(Boolean).slice(0,10):[],hookStyle:clean(d.hookStyle),vision};
 }
 async function findProduct(accountId,terms,identityTerm){
+  let fallback=null;
   for(const term of(terms||[]).slice(0,2)){
     let p;try{p=await coupangApi.searchProducts(accountId,term,8);}catch(e){const status=Number(e?.response?.status||0);if(status===401)console.error(`[Coupang][401] stage=search account=${accountId} term="${term}" message="${e?.response?.data?.message||e.message}"`);throw e;}if(!p.length)continue;
+    if(!fallback)fallback={product:p[0],searchTerm:term};
     const identityTokens=soldFirstIdentityWords(identityTerm||term);
     const exact=p.find(x=>{const n=normalized(x.name);return identityTokens.length&&identityTokens.every(t=>n.includes(t));});
     if(exact)return{product:exact,searchTerm:term};
@@ -301,6 +303,7 @@ async function findProduct(accountId,terms,identityTerm){
     console.warn(`[AutopilotV3][COUPANG MATCH REJECT] term="${term}" identity="${clean(identityTerm||term)}" candidates=${p.length} reason=identity-mismatch → 다음 검색어`);
     continue;
   }
+  if(fallback){console.warn(`[AutopilotV3][COUPANG MATCH FALLBACK] no confident identity match for any search term → using top result product="${clean(fallback.product?.name)}" searchTerm="${fallback.searchTerm}"`);return fallback;}
   return{product:null,searchTerm:null};
 }
 function scrubSecret(text,secret,product){
