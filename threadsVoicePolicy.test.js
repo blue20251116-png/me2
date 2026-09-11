@@ -61,6 +61,26 @@ test('incomplete-line guard rejects only obvious fragments, not normal Korean be
   assert.ok(policy.incompleteLineReasons('하지만\n결과는 완전 다름').length > 0);
 });
 
+test('connector-only guard also catches 그니까/그러니까, not just 그리고/근데/그래서', () => {
+  // Regression: 그니까 (casual) / 그러니까 (formal) are grammatically dependent connectives in
+  // the exact same family as 그래서/근데 - always require a following clause, never a complete
+  // standalone utterance - but were missing from CONNECTOR_ONLY entirely.
+  assert.ok(policy.incompleteLineReasons('이거 완전 신기함ㅋㅋ\n그니까\n한번 써봐야될듯').length > 0);
+  assert.ok(policy.incompleteLineReasons('가격도 착함\n그러니까\n더 고민할 필요가 없음').length > 0);
+  const { repairConnectorOnlyBreaks } = require('./threadsVoiceLocalRepair');
+  const fixed = repairConnectorOnlyBreaks('이거 완전 신기함ㅋㅋ\n그니까\n한번 써봐야될듯', policy.MAX_LINE_CHARS);
+  assert.deepEqual(policy.incompleteLineReasons(fixed), []);
+});
+
+test('connector-only guard does not flag words that can stand alone as a complete reaction', () => {
+  // 그치/그럼/아니 look connector-shaped but each also works as a genuine standalone
+  // interjection ("그치" = "right?", "그럼" = "of course!", "아니" = "no way!"), so they must
+  // stay out of CONNECTOR_ONLY - unlike 그래서/그니까, a bare line consisting only of one of
+  // these is not itself proof of a cut-off sentence.
+  assert.deepEqual(policy.incompleteLineReasons('이거 완전 좋았음\n그치\n네 말이 맞아'), []);
+  assert.deepEqual(policy.incompleteLineReasons('가는거 맞지\n그럼\n같이 준비하자'), []);
+});
+
 test('a bound-noun exclamation ("토할" / "뻔!") split across lines is caught and repaired, not shipped', () => {
   const broken = '올라오고... 진짜 토할\n뻔! 근데 이 세제';
   assert.ok(policy.incompleteLineReasons(broken).length > 0, 'must flag the mid-phrase split');
