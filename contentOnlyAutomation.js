@@ -2,7 +2,7 @@ const axios = require('axios');
 const { getAccount, getSystemApiSettings, getPexelsApiKey, getPixabayApiKey } = require('./db');
 const { searchFoodPhotos: searchPexels } = require('./pexelsApi');
 const { searchFoodPhotos: searchPixabay } = require('./pixabayApi');
-const { voiceGuide } = require('./threadsVoicePolicy');
+const { voiceGuide, assertVoice } = require('./threadsVoicePolicy');
 
 const FALLBACK_TOPICS = [
   '김치찌개','된장찌개','계란볶음밥','김치볶음밥','비빔국수','제육볶음','두부조림','감자조림',
@@ -137,6 +137,20 @@ function pickRecipeCommentTeaser() {
   return RECIPE_COMMENT_TEASERS[Math.floor(Math.random() * RECIPE_COMMENT_TEASERS.length)];
 }
 
+// Regression: this no-Coupang-key autopilot path shipped generated text straight to
+// saveAutopilotPost() -> formatThreadsBody(), which only runs formatVoice() (whitespace
+// normalization, no rejection). finalTextHardGuardPatch.js only wraps
+// autopilotMaterialEngine.buildThreadsFirstAutopilot (the Coupang-product path), so this
+// path never ran voiceProblems()'s checks at all - none of them: MAX_LINES/MAX_LINE_CHARS,
+// the dangling-bound-noun line-break guard, GENERIC_CTA_ENDING, or highRiskClaim's health-claim
+// safety check. Confirmed a real high-risk claim ("염증이 나았어") sailed straight through
+// formatVoice() untouched. assertVoice() throws CONTENT_STYLE_REJECTED on a bad candidate,
+// which the caller's existing per-topic try/catch already treats like any other generation
+// failure - skip to the next topic.
+function buildRecipeText(hook, teaser) {
+  return assertVoice(`${hook}\n\n${teaser}`, { mode: 'recipe' });
+}
+
 async function collectApproved(accountId, dish, photos, approved) {
   for (const p of photos || []) {
     if (!p?.imageUrl || approved.some(x => x.imageUrl === p.imageUrl)) continue;
@@ -210,7 +224,7 @@ JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","am
       if (!img.photos.length) { console.log(`[ContentOnly][Recipe] 이미지 없음 → 다음 주제: ${dishName}`); continue; }
       let hook = String(r.hook || `${dishName} 이거 생각보다 간단하네ㅋㅋ`).trim();
       hook = await humanizeHook(accountId, hook, dishName);
-      const text = `${hook}\n\n${pickRecipeCommentTeaser()}`;
+      const text = buildRecipeText(hook, pickRecipeCommentTeaser());
       const ing = ingredients.map(x => `▪ ${String(x.name).trim()} ${String(x.amount).trim()}`).join('\n');
       const cooking = steps.map((s, i) => `${i + 1}. ${s}`).join('\n');
       const recipeCommentText = `✅ ${dishName} (${String(r.servings || '2인분').trim()} 기준)\n\n${ing}\n\n✅ 만드는 법\n${cooking}`;
@@ -239,7 +253,8 @@ ${voiceGuide()}
   let text = await callOpenAI(accountId, system, `타겟: ${target || '전체'}\n오늘 Threads에 올릴 자연스러운 일상글 하나만 작성해.`, { maxTokens: 350, temperature: 1.0 });
   text = text.replace(/^["'“”]+|["'“”]+$/g, '').trim();
   if (looksBloggy(text)) text = await humanizeHook(accountId, text, '일상');
+  text = assertVoice(text, { mode: 'lifestyle' });
   return { text, link: null, imageUrl: null, extraImageUrl: null, keyword: '일상', trendNote: '쿠팡 API 없음 · 순수 일상형', target };
 }
 
-module.exports = { generateRecipe, generateDailyStory, RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser };
+module.exports = { generateRecipe, generateDailyStory, RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText };
