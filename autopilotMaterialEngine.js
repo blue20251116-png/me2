@@ -83,13 +83,6 @@ function specialStoryScore(material,analysis,vision){const evidence=[analysis?.t
 function isSpecialStoryCandidate(material,analysis,vision){return specialStoryScore(material,analysis,vision)>=2;}
 function normalized(v){return clean(v).toLowerCase().replace(/[\s\-_/()[\]{}.,!?~'"“”‘’]/g,'');}
 function hasExternalLink(t){return/(?:https?:\/\/|www\.)\S+/i.test(String(t||''))||/\b(?:link\.coupang\.com|naver\.me)\b/i.test(String(t||''));}
-function hasAffiliateLink(t){
-  const s=String(t||'');
-  return /(?:https?:\/\/)?(?:link\.)?coupang\.com\//i.test(s)
-    || /link\.coupang\.com/i.test(s)
-    || /(?:https?:\/\/)?(?:naver\.me|shopping\.naver\.com|smartstore\.naver\.com|brand\.naver\.com)\//i.test(s)
-    || /네이버\s*(?:쇼핑)?\s*(?:커넥트|링크)/i.test(s);
-}
 function isEngagementBait(text){
   const t=clean(text);if(!t)return false;
   const hard=[/스하(?:뤼|리|루)?/i,/반하(?:뤼|리|루)?/i,/맞팔/i,/선팔/i,/팔로우\s*(?:3종|세트|가자|하면|해주|부탁|환영|갈게|갑니다)/i,/하트[^\n]{0,30}팔로우/i,/팔로우[^\n]{0,30}하트/i,/리포스트[^\n]{0,30}팔로우/i,/팔로우[^\n]{0,30}리포스트/i,/스레드\s*(?:이제|막)?\s*시작한\s*사람/i,/\d{2,6}\s*명까지\s*포기\s*못/i,/같이\s*성장하(?:자|쟈)/i,/바로\s*팔로우\s*(?:갈게|갑니다|감)/i,/팔로우하면\s*(?:바로|무조건)?\s*팔로우/i];
