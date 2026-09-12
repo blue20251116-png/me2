@@ -322,6 +322,23 @@ test('사라지다/가라앉다 do not falsely trigger without a disease/symptom
   assert.deepEqual(policy.voiceProblems('얼룩이 사라졌어'), []);
 });
 
+test('"병" was removed from the disease-keyword list - it is bare-word ambiguous with "bottle"', () => {
+  // Regression found live (real posts failing to publish): "병" matches both "disease" and the
+  // extremely common "-병" bottle/container suffix (화장품병, 샴푸병, 오일병, 약병, 유리병, or a
+  // bare "이 오일 병"). That ambiguity was already a latent false-positive risk with the original
+  // "없어짐" alone, but widening the verb list this session to include 사라지다/가라앉다 - both
+  // completely ordinary ways to describe a bottle's contents running out or sediment settling -
+  // turned it into a routine false rejection for completely normal beauty/food product reviews.
+  assert.deepEqual(policy.voiceProblems('이 화장품병 안에 있던 크림이 다 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('유리병에 담긴 오일 금방 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('샴푸병 내용물이 순식간에 없어짐'), []);
+  assert.deepEqual(policy.voiceProblems('이 오일병 냄새가 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('약병 안에 먼지가 가라앉았어'), []);
+  // 질환 already covers the "disease" sense unambiguously, and every other keyword (암/통증/염증/
+  // 당뇨/고혈압) has no equivalent common-word collision, so genuine claims are still caught.
+  assert.ok(policy.voiceProblems('이 질환 완치됨').includes('고위험 효능 주장'));
+});
+
 test('source is a creative seed: invented low-risk connective copy is allowed', async () => {
   const text = '처음엔 별거 아닌데\n보다가 계속 보게 됨ㅋㅋ';
   const out = await policy.reviewSourceVoice(text, { sourceText: '금붕어가 먹이를 먹는 영상' }, async () => {
