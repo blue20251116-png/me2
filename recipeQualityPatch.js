@@ -24,6 +24,15 @@ function recipeContainsIngredient(text, item){
   const aliases = {계란:['계란','달걀'],달걀:['계란','달걀'],양송이버섯:['양송이','버섯'],버섯:['버섯','양송이'],식빵:['식빵','빵'],빵:['식빵','빵'],올리브유:['올리브유','올리브오일'],올리브오일:['올리브유','올리브오일'],대패삼겹살:['대패삼겹살','삼겹살'],삼겹살:['삼겹살','대패삼겹살']};
   return (aliases[item] || [item]).some(x => String(text||'').includes(x));
 }
+// REGRESSION (found via synthetic testing, hourly review): buildThreadsFirstAutopilot() already
+// runs scrubSecret() before this patch ever sees result.commentLead, replacing the designated
+// secret ingredient's real name with the "비밀 재료"/"비밀 소스" placeholder. importantSourceIngredients()
+// pulls from a hardcoded common-ingredient list (마늘/소금/버터 등) that can easily overlap with
+// exactly that secret ingredient - when it does, the real name no longer appears anywhere in the
+// (correctly scrubbed) text, so the "required ingredient present" check below always failed for a
+// perfectly valid recipe, forcing pointless rewrite attempts and - after 3 failures - throwing and
+// killing the whole autopilot run for that topic. The intentionally-hidden ingredient can never
+// literally appear by name, by design, so it must be excluded from this check.
 function badRecipe(text, result){
   const t = clean(text);
   if (!/🥘\s*재료\s*\n/.test(t) || !/🍳\s*만드는 법\s*\n/.test(t)) return true;
@@ -33,7 +42,8 @@ function badRecipe(text, result){
   const concreteItems = ingredient.split(/\n|,/).map(x=>x.trim()).filter(x=>x && !/^[-•]?\s*(비밀 소스|비밀 재료)$/i.test(x));
   const steps = method.split(/\n/).filter(x=>/^\s*\d+[.)]/.test(x));
   if (concreteItems.length < 1 || steps.length < 1) return true;
-  const required = importantSourceIngredients(result);
+  const secretCandidate = clean(result?.secretTerm) || clean(result?.visionTarget?.promotedIngredient);
+  const required = importantSourceIngredients(result).filter(x => !(secretCandidate && recipeContainsIngredient(secretCandidate, x)));
   if (required.some(x => !recipeContainsIngredient(t, x))) return true;
   if (/비밀\s*(?:소스|재료)/.test(t) && !clean(result?.secretTerm) && !clean(result?.visionTarget?.promotedIngredient)) return true;
   return false;
@@ -81,5 +91,6 @@ engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutop
 };
 
 console.log('[Autopilot][RECIPE SOURCE CHECK] 원본 핵심재료 보존 + 재료/조리법 일치 + 가짜 비밀재료 금지 활성화');
+module.exports = { badRecipe, importantSourceIngredients, recipeContainsIngredient };
 
 
