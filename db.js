@@ -9,13 +9,30 @@ const db = new DatabaseSync(path.join(dbDir, 'scheduler.db'));
 if (process.env.NODE_ENV === 'production') {
   const backupPath=path.join(dbDir,'scheduler-before-recovery-v1.db');
   if (!fs.existsSync(backupPath)) {
-    db.exec('PRAGMA busy_timeout=5000;');
-    db.prepare('VACUUM INTO ?').run(backupPath);
-    fs.chmodSync(backupPath,0o600);
-    console.log('[DB][RECOVERY BACKUP] consistent pre-migration backup saved');
+    // Same class of bug as the PRAGMA guard below: VACUUM INTO writes an entire new DB file copy
+    // at module-load time, unguarded - on a full disk this throws and crashes the whole process
+    // before it ever starts listening, same as the WAL-mode crash this session found live.
+    try {
+      db.exec('PRAGMA busy_timeout=5000;');
+      db.prepare('VACUUM INTO ?').run(backupPath);
+      fs.chmodSync(backupPath,0o600);
+      console.log('[DB][RECOVERY BACKUP] consistent pre-migration backup saved');
+    } catch (e) {
+      console.error('[DB][RECOVERY BACKUP] 백업 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message);
+    }
   }
 }
-db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
+// REGRESSION (found live, 2026-09-12): when the persistent volume fills up, switching to WAL
+// mode needs to create new "-wal"/"-shm" sidecar files on disk, which fails with a disk I/O
+// error - and since this runs unguarded at module load time (require('./db') is the very first
+// thing server.js does), that error crashed the ENTIRE process before app.listen() ever ran.
+// That took down every route, including the filesystem-only /admin/emergency-cleanup route in
+// server.js that exists specifically to recover from a full disk - the fix was completely
+// unreachable because the process never got far enough to serve it. Catching this one line lets
+// the process boot in a degraded state; actual db.prepare()/db.exec() calls made later from real
+// request handlers still fail with the same real error on their own, same as before this fix.
+try { db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;'); }
+catch (e) { console.error('[DB][INIT] PRAGMA 설정 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message); }
 const DEFAULT_DISCLOSURE_TEMPLATE='이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.\n\n{link}';
 db.exec(`CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,label TEXT NOT NULL,threads_app_id TEXT,threads_app_secret TEXT,threads_redirect_uri TEXT,threads_user_id TEXT,threads_access_token TEXT,threads_token_expires_at TEXT,threads_username TEXT,coupang_access_key TEXT,coupang_secret_key TEXT,coupang_sub_id TEXT,coupang_disclosure_template TEXT,anthropic_api_key TEXT,openai_api_key TEXT,naver_client_id TEXT,naver_client_secret TEXT,autopilot_enabled INTEGER DEFAULT 0,autopilot_next_at TEXT,autopilot_last_keyword TEXT,autopilot_last_target TEXT,autopilot_youtube_source_enabled INTEGER DEFAULT 1,autopilot_youtube_order TEXT DEFAULT 'relevance',autopilot_frame_media_enabled INTEGER DEFAULT 0,created_at TEXT DEFAULT (datetime('now')));CREATE TABLE IF NOT EXISTS media_sources (id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER NOT NULL,product_keyword TEXT NOT NULL,frame_job_id TEXT,image_url TEXT,extra_image_url TEXT,created_at TEXT DEFAULT (datetime('now')),last_used_at TEXT,use_count INTEGER DEFAULT 0);CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER NOT NULL,text TEXT NOT NULL,link TEXT,image_url TEXT,video_url TEXT,scheduled_at TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',threads_media_id TEXT,posted_at TEXT,error_message TEXT,auto_comment_enabled INTEGER DEFAULT 1,comment_status TEXT DEFAULT 'none',comment_media_id TEXT,comment_posted_at TEXT,comment_error_message TEXT,created_at TEXT DEFAULT (datetime('now')),FOREIGN KEY(account_id) REFERENCES accounts(id));CREATE TABLE IF NOT EXISTS insights(post_id INTEGER PRIMARY KEY,views INTEGER DEFAULT 0,likes INTEGER DEFAULT 0,replies INTEGER DEFAULT 0,reposts INTEGER DEFAULT 0,quotes INTEGER DEFAULT 0,updated_at TEXT DEFAULT(datetime('now')),FOREIGN KEY(post_id) REFERENCES posts(id));CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,name TEXT,role TEXT DEFAULT 'user',status TEXT DEFAULT 'pending',plan TEXT DEFAULT 'pro',daily_publish_limit INTEGER DEFAULT 20,max_threads_accounts INTEGER DEFAULT 1,expires_at TEXT,approved_at TEXT,approved_by INTEGER,created_at TEXT DEFAULT(datetime('now')));CREATE TABLE IF NOT EXISTS usage_events(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,type TEXT NOT NULL,created_at TEXT DEFAULT(datetime('now')));CREATE TABLE IF NOT EXISTS site_settings(key TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS system_api_settings(key TEXT PRIMARY KEY,value TEXT);`);
 const DEFAULT_SITE_SETTINGS={price_label:'19,900원 / 월',bank_info:'새마을금고 9003296753264 (예금주: 박건우)',open_kakao_url:'',tax_email:'zsdg181@naver.com',payment_guide:'가입 신청 후 위 계좌로 입금해주세요.\n입금 후 오픈카톡으로 "입금자명 + 스레드 아이디"를 보내주시면 확인 후 승인해드립니다.\n현금영수증이 필요하시면 발행에 필요한 정보를 이메일로 보내주세요.'};
