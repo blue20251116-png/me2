@@ -82,7 +82,11 @@ function formatVoice(text){return normalizeVoice(text);}
 // safety/age-appropriateness claims about kids' products ("이거 완전 안전함" 대신 "이 정도면
 // 안심되는 편"), but nothing at the code level backed that up - a synthetic case ("이 젖병 삼켜도
 // 100% 안전해요") sailed through untouched before this branch was added.
-function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로)\s*(?:빠졌|빠짐|감량|뺐|감소)/i.test(t)||/(?:암|통증|질환|병|염증|당뇨|고혈압)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어짐)/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/(?:완전|100\s*%)\s*안전(?:함|해요|하다)?|위험(?:이|은)?\s*전혀\s*없(?:음|어요|다)|삼켜도\s*(?:안전|괜찮)|질식\s*위험\s*없|알레르기\s*(?:걱정|위험)\s*(?:전혀\s*)?없/.test(t);}
+// The cure-verb list also missed 사라지다 ("disappear") and 가라앉다 ("subside") entirely, and its
+// one "없어짐" entry only matched that exact base form - not "없어졌어"/"없어져" either. These are
+// at least as common in casual Korean as "낫다"/"치료되다" for describing symptom relief ("통증이
+// 싹 사라짐", "염증이 가라앉았어"), so real claims using them slipped through completely unchecked.
+function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로)\s*(?:빠졌|빠짐|감량|뺐|감소)/i.test(t)||/(?:암|통증|질환|병|염증|당뇨|고혈압)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/(?:완전|100\s*%)\s*안전(?:함|해요|하다)?|위험(?:이|은)?\s*전혀\s*없(?:음|어요|다)|삼켜도\s*(?:안전|괜찮)|질식\s*위험\s*없|알레르기\s*(?:걱정|위험)\s*(?:전혀\s*)?없/.test(t);}
 function voiceProblems(text,{comment=false}={}){const t=normalizeVoice(text),reasons=[];if(!t&&!comment)reasons.push('empty');if(!comment){const lines=t?t.split('\n'):[];if(lines.length>MAX_LINES)reasons.push(`${MAX_LINES}줄 초과`);if(incompleteLineReasons(t).length)reasons.push('미완결 줄바꿈');if(lines.length&&GENERIC_CTA_ENDING.test(lines.slice(-2).join(' ')))reasons.push('뻔한 CTA 마무리');}if(highRiskClaim(t))reasons.push('고위험 효능 주장');return [...new Set(reasons)];}
 function reject(reasons){const error=new Error(`최종 문체 검증 실패: ${reasons.join(',')}`);error.code='CONTENT_STYLE_REJECTED';throw error;}
 function assertVoice(text,options={}){const out=formatVoice(text),reasons=voiceProblems(out,options);if(reasons.length)reject(reasons);return out;}

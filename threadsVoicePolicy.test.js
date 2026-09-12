@@ -302,6 +302,26 @@ test('the absolute-safety-claim guard does not falsely trigger on ordinary "안�
   assert.deepEqual(policy.voiceProblems('가격이 완전 착함'), []);
 });
 
+test('cure-claim guard also catches 사라지다/가라앉다, not just 낫다/치료되다/없어짐', () => {
+  // Regression: 통증/염증 등은 이미 질병·증상 키워드 목록에 있었지만, 완치 동사 목록에는
+  // "사라지다"(disappear)와 "가라앉다"(subside)가 아예 없었다. 심지어 이미 목록에 있던
+  // "없어짐"도 정확히 그 활용형만 매칭해서 "없어졌어"/"없어져" 같은 흔한 변형은 놓치고 있었다.
+  // 일상 반말에서 "낫다"/"치료되다"만큼, 혹은 그보다 더 자주 쓰이는 표현들이라 실제 효능
+  // 주장이 완전히 안 걸리고 있었다.
+  assert.ok(policy.voiceProblems('통증 100% 사라짐').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('염증이 사라졌어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('염증이 없어졌어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('염증이 가라앉았어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('통증이 가라앉음').includes('고위험 효능 주장'));
+});
+
+test('사라지다/가라앉다 do not falsely trigger without a disease/symptom keyword nearby', () => {
+  assert.deepEqual(policy.voiceProblems('스트레스가 싹 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('먼지가 다 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('냄새가 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('얼룩이 사라졌어'), []);
+});
+
 test('source is a creative seed: invented low-risk connective copy is allowed', async () => {
   const text = '처음엔 별거 아닌데\n보다가 계속 보게 됨ㅋㅋ';
   const out = await policy.reviewSourceVoice(text, { sourceText: '금붕어가 먹이를 먹는 영상' }, async () => {
