@@ -211,8 +211,17 @@ test('the ad-CTA guard catches "너도 <verb>봐" for verbs other than 해/써, 
   }
 });
 
+test('the ad-CTA guard catches the same formulaic CTA under other reader-address pronouns, not just "너도"', () => {
+  // Regression: only the literal "너도" was matched, so a model could reproduce the identical
+  // banned CTA shape untouched just by swapping the pronoun ("너희도", "당신도", "다들", "모두").
+  for (const variant of ['너희도 한번 써봐', '당신도 써보길', '다들 한번 써봐', '모두 써보길']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
 test('the generalized ad-CTA guard does not flag ordinary sentences that merely contain "너도"', () => {
-  for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬']) {
+  for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬', '다들 이렇게 사나요?', '다들 힘내자']) {
     const post = '완전 신기했음\n' + safe;
     assert.deepEqual(policy.voiceProblems(post).filter(r => r === '뻔한 CTA 마무리'), [], `should not catch: "${safe}"`);
   }

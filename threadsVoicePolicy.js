@@ -27,7 +27,12 @@ const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 // many product categories actually use (발라봐 skincare, 만들어봐/먹어봐 food, 사봐 general
 // purchase, …), so this matches any short verb-like run between "너도" and the 보다-auxiliary
 // ending instead of enumerating stems.
-const GENERIC_CTA_ENDING = /너도\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보길|봐)[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
+// REGRESSION (found via synthetic testing, hourly review): the same hardcoded-list bug that
+// motivated the verb-stem fix above also applied to the pronoun addressing the reader - only the
+// literal "너도" was matched, so a model avoiding just that one word ("너희도 써봐", "당신도
+// 써보길", "다들 써봐") could reproduce the exact same formulaic CTA shape untouched. These are
+// the same banned pattern under a different address form, not a different, legitimate ending.
+const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보길|봐)[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
 
 function normalizeVoice(text) {
   return String(text || '').replace(/\r/g, '').replace(/\\n/g, '\n').split('\n').map(line => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
