@@ -32,4 +32,4 @@ threadsApi.publishReply = async function publishReplyWithDisclosureFirst(account
   return originalPublishReply(accountId, parentMediaId, normalized, options);
 };
 
-console.log('[Threads][REPLY PATCH] 쿠팡 고지문 첫줄 고정 · preview sink/link_attachment 제거');
+console.log('[Threads][REPLY PATCH] 쿠팡 고지문 첫줄 고정 (링크 프리뷰 억제는 threadsApi.js의 applyCoupangReplyPreviewGuard가 담당)');

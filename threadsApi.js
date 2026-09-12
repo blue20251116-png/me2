@@ -54,9 +54,15 @@ function sanitizePublishedThreadsText(value){
 // Coupang 댓글에 URL이 하나뿐이면 같은 목적지의 두 번째 URL을 fragment 변형으로 추가해
 // "URL 2개" 형태로 발행한다. fragment는 서버 요청에 전달되지 않으므로 목적지는 동일하다
 // 이 처리는 댓글에만 적용하며 일반 본문은 건드리지 않는다
+// 예전에는 link.coupang.com 도메인만 매칭했는데, scheduler.js의 makeAffiliateLink()는 계정에
+// 쿠팡 파트너스 API 자격증명이 없거나(createDeeplink가 원본 URL을 그대로 passthrough) URL이 이미
+// "제휴 링크"로 분류되면(classifyCoupangUrl의 lptag/subid/aff 쿼리 휴리스틱) link.coupang.com이
+// 아닌 일반 www.coupang.com 상품 URL을 댓글에 그대로 쓴다 - 그런 경우 이 정규식이 전혀 매칭하지
+// 않아서 프리뷰 억제 자체가 조용히 스킵되고 있었다. 댓글에는 항상 이 링크 하나만 있으므로 도메인을
+// 가리지 않고 어떤 URL이든 매칭한다.
 function applyCoupangReplyPreviewGuard(value){
   const text=sanitizePublishedThreadsText(value);
-  const matches=[...text.matchAll(/https?:\/\/link\.coupang\.com\/[^\s]+/gi)];
+  const matches=[...text.matchAll(/https?:\/\/\S+/gi)];
   if(matches.length!==1)return{text,guardApplied:false,urlCount:matches.length};
 
   const original=matches[0][0];
@@ -343,4 +349,4 @@ async function getMediaInsights(accountId,mediaId){
   try{const res=await axios.get(`${GRAPH_BASE}/${mediaId}/insights`,{params:{metric:'views,likes,replies,reposts,quotes',access_token:account.threads_access_token},timeout:20000});const data={};for(const item of res.data?.data||[])data[item.name]=item.values?.[0]?.value??item.total_value?.value??0;return data;}catch(err){logThreadsError('INSIGHTS',err,{accountId,mediaId});throw err;}
 }
 
-module.exports={getAuthUrl,exchangeCodeForToken,exchangeForLongLivedToken,refreshLongLivedToken,fetchProfile,publishPost,publishCarouselPost,publishMediaItemsPost,publishReply,getMediaInsights,sanitizePublishedThreadsText};
+module.exports={getAuthUrl,exchangeCodeForToken,exchangeForLongLivedToken,refreshLongLivedToken,fetchProfile,publishPost,publishCarouselPost,publishMediaItemsPost,publishReply,getMediaInsights,sanitizePublishedThreadsText,applyCoupangReplyPreviewGuard};
