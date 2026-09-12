@@ -62,12 +62,25 @@ function countTextChars(value) {
   }
   return total;
 }
+// REGRESSION (found via synthetic testing, hourly review): head/tail had hardcoded MINIMUMS
+// (1000/500) that ignored `max` entirely once `max` dropped below ~1500 - truncateString(text, 200)
+// still returned ~1548 chars. capContent() calls this per-field with a shrinking shared budget
+// (MAX_TEXT_CHARS - state.used so far), so once earlier fields in a multi-field request had
+// consumed most of the budget, every later large field would still emit ~1500+ chars regardless
+// of how little budget remained - silently letting a request blow well past MAX_TEXT_CHARS in
+// exactly the cost-control path this file exists to enforce. Below a small `max`, this now falls
+// back to a plain slice (a head/tail split isn't meaningful at that size anyway); otherwise the
+// head/tail split is sized as a share of `max` itself, so the returned string never exceeds it.
 function truncateString(s, max) {
   const text = String(s || '');
   if (text.length <= max) return text;
-  const head = Math.max(1000, Math.floor(max * 0.72));
-  const tail = Math.max(500, max - head - 80);
-  return `${text.slice(0, head)}\n...[OpenAI cost guard truncated ${text.length - head - tail} chars]...\n${text.slice(-tail)}`;
+  if (max <= 50) return text.slice(0, Math.max(0, max));
+  const markerLen = 70;
+  const available = Math.max(0, max - markerLen);
+  const head = Math.floor(available * 0.72);
+  const tail = available - head;
+  const dropped = text.length - head - tail;
+  return `${text.slice(0, head)}\n...[OpenAI cost guard truncated ${dropped} chars]...\n${text.slice(-tail)}`;
 }
 function capContent(value, state) {
   if (typeof value === 'string') {
@@ -212,3 +225,5 @@ axios.post = function budgetGuardedPost(url, data, config) {
 };
 
 console.log(`[OpenAI][BUDGET GUARD] concurrency=1 minGap=${MIN_GAP_MS}ms hourlyCap=${MAX_REQUESTS_PER_HOUR} textCap=${MAX_TEXT_CHARS}chars visionDetail=${VISION_DETAIL} cache<=0.2 ttl=${Math.round(ANALYSIS_CACHE_MS / 3600000)}h`);
+
+module.exports = { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS };
