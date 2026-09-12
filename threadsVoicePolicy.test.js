@@ -277,21 +277,34 @@ test('the unrelated "낫다" comparison sense does not falsely trigger the cure-
   assert.deepEqual(policy.voiceProblems('나아갈 방향을 고민 중'), []);
 });
 
-test('absolute safety claims are caught too - "안전" is named in the shared rule but had no code enforcement', () => {
-  // Regression: the shared rule right above highRiskClaim() says "건강·의학·안전·금융처럼...
-  // 확정 주장으로 만들지 않는다" (health, medicine, SAFETY, and finance), but until now this
-  // function only ever code-enforced the health/medicine and weight-loss branches - "안전"
-  // (safety) had no matching branch at all. The new parenting-mom persona
-  // (threadsPersonas.js) explicitly tells the model not to make absolute safety claims about
-  // kids' products, but nothing at the code level backed that up before this fix.
-  assert.ok(policy.voiceProblems('이 장난감 완전 안전함ㅋㅋ').includes('고위험 효능 주장'));
+test('absolute claims of protection from real child-safety hazards are caught (choking/swallowing/allergy)', () => {
+  // This guard is deliberately narrow, not a blanket "완전/100% 안전" catch - see the next test
+  // for why. The real, narrow risk worth code-enforcing is a false claim of protection from
+  // actual physical harm to a child, which the parenting-mom persona (threadsPersonas.js)
+  // separately warns against in its own prompt text.
   assert.ok(policy.voiceProblems('이 젖병 삼켜도 100% 안전해요').includes('고위험 효능 주장'));
   assert.ok(policy.voiceProblems('이 이유식 알레르기 걱정 전혀 없음').includes('고위험 효능 주장'));
-  assert.ok(policy.voiceProblems('위험 전혀 없어요').includes('고위험 효능 주장'));
   assert.ok(policy.voiceProblems('질식 위험 없는 사이즈').includes('고위험 효능 주장'));
 });
 
-test('the absolute-safety-claim guard does not falsely trigger on ordinary "안전"/"완전"/"전혀" phrases', () => {
+test('a generic "완전/100% 안전" claim does NOT trigger the guard - that is ordinary marketing language', () => {
+  // REGRESSION (found live: real posts were failing to publish): an earlier version of this
+  // guard matched any "완전 안전"/"100% 안전" regardless of context, which is completely
+  // ordinary marketing language across nearly every product category, not a red flag on its
+  // own - it was rejecting a huge fraction of ordinary posts across every category, not just
+  // kids' products.
+  assert.deepEqual(policy.voiceProblems('이 장난감 완전 안전함ㅋㅋ'), []);
+  assert.deepEqual(policy.voiceProblems('이 케이스 완전 안전하게 보호해줌'), []);
+  assert.deepEqual(policy.voiceProblems('이 콘센트 완전 안전함'), []);
+  assert.deepEqual(policy.voiceProblems('헬멧 완전 안전한 느낌'), []);
+  assert.deepEqual(policy.voiceProblems('이 잠금장치 100% 안전해요'), []);
+  assert.deepEqual(policy.voiceProblems('아이 손 안 닿게 완전 안전하게 설치함'), []);
+  assert.deepEqual(policy.voiceProblems('와이파이 완전 안전하게 연결됨'), []);
+  assert.deepEqual(policy.voiceProblems('결제 정보 완전 안전하게 보호됨'), []);
+  assert.deepEqual(policy.voiceProblems('위험 전혀 없어요'), []);
+});
+
+test('the child-safety-hazard guard does not falsely trigger on ordinary "안전"/"완전"/"전혀" phrases', () => {
   assert.deepEqual(policy.voiceProblems('이 정도면 안심되는 편'), []);
   assert.deepEqual(policy.voiceProblems('안전벨트 튼튼함'), []);
   assert.deepEqual(policy.voiceProblems('안전모 착용하고 탐'), []);
