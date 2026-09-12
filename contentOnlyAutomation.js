@@ -253,17 +253,30 @@ JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","am
   throw new Error('Vision 통과 음식사진이 있는 레시피를 찾지 못했습니다');
 }
 
-async function generateDailyStory(accountId, target) {
-  const persona = pickPersona({ mode: 'lifestyle', text: '' });
-  console.log(`[ContentOnly][DailyStory] persona picked="${persona.name}"(${persona.id})`);
-  const system = `너는 한국 Threads에서 실제 사람이 툭 쓴 듯한 짧은 일상 공감글을 쓴다. 상품 광고나 구매 유도는 절대 하지 않는다.
+// threadsPersonas.js's curiosity block explicitly allows deferring the identity reveal to a
+// comment ("아예 댓글로 넘긴다", worked example ending "정체 궁금하면 댓글에서 확인"). That is a
+// broken promise here specifically: generateDailyStory() returns a plain text-only lifestyle post
+// with no comment field at all (see the return below) - nothing ever gets posted as a follow-up
+// comment for this content type, unlike threadsMaterialWriter.js/autopilotMaterialEngine.js where
+// the comment-defer option is legitimate because a real comment does follow. Same fix as
+// aiCaption.js's makeSystemPrompt: require the "reveal within the post" branch instead.
+function buildDailyStorySystemPrompt(personaBlock) {
+  return `너는 한국 Threads에서 실제 사람이 툭 쓴 듯한 짧은 일상 공감글을 쓴다. 상품 광고나 구매 유도는 절대 하지 않는다.
 
-${voiceGuide(persona.block)}
+${voiceGuide(personaBlock)}
 
 [이 도구 전용 규칙]
 - 집, 회사, 식사, 정리, 출퇴근, 주말, 잠, 인간관계, 소비습관 같은 평범한 생활 소재 중 하나를 골라 매번 다르게 쓴다.
 - 가짜 경험, 효능, 구체적인 날씨 단정은 하지 않는다.
-- 제목/번호/해시태그/링크/이모지는 넣지 않는다.`;
+- 제목/번호/해시태그/링크/이모지는 넣지 않는다.
+- (위에서 배정된 페르소나가 궁금증 유발형이라면) 이 글은 댓글이 따로 달리지 않는 단발성 글이다 — 정체·상황을
+  "댓글로 넘기지" 말고 반드시 본문 안에서 끝까지 밝히거나 마무리한다.`;
+}
+
+async function generateDailyStory(accountId, target) {
+  const persona = pickPersona({ mode: 'lifestyle', text: '' });
+  console.log(`[ContentOnly][DailyStory] persona picked="${persona.name}"(${persona.id})`);
+  const system = buildDailyStorySystemPrompt(persona.block);
   let text = await callOpenAI(accountId, system, `타겟: ${target || '전체'}\n오늘 Threads에 올릴 자연스러운 일상글 하나만 작성해.`, { maxTokens: 350, temperature: 1.0 });
   text = text.replace(/^["'“”]+|["'“”]+$/g, '').trim();
   if (looksBloggy(text)) text = await humanizeHook(accountId, text, '일상');
@@ -271,4 +284,4 @@ ${voiceGuide(persona.block)}
   return { text, link: null, imageUrl: null, extraImageUrl: null, keyword: '일상', trendNote: '쿠팡 API 없음 · 순수 일상형', target, persona: persona.id };
 }
 
-module.exports = { generateRecipe, generateDailyStory, RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText };
+module.exports = { generateRecipe, generateDailyStory, RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText, buildDailyStorySystemPrompt };

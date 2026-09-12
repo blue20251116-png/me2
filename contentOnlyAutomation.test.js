@@ -2,7 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText } = require('./contentOnlyAutomation');
+const { RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText, buildDailyStorySystemPrompt } = require('./contentOnlyAutomation');
+const { PERSONAS } = require('./threadsPersonas');
 
 test('recipe comment teaser is not a single hardcoded phrase repeated every time', () => {
   // Regression: generateRecipe() used to append the exact same literal closing
@@ -26,6 +27,17 @@ test('pickRecipeCommentTeaser actually varies across calls', () => {
   const seen = new Set();
   for (let i = 0; i < 200; i++) seen.add(pickRecipeCommentTeaser());
   assert.ok(seen.size >= 2, 'should not always return the same phrase');
+});
+
+test('daily story prompt blocks the curiosity persona from deferring its reveal to a comment that never exists', () => {
+  // generateDailyStory() returns a plain text-only post - no comment field at all - so if the
+  // curiosity persona (which explicitly allows "아예 댓글로 넘긴다") picks that branch, the reveal
+  // it promised never actually happens anywhere. Same fix as aiCaption.js's makeSystemPrompt.
+  const curiosity = PERSONAS.find(p => p.id === 'curiosity');
+  const prompt = buildDailyStorySystemPrompt(curiosity.block);
+  assert.ok(prompt.includes(curiosity.block), 'the persona block itself must be present');
+  assert.ok(prompt.includes('댓글로 넘기지'), 'a note blocking the comment-defer option must be present');
+  assert.ok(prompt.indexOf(curiosity.block) < prompt.indexOf('댓글로 넘기지'), 'the note must come after the persona block it overrides');
 });
 
 test('buildRecipeText rejects a high-risk health claim instead of shipping it unguarded', () => {
