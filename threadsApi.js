@@ -43,8 +43,15 @@ async function __me2NormalizeCarouselVideoUrl(rawUrl){
 // 숫자 소수점(1.5)처럼 숫자 사이의 점은 보존하고, 말줄임(...)도 온전히 보존한다 —
 // 예전 정규식은 전역 매치가 소비한 문자를 다시 조건절로 쓰면서 말줄임 맨 끝 점 하나를 갉아먹었다
 // (예: "완전 신기함..." → "완전 신기함.."), voiceGuide()가 명시적으로 허용하는 말줄임 표현과 충돌했다.
+// REGRESSION (found via synthetic testing): 아래 문장 종결 마침표 제거 규칙은 소수점(1.5) 보호를
+// 위해 "숫자 뒤 마침표"는 건드리지 않는데, 링크가 숫자로 끝나는 경우가 흔해서
+// ("...보러가기 https://link.coupang.com/a/abc123.") 그 마침표가 그대로 URL 끝에 들러붙어
+// 실제 클릭 링크(https://.../abc123.)가 깨진 채로 발행되는 부작용이 있었다. applyCoupangReplyPreviewGuard가
+// 이 텍스트에서 URL을 다시 정규식으로 뽑아 쓰기 때문에, 마침표 제거보다 먼저 모든 URL의 끝에 붙은
+// .,; 를 떼어낸다 (scheduler.js의 extractFirstHttpUrl이 이미 쓰는 것과 같은 방식).
 function sanitizePublishedThreadsText(value){
   return String(value||'')
+    .replace(/https?:\/\/\S+/gi,m=>m.replace(/[.,;]+$/,''))
     .replace(/(^|[^.\d])\.(?!\.)(?=\s|$)/g,'$1')
     .replace(/[ \t]+\n/g,'\n')
     .trim();

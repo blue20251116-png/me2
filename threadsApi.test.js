@@ -27,6 +27,37 @@ test('sanitizePublishedThreadsText trims trailing whitespace-newline runs', () =
   assert.equal(sanitizePublishedThreadsText('와 대박.\n진짜임'), '와 대박\n진짜임');
 });
 
+test('sanitizePublishedThreadsText strips a trailing period stuck to a URL ending in a digit', () => {
+  // REGRESSION found via synthetic testing: the sentence-period stripper above deliberately
+  // skips periods preceded by a digit (to protect decimal points like "1.5"), but affiliate
+  // links very commonly end in a digit ("...abc123") - so a comment ending in "...보러가기
+  // https://link.coupang.com/a/abc123." kept the period stuck directly to the URL, producing a
+  // broken destination (".../abc123.") once Threads turns it into a real clickable link. Fixed
+  // by stripping trailing .,; from URL matches first, same technique scheduler.js's
+  // extractFirstHttpUrl already uses for the same reason.
+  assert.equal(
+    sanitizePublishedThreadsText('이 상품 진짜 좋아요 https://link.coupang.com/a/abc123.'),
+    '이 상품 진짜 좋아요 https://link.coupang.com/a/abc123'
+  );
+  assert.equal(
+    sanitizePublishedThreadsText('구매는 여기로! https://link.coupang.com/a/xy9.'),
+    '구매는 여기로! https://link.coupang.com/a/xy9'
+  );
+  // decimal points elsewhere in the same text must still be preserved
+  assert.equal(
+    sanitizePublishedThreadsText('가격 1.5만원인데 https://link.coupang.com/a/abc123.'),
+    '가격 1.5만원인데 https://link.coupang.com/a/abc123'
+  );
+});
+
+test('applyCoupangReplyPreviewGuard produces a clickable (unbroken) URL even when the source text ends the link with a period', () => {
+  const result = applyCoupangReplyPreviewGuard('이 상품 진짜 좋아요 https://link.coupang.com/a/abc123.');
+  const urls = [...result.text.matchAll(/https?:\/\/\S+/g)].map(m => m[0]);
+  assert.equal(urls.length, 2);
+  for (const u of urls) assert.ok(!u.endsWith('.'), `URL must not end with a stray period: ${u}`);
+  assert.ok(urls[0].endsWith('abc123'), 'the original link must be recoverable without the trailing period');
+});
+
 test('applyCoupangReplyPreviewGuard suppresses the preview for any single URL, not just link.coupang.com', () => {
   // Regression: the guard only matched the link.coupang.com domain, but
   // scheduler.js's makeAffiliateLink() can put a plain www.coupang.com product
