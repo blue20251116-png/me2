@@ -287,6 +287,29 @@ test('absolute claims of protection from real child-safety hazards are caught (c
   assert.ok(policy.voiceProblems('질식 위험 없는 사이즈').includes('고위험 효능 주장'));
 });
 
+test('the child-safety-hazard guard catches the particle/spaced phrasing real sentences actually use', () => {
+  // REGRESSION found via synthetic-sentence testing (hourly review): this guard's keywords were
+  // written assuming no subject particle (위험/걱정 directly followed by 없) and no space after
+  // "완전" - but the single most natural way to write these absolute claims in Korean inserts a
+  // particle ("위험'이' 없어요") or a space ("완전 안전해요", not "완전안전해요"). Without those,
+  // the guard silently let the most common phrasing of exactly the claims it exists to catch
+  // pass straight through - a false negative in a child-safety check, worse than a false positive.
+  assert.ok(policy.voiceProblems('삼켜도 완전 안전해요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('알레르기 위험이 없어요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('알레르기 위험이 전혀 없어요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('질식 위험이 없어요').includes('고위험 효능 주장'));
+});
+
+test('fixing the particle under-match does not reopen a false positive on hedged, non-absolute phrasing', () => {
+  // The parenting-mom persona (threadsPersonas.js) is explicitly instructed to prefer hedged
+  // safety language over absolute claims (e.g. "이거 완전 안전함" 대신 "이 정도면 안심되는 편").
+  // Allowing the "위험이" particle above must not start catching that same hedge shape applied
+  // to an allergy/choking claim - only the sentence-final absolute form should trigger.
+  assert.deepEqual(policy.voiceProblems('알레르기 위험이 없는 편이라 그나마 안심하고 씀'), []);
+  assert.deepEqual(policy.voiceProblems('질식 위험이 없는 편이라 어린이집에서도 많이 써요'), []);
+  assert.deepEqual(policy.voiceProblems('알레르기 위험이 없는 것은 아니지만 그래도 안심되는 편'), []);
+});
+
 test('a generic "완전/100% 안전" claim does NOT trigger the guard - that is ordinary marketing language', () => {
   // REGRESSION (found live: real posts were failing to publish): an earlier version of this
   // guard matched any "완전 안전"/"100% 안전" regardless of context, which is completely

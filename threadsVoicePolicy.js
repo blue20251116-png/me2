@@ -97,7 +97,23 @@ function formatVoice(text){return normalizeVoice(text);}
 // beauty/food product reviews. "병" is removed from this keyword set entirely - 질환 already covers
 // the "disease" sense unambiguously, and every other keyword here (암/통증/염증/당뇨/고혈압) has no
 // such common-word collision.
-function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로)\s*(?:빠졌|빠짐|감량|뺐|감소)/i.test(t)||/(?:암|통증|질환|염증|당뇨|고혈압)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/삼켜도\s*(?:완전|100\s*%\s*)?(?:안전|괜찮)|질식\s*위험\s*없|알레르기\s*(?:걱정|위험)\s*(?:전혀\s*)?없/.test(t);}
+// Found via synthetic-sentence testing (hourly review, 2026-09-12): the child-hazard branch
+// below was written assuming its keywords sit directly next to each other, but real Korean
+// almost always inserts a subject particle (위험'이' 없다, 걱정'이' 없다) or a space after an
+// intensifier (완전 '안전해요' with a space, not '완전안전'). Without \s* / an optional (이|가)
+// particle, "알레르기 위험이 없어요", "질식 위험이 없어요", and "삼켜도 완전 안전해요" - arguably
+// the single most natural phrasing of exactly the absolute claims this branch exists to catch -
+// all silently passed through uncaught. That is a false NEGATIVE in a child-safety guard, worse
+// than the false positives found earlier this session. Fixing the under-match reopens the
+// over-match risk this session already hit once (narrowing "완전 안전" broke real posts): once
+// "위험이" is allowed, a hedge like "위험이 없는 편이라 안심되는 편" (exactly the softened phrasing
+// the parenting-mom persona in threadsPersonas.js is instructed to prefer, e.g. "안심되는 편")
+// would also match on a literal "없" substring. The (?!\s*는\s*(?:편|것|거|셈)) guard excludes only
+// that specific continuing/hedging shape (없는 편/없는 것/없는 것은 아니지만) while still catching
+// every sentence-final absolute form (없어/없음/없다/없네/없죠) AND the noun-modifying absolute
+// shape ("없는 사이즈", "없는 제품" - "없는" followed directly by a noun, not a hedge word, is
+// still an absolute "risk-free X" claim and must stay caught, per the existing test below).
+function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로)\s*(?:빠졌|빠짐|감량|뺐|감소)/i.test(t)||/(?:암|통증|질환|염증|당뇨|고혈압)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/삼켜도\s*(?:완전\s*|100\s*%\s*)?(?:안전|괜찮)|질식\s*위험(?:이|가)?\s*없(?!\s*는\s*(?:편|것|거|셈))|알레르기\s*(?:걱정|위험)(?:이|가)?\s*(?:전혀\s*)?없(?!\s*는\s*(?:편|것|거|셈))/.test(t);}
 function voiceProblems(text,{comment=false}={}){const t=normalizeVoice(text),reasons=[];if(!t&&!comment)reasons.push('empty');if(!comment){const lines=t?t.split('\n'):[];if(lines.length>MAX_LINES)reasons.push(`${MAX_LINES}줄 초과`);if(incompleteLineReasons(t).length)reasons.push('미완결 줄바꿈');if(lines.length&&GENERIC_CTA_ENDING.test(lines.slice(-2).join(' ')))reasons.push('뻔한 CTA 마무리');}if(highRiskClaim(t))reasons.push('고위험 효능 주장');return [...new Set(reasons)];}
 function reject(reasons){const error=new Error(`최종 문체 검증 실패: ${reasons.join(',')}`);error.code='CONTENT_STYLE_REJECTED';throw error;}
 function assertVoice(text,options={}){const out=formatVoice(text),reasons=voiceProblems(out,options);if(reasons.length)reject(reasons);return out;}
