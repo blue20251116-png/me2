@@ -48,7 +48,10 @@ const youtubeApi = require('./youtubeApi');
 const videoFrames = require('./videoFrames');
 const frameVision = require('./frameVision');
 
-bootstrapAdmin();
+// Same crash-at-boot class as db.js's PRAGMA/CREATE TABLE guards: bootstrapAdmin() can write
+// (UPDATE/INSERT into users) and ran completely unguarded at module load, one require() further
+// down the same chain those guards protect - on a full disk this crashed the process here instead.
+try { bootstrapAdmin(); } catch (e) { console.error('[Server][INIT] bootstrapAdmin 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message); }
 
 const app = express();
 if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) throw new Error('SESSION_SECRET is required in production');

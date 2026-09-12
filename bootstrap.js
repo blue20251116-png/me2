@@ -36,19 +36,29 @@ const { generateFromThreadsMaterial } = require('./threadsMaterialWriter');
 const { listBenchmarkAccounts, addBenchmarkAccount, addBenchmarkAccountsBulk, deleteBenchmarkAccount, markUsedPost, collectBenchmarkMaterials, collectPostDetails } = require('./benchmarkAccounts');
 try { db.exec(`ALTER TABLE posts ADD COLUMN recipe_comment_text TEXT`); } catch {}
 try { db.exec(`ALTER TABLE posts ADD COLUMN media_items_json TEXT`); } catch {}
-db.exec(`CREATE TABLE IF NOT EXISTS insight_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  post_id INTEGER NOT NULL,
-  account_id INTEGER NOT NULL,
-  views INTEGER DEFAULT 0,
-  likes INTEGER DEFAULT 0,
-  replies INTEGER DEFAULT 0,
-  reposts INTEGER DEFAULT 0,
-  quotes INTEGER DEFAULT 0,
-  captured_at TEXT NOT NULL,
-  UNIQUE(post_id, captured_at)
-)`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_insight_history_account_time ON insight_history(account_id, captured_at)`);
+// REGRESSION (found live, 2026-09-12): same crash-at-boot class of bug just fixed in db.js - these
+// two ran completely unguarded at require-time (require('./server') already succeeds by this
+// point, so db.js's own guard doesn't cover this file). On a full disk, CREATE TABLE/INDEX IF NOT
+// EXISTS can still throw a disk I/O error (SQLite may need to touch a journal file to process the
+// statement even when it ends up a no-op), which crashed the whole process here instead - one
+// step further down the same require chain, after the exact spot the previous fix targeted.
+try {
+  db.exec(`CREATE TABLE IF NOT EXISTS insight_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    views INTEGER DEFAULT 0,
+    likes INTEGER DEFAULT 0,
+    replies INTEGER DEFAULT 0,
+    reposts INTEGER DEFAULT 0,
+    quotes INTEGER DEFAULT 0,
+    captured_at TEXT NOT NULL,
+    UNIQUE(post_id, captured_at)
+  )`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_insight_history_account_time ON insight_history(account_id, captured_at)`);
+} catch (e) {
+  console.error('[Bootstrap][INIT] insight_history 테이블/인덱스 생성 실패 (디스크 문제로 추정) - 계속 부팅합니다:', e.message);
+}
 const uploadsDir = path.join(__dirname, 'db', 'uploads');
 const videoEditLocks=new Set(), threadsImportLocks=new Set(), threadsSearchLocks=new Set();
 function requireOwnedAccount(req,res,next){const accountId=Number(req.query.accountId||req.body?.accountId||req.params?.accountId);if(!accountId)return res.status(400).json({error:'accountId가 필요합니다'});const account=getAccount(accountId);if(!account)return res.status(404).json({error:'존재하지 않는 계정입니다'});if(!req.currentUser||account.user_id!==req.currentUser.id)return res.status(403).json({error:'본인 소유의 계정만 이용할 수 있습니다'});req.account=account;next();}
