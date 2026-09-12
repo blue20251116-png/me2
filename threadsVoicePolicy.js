@@ -75,7 +75,14 @@ function formatVoice(text){return normalizeVoice(text);}
 // prefers ("나았어", "다 나음"). "나아/나은" also mean "better than" in a comparison with no
 // illness involved ("이게 더 나아"), but this whole branch already requires a disease/symptom
 // keyword nearby, so that sense won't spuriously combine with one in practice.
-function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로)\s*(?:빠졌|빠짐|감량|뺐|감소)/i.test(t)||/(?:암|통증|질환|병|염증|당뇨|고혈압)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어짐)/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t);}
+// The shared rule two lines up says "건강·의학·안전·금융처럼... 확정 주장으로 만들지 않는다" (health,
+// medicine, SAFETY, and finance), but until now this function only ever code-enforced the
+// health/medicine and weight-loss cases - "안전" (safety) had no matching branch at all. The new
+// parenting-mom persona (threadsPersonas.js) explicitly tells the model not to make absolute
+// safety/age-appropriateness claims about kids' products ("이거 완전 안전함" 대신 "이 정도면
+// 안심되는 편"), but nothing at the code level backed that up - a synthetic case ("이 젖병 삼켜도
+// 100% 안전해요") sailed through untouched before this branch was added.
+function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로)\s*(?:빠졌|빠짐|감량|뺐|감소)/i.test(t)||/(?:암|통증|질환|병|염증|당뇨|고혈압)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어짐)/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/(?:완전|100\s*%)\s*안전(?:함|해요|하다)?|위험(?:이|은)?\s*전혀\s*없(?:음|어요|다)|삼켜도\s*(?:안전|괜찮)|질식\s*위험\s*없|알레르기\s*(?:걱정|위험)\s*(?:전혀\s*)?없/.test(t);}
 function voiceProblems(text,{comment=false}={}){const t=normalizeVoice(text),reasons=[];if(!t&&!comment)reasons.push('empty');if(!comment){const lines=t?t.split('\n'):[];if(lines.length>MAX_LINES)reasons.push(`${MAX_LINES}줄 초과`);if(incompleteLineReasons(t).length)reasons.push('미완결 줄바꿈');if(lines.length&&GENERIC_CTA_ENDING.test(lines.slice(-2).join(' ')))reasons.push('뻔한 CTA 마무리');}if(highRiskClaim(t))reasons.push('고위험 효능 주장');return [...new Set(reasons)];}
 function reject(reasons){const error=new Error(`최종 문체 검증 실패: ${reasons.join(',')}`);error.code='CONTENT_STYLE_REJECTED';throw error;}
 function assertVoice(text,options={}){const out=formatVoice(text),reasons=voiceProblems(out,options);if(reasons.length)reject(reasons);return out;}

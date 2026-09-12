@@ -277,6 +277,31 @@ test('the unrelated "낫다" comparison sense does not falsely trigger the cure-
   assert.deepEqual(policy.voiceProblems('나아갈 방향을 고민 중'), []);
 });
 
+test('absolute safety claims are caught too - "안전" is named in the shared rule but had no code enforcement', () => {
+  // Regression: the shared rule right above highRiskClaim() says "건강·의학·안전·금융처럼...
+  // 확정 주장으로 만들지 않는다" (health, medicine, SAFETY, and finance), but until now this
+  // function only ever code-enforced the health/medicine and weight-loss branches - "안전"
+  // (safety) had no matching branch at all. The new parenting-mom persona
+  // (threadsPersonas.js) explicitly tells the model not to make absolute safety claims about
+  // kids' products, but nothing at the code level backed that up before this fix.
+  assert.ok(policy.voiceProblems('이 장난감 완전 안전함ㅋㅋ').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이 젖병 삼켜도 100% 안전해요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이 이유식 알레르기 걱정 전혀 없음').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('위험 전혀 없어요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('질식 위험 없는 사이즈').includes('고위험 효능 주장'));
+});
+
+test('the absolute-safety-claim guard does not falsely trigger on ordinary "안전"/"완전"/"전혀" phrases', () => {
+  assert.deepEqual(policy.voiceProblems('이 정도면 안심되는 편'), []);
+  assert.deepEqual(policy.voiceProblems('안전벨트 튼튼함'), []);
+  assert.deepEqual(policy.voiceProblems('안전모 착용하고 탐'), []);
+  assert.deepEqual(policy.voiceProblems('이거 완전 좋음ㅋㅋ'), []);
+  assert.deepEqual(policy.voiceProblems('위험한 느낌은 아닌데'), []);
+  assert.deepEqual(policy.voiceProblems('전혀 다른 느낌이었음'), []);
+  assert.deepEqual(policy.voiceProblems('완전 신기했음'), []);
+  assert.deepEqual(policy.voiceProblems('가격이 완전 착함'), []);
+});
+
 test('source is a creative seed: invented low-risk connective copy is allowed', async () => {
   const text = '처음엔 별거 아닌데\n보다가 계속 보게 됨ㅋㅋ';
   const out = await policy.reviewSourceVoice(text, { sourceText: '금붕어가 먹이를 먹는 영상' }, async () => {
