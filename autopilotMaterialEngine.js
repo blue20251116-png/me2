@@ -1,4 +1,5 @@
 const { normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, reviewSourceVoice } = require('./threadsVoicePolicy');
+const { pickPersona } = require('./threadsPersonas');
 const axios = require('axios');
 const { db, getAccount, getSystemApiSettings } = require('./db');
 const { collectBenchmarkMaterials, collectPostDetails, markUsedPost } = require('./benchmarkAccounts');
@@ -341,10 +342,13 @@ async function repairRecipeComment(accountId,{commentLead,material,analysis,prod
 }
 async function generatePost(accountId,{material,analysis,product,target}){
   const productName=clean(product?.name);
+  const personaText=[analysis.topic,analysis.vision?.soldObject,analysis.vision?.dish,material.sourceText,material.authorReplies].filter(Boolean).join(' ');
+  const persona=pickPersona({mode:analysis.mode,text:personaText});
+  console.log(`[AutopilotV3][PERSONA] picked="${persona.name}"(${persona.id}) mode=${analysis.mode}`);
   const d=await callOpenAI(accountId,
 `너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 아래 문체 정책에 따라 원 소재를 가장 바이럴한 각도로 재구성한다.
 
-${voiceGuide()}
+${voiceGuide(persona.block)}
 
 [레시피]
 - 본문 text는 위 문체 정책대로 가장 강한 후킹 포인트를 중심으로 재구성한다. 다만 재료/조리법 같은 레시피 사실은 원문 근거를 벗어나지 않는다.
@@ -383,7 +387,7 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
   if(analysis.mode==='recipe')text=scrubSecret(text,analysis.secretTerm,productName);
   text=assertVoice(text,{mode:analysis.mode});
   console.log(`[AutopilotV3][SOURCE VOICE v2] text="${text.replace(/\n/g,' / ')}"`);
-  return{text,commentLead};
+  return{text,commentLead,persona:persona.id};
 }
 function localStrongContentMode(material){
   const t=String((material?.sourceText||material?.text||'')+'\n'+(material?.authorReplies||'')).toLowerCase();
@@ -456,11 +460,11 @@ async function buildThreadsFirstAutopilot(accountId,{target}){
       }
       const generated=await generatePost(accountId,{material,analysis:{...analysis,specialStory:Boolean(specialStory)},product:found.product,target});
       markUsedPost(material.url);
-      console.log(`[AutopilotV3][SUCCESS] @${material.username||'-'} product="${found.product.name}" mode=${analysis.mode} specialStory=${Boolean(specialStory)} sourcePreserve=${analysis.mode==='lifestyle'?'OFF':'ON'}`);
+      console.log(`[AutopilotV3][SUCCESS] @${material.username||'-'} product="${found.product.name}" mode=${analysis.mode} persona=${generated.persona} specialStory=${Boolean(specialStory)} sourcePreserve=${analysis.mode==='lifestyle'?'OFF':'ON'}`);
       advanceContentMode(accountId);
       const textOnly=analysis.mode==='lifestyle';
       if(textOnly)console.log('[AutopilotV3][LIFESTYLE TEXT ONLY] source media suppressed');
-      return{text:decodeEscapedNewlines(generated.text),commentLead:decodeEscapedNewlines(generated.commentLead),product:found.product,productSearchTerm:found.searchTerm,mode:analysis.mode,topic:analysis.topic,secretTerm:analysis.secretTerm,specialStory:Boolean(specialStory),sourceUrl:material.url,sourceUsername:material.username||null,sourceText:material.sourceText,authorReplies:material.authorReplies,sourceImages:textOnly?[]:(Array.isArray(material.images)?material.images.filter(Boolean).slice(0,10):[]),sourceVideos:textOnly?[]:(Array.isArray(material.videos)?material.videos.filter(Boolean).slice(0,5):[]),referenceImage:textOnly?null:(material.images?.[0]||null),visionTarget:vision};
+      return{text:decodeEscapedNewlines(generated.text),commentLead:decodeEscapedNewlines(generated.commentLead),product:found.product,productSearchTerm:found.searchTerm,mode:analysis.mode,persona:generated.persona,topic:analysis.topic,secretTerm:analysis.secretTerm,specialStory:Boolean(specialStory),sourceUrl:material.url,sourceUsername:material.username||null,sourceText:material.sourceText,authorReplies:material.authorReplies,sourceImages:textOnly?[]:(Array.isArray(material.images)?material.images.filter(Boolean).slice(0,10):[]),sourceVideos:textOnly?[]:(Array.isArray(material.videos)?material.videos.filter(Boolean).slice(0,5):[]),referenceImage:textOnly?null:(material.images?.[0]||null),visionTarget:vision};
     }catch(e){
       lastError=e;
       console.warn(`[AutopilotV3][TRY FAIL] @${material.username||'-'} ${e.response?.data?.error?.message||e.message} → 다음 소재`);

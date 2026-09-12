@@ -3,6 +3,7 @@ const { getAccount, getSystemApiSettings, getPexelsApiKey, getPixabayApiKey } = 
 const { searchFoodPhotos: searchPexels } = require('./pexelsApi');
 const { searchFoodPhotos: searchPixabay } = require('./pixabayApi');
 const { voiceGuide, assertVoice } = require('./threadsVoicePolicy');
+const { pickPersona } = require('./threadsPersonas');
 
 const FALLBACK_TOPICS = [
   '김치찌개','된장찌개','계란볶음밥','김치볶음밥','비빔국수','제육볶음','두부조림','감자조림',
@@ -205,10 +206,12 @@ async function generateRecipe(accountId, target) {
 
   for (const topic of topics.slice(0, 6)) {
     try {
+      const persona = pickPersona({ mode: 'recipe', text: topic });
+      console.log(`[ContentOnly][Recipe] persona picked="${persona.name}"(${persona.id}) topic="${topic}"`);
       const r = await callOpenAI(accountId,
         `한국 Threads 레시피 에디터다. JSON만 출력한다. 정확한 재료와 계량, 실제 따라할 수 있는 조리 순서 3~6단계를 만든다.
 
-${voiceGuide()}
+${voiceGuide(persona.block)}
 
 [이 도구 전용 규칙]
 - hook은 위 정책에 맞는 짧은 반말 2~4줄로 쓴다.
@@ -234,7 +237,7 @@ JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","am
         imageUrl: img.photos[0].imageUrl,
         extraImageUrl: img.photos[1]?.imageUrl || null,
         imageSourceLabel: `${img.source || 'Stock'}+Vision 요리사진 ${img.photos.length}장`,
-        keyword: dishName, trendNote: '쿠팡 API 없음 · 순수 레시피형', target,
+        keyword: dishName, trendNote: '쿠팡 API 없음 · 순수 레시피형', target, persona: persona.id,
       };
     } catch (e) { console.log(`[ContentOnly][Recipe] 후보 실패 "${topic}": ${e.message}`); }
   }
@@ -242,9 +245,11 @@ JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","am
 }
 
 async function generateDailyStory(accountId, target) {
+  const persona = pickPersona({ mode: 'lifestyle', text: '' });
+  console.log(`[ContentOnly][DailyStory] persona picked="${persona.name}"(${persona.id})`);
   const system = `너는 한국 Threads에서 실제 사람이 툭 쓴 듯한 짧은 일상 공감글을 쓴다. 상품 광고나 구매 유도는 절대 하지 않는다.
 
-${voiceGuide()}
+${voiceGuide(persona.block)}
 
 [이 도구 전용 규칙]
 - 집, 회사, 식사, 정리, 출퇴근, 주말, 잠, 인간관계, 소비습관 같은 평범한 생활 소재 중 하나를 골라 매번 다르게 쓴다.
@@ -254,7 +259,7 @@ ${voiceGuide()}
   text = text.replace(/^["'“”]+|["'“”]+$/g, '').trim();
   if (looksBloggy(text)) text = await humanizeHook(accountId, text, '일상');
   text = assertVoice(text, { mode: 'lifestyle' });
-  return { text, link: null, imageUrl: null, extraImageUrl: null, keyword: '일상', trendNote: '쿠팡 API 없음 · 순수 일상형', target };
+  return { text, link: null, imageUrl: null, extraImageUrl: null, keyword: '일상', trendNote: '쿠팡 API 없음 · 순수 일상형', target, persona: persona.id };
 }
 
 module.exports = { generateRecipe, generateDailyStory, RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText };

@@ -1,4 +1,5 @@
 const { voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('./threadsVoicePolicy');
+const { pickPersona } = require('./threadsPersonas');
 const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 
@@ -41,8 +42,10 @@ async function generateFromThreadsMaterial(accountId, { keyword, sourceText, aut
   const cleanedReplies = sanitizeAuthorReplies(authorReplies);
   const isRecipe = detectRecipe(cleanedSource, cleanedReplies, mode);
   const multimodal = [visualEvidence, imageSummary, videoSummary].filter(Boolean).join('\n').slice(0, 6000);
+  const persona = pickPersona({ mode: isRecipe ? 'recipe' : mode, text: `${keyword || ''} ${cleanedSource} ${cleanedReplies}` });
+  console.log(`[Threads][VIRAL WRITER] persona picked="${persona.name}"(${persona.id}) mode=${isRecipe ? 'recipe' : mode}`);
 
-  const system = `${voiceGuide()}
+  const system = `${voiceGuide(persona.block)}
 [작업]
 - 원문·작성자 추가설명·사진/영상 분석을 하나의 소재로 먼저 이해한다.
 - 가장 바이럴 가능성이 높은 각도 하나를 고른다.
@@ -79,7 +82,7 @@ JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}]}`;
     }
   }
   if (!accepted.length) { const e = new Error('Threads 바이럴 글쓰기 검증을 통과한 후보가 없습니다'); e.code = 'CONTENT_STYLE_REJECTED'; throw e; }
-  return { mode: isRecipe ? 'recipe' : 'product', items: accepted, texts: accepted.map(x => x.text), comments: accepted.map(x => x.comment) };
+  return { mode: isRecipe ? 'recipe' : 'product', persona: persona.id, items: accepted, texts: accepted.map(x => x.text), comments: accepted.map(x => x.comment) };
 }
 
 module.exports = { generateFromThreadsMaterial };

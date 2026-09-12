@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 const { voiceGuide } = require('./threadsVoicePolicy');
+const { pickPersona } = require('./threadsPersonas');
 
 // SaaS 전환 이후 OpenAI는 회원 개별 키가 아니라 운영자가 등록한 공용 키(system_api_settings)를
 // 우선 쓰기로 했는데(아이Image.js와 동일 원칙), 이 파일(aiCaption.js)만 공용키 조회 없이
@@ -55,7 +56,7 @@ function getKoreaContext() {
 // ----------------------------------------------------
 // Threads 글 생성 프롬프트
 // ----------------------------------------------------
-function makeSystemPrompt() {
+function makeSystemPrompt(personaBlock) {
   const { currentDate, currentSeason } = getKoreaContext();
 
   return `
@@ -72,7 +73,7 @@ function makeSystemPrompt() {
 사람이 자기 일상이나 생각을 그냥 올린 글처럼 보이게 하는 것이다.
 
 
-${voiceGuide()}
+${voiceGuide(personaBlock)}
 
 [이 도구 전용 추가 규칙 — 원문 소재가 없는 상품명/가격 기반 캡션 도구다]
 - 원문 소재가 없으므로 제3자 발견담을 지어내지 않는다. "친구가 추천했다", "남편이 사줬다", "회사 동료가 쓴다", "한 달 동안 썼다" 같은 구체적인 사실을 임의로 만들지 말고, "써보니/궁금해서/찜해둠" 같은 1인칭 느낌으로 쓴다.
@@ -276,18 +277,22 @@ ${priceText ? `가격: ${priceText}` : ''}${youtubeContext}
 `.trim();
 
   const { anthropicKey, openaiKey } = resolveModelKeys(account);
+  const persona = pickPersona({ mode: 'product', text: `${productName || ''} ${youtubeSource?.title || ''}` });
+  console.log(`[Caption] persona picked="${persona.name}"(${persona.id}) productName="${productName}"`);
 
   if (anthropicKey) {
     return generateWithAnthropic(
       anthropicKey,
-      userMessage
+      userMessage,
+      persona.block
     );
   }
 
   if (openaiKey) {
     return generateWithOpenAI(
       openaiKey,
-      userMessage
+      userMessage,
+      persona.block
     );
   }
 
@@ -345,14 +350,14 @@ function splitVariants(text) {
 // ----------------------------------------------------
 // Anthropic
 // ----------------------------------------------------
-async function generateWithAnthropic(apiKey, userMessage) {
+async function generateWithAnthropic(apiKey, userMessage, personaBlock) {
   const res = await axios.post(
     'https://api.anthropic.com/v1/messages',
     {
       model: 'claude-sonnet-4-6',
       max_tokens: 1200,
       temperature: 0.9,
-      system: makeSystemPrompt(),
+      system: makeSystemPrompt(personaBlock),
       messages: [
         {
           role: 'user',
@@ -384,7 +389,7 @@ async function generateWithAnthropic(apiKey, userMessage) {
 // ----------------------------------------------------
 // OpenAI
 // ----------------------------------------------------
-async function generateWithOpenAI(apiKey, userMessage) {
+async function generateWithOpenAI(apiKey, userMessage, personaBlock) {
   const res = await axios.post(
     'https://api.openai.com/v1/chat/completions',
     {
@@ -394,7 +399,7 @@ async function generateWithOpenAI(apiKey, userMessage) {
       messages: [
         {
           role: 'system',
-          content: makeSystemPrompt(),
+          content: makeSystemPrompt(personaBlock),
         },
         {
           role: 'user',
