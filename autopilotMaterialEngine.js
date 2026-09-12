@@ -307,9 +307,26 @@ async function findProduct(accountId,terms,identityTerm){
   if(fallback){console.warn(`[AutopilotV3][COUPANG MATCH FALLBACK] no confident identity match for any search term → using top result product="${clean(fallback.product?.name)}" searchTerm="${fallback.searchTerm}"`);return fallback;}
   return{product:null,searchTerm:null};
 }
+// REGRESSION (found via synthetic testing, hourly review): plain split/join replaced the secret
+// term wherever it appeared as a bare substring, including inside a completely different,
+// unrelated compound word ("소금" inside "소금물" -> "비밀 재료물", "마늘" inside "마늘빵" ->
+// "비밀 재료빵") - producing broken, nonsensical Korean in the published post body. A Hangul-aware
+// boundary check now only replaces the term when it stands as its own word (optionally followed
+// by a grammatical particle, which is common and correct: "소금을" -> "비밀 재료를"). Since "비밀
+// 재료" always ends in a vowel (료), a particle carried over from a consonant-ending secret term
+// would itself be grammatically wrong (을/이/은/과 need 를/가/는/와 after a vowel), so the matched
+// particle is remapped rather than copied verbatim.
+const SCRUB_PARTICLE_ALT='이랑|은|는|이|가|을|를|과|와|도|만|의|에|로|나|랑|야';
+const SCRUB_PARTICLE_REMAP={'을':'를','이':'가','은':'는','과':'와','이랑':'랑'};
 function scrubSecret(text,secret,product){
   let out=String(text||'').trim();
-  for(const v of[secret,product]){const t=clean(v);if(t.length>=2)out=out.split(t).join('비밀 재료');}
+  for(const v of[secret,product]){
+    const t=clean(v);
+    if(t.length<2)continue;
+    const escaped=t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const re=new RegExp(`(?<![가-힣])${escaped}(${SCRUB_PARTICLE_ALT})?(?=[^가-힣]|$)`,'g');
+    out=out.replace(re,(m,particle)=>'비밀 재료'+(particle?(SCRUB_PARTICLE_REMAP[particle]||particle):''));
+  }
   return out;
 }
 function hasIngredientHeading(text){return /(?:🥘|✅|▪|■)?\s*재료\s*[:：]?/i.test(String(text||''));}
@@ -474,5 +491,5 @@ async function buildThreadsFirstAutopilot(accountId,{target}){
   }
   throw new Error(`쇼핑 소재 ${materials.length}개를 검사했지만 발행 가능한 상품 연결에 실패했습니다${lastError?`: ${lastError.message}`:''}`);
 }
-module.exports={buildThreadsFirstAutopilot};
+module.exports={buildThreadsFirstAutopilot,scrubSecret};
 
