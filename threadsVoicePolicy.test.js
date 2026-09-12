@@ -8,7 +8,6 @@ const count = s => Array.from(String(s)).length;
 function assertThreadsShape(text) {
   const lines = String(text).split('\n');
   assert.ok(lines.length <= policy.MAX_LINES, `too many lines: ${lines.length}`);
-  for (const line of lines) assert.ok(count(line) <= policy.MAX_LINE_CHARS, `line too long (${count(line)}): ${line}`);
 }
 
 test('persona is a Threads viral writer, not a source-faithful summarizer', () => {
@@ -19,26 +18,36 @@ test('persona is a Threads viral writer, not a source-faithful summarizer', () =
   assert.doesNotMatch(guide, /원문 90%|새 사건을 덧붙였는지|지어내지 않는다/);
 });
 
-test('hard format is a line-count ceiling, not a per-line character target', () => {
+test('hard format is a line-count ceiling - there is no per-line character limit at all', () => {
   const valid = '이거 처음 봤는데\n생각보다 훨씬 신기함\n마지막이 진짜 포인트';
   assertThreadsShape(policy.assertVoice(valid));
 
-  // A real, complete Korean sentence can run well past what used to be a hard per-line cap —
-  // this must be accepted whole, not rejected or force-split.
+  // A real, complete Korean sentence can run arbitrarily long - it must be accepted whole, never
+  // rejected or force-split just for length. A fixed per-line character cap used to reject any
+  // line over 40 chars regardless of whether it was one complete sentence, directly contradicting
+  // this file's own rule ("줄은 글자수가 아니라 완결된 문장·절 단위로 나눈다"). Length alone is no
+  // longer a rejection reason - only whether a line is a complete sentence/clause matters.
   const naturalLongLine = '사촌오빠가 밥먹다 말고 물고기 밥주러 가야된다고 함';
   assert.ok(count(naturalLongLine) > 24, 'fixture must exceed the old low cap to be a meaningful check');
-  assert.ok(count(naturalLongLine) <= policy.MAX_LINE_CHARS);
   assert.deepEqual(policy.voiceProblems(naturalLongLine), []);
+
+  const wayLongerThanTheOldCap = '이 세제 하나 사고 나서부터는 진짜 매번 손빨래하던 얼룩진 옷들이 거짓말처럼 깨끗해져서 신세계임';
+  assert.ok(count(wayLongerThanTheOldCap) > 40, 'fixture must exceed the old removed cap to be a meaningful check');
+  assert.deepEqual(policy.voiceProblems(wayLongerThanTheOldCap), []);
+  assert.equal(policy.assertVoice(wayLongerThanTheOldCap), wayLongerThanTheOldCap);
 
   const tooManyLines = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}줄`).join('\n');
   assert.ok(policy.voiceProblems(tooManyLines).includes(`${policy.MAX_LINES}줄 초과`));
   assert.throws(() => policy.assertVoice(tooManyLines), { code: 'CONTENT_STYLE_REJECTED' });
 
-  const wayTooLong = '가'.repeat(policy.MAX_LINE_CHARS + 1);
-  assert.ok(policy.voiceProblems(wayTooLong).includes(`${policy.MAX_LINE_CHARS}자 초과`));
-  assert.throws(() => policy.assertVoice(wayTooLong), { code: 'CONTENT_STYLE_REJECTED' });
-
   assert.equal(count('가나다😀'), 4, 'emoji must count as one Unicode code point');
+});
+
+test('formatVoice never truncates or hard-wraps generated copy, however long a single line is', () => {
+  const long = '가'.repeat(60);
+  assert.equal(policy.formatVoice(long), long);
+  assert.deepEqual(policy.voiceProblems(long), []);
+  assert.equal(policy.assertVoice(long), long);
 });
 
 test('blank-line paragraph breaks are allowed and count toward the line boundary', () => {
@@ -138,16 +147,13 @@ test('bound nouns with a trailing particle (만큼이나, 정도로) are still c
   for (const text of broken) assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
 });
 
-test('formatter does not silently truncate or hard-wrap generated copy', () => {
-  const long = '가'.repeat(45);
-  assert.equal(policy.formatVoice(long), long);
-  assert.throws(() => policy.assertVoice(long), { code: 'CONTENT_STYLE_REJECTED' });
-});
-
-test('runtime review repairs an overlong line instead of discarding the material', async () => {
+test('runtime review repairs a too-many-lines post instead of discarding the material', async () => {
+  // Fixture updated: an overlong single line used to be a rejection reason on its own and was
+  // this test's trigger, but length alone no longer gates rejection - too-many-lines still does,
+  // so that's what exercises the same repair path here now.
   let calls = 0;
-  const original = '이 뒤집개 하나 사고 나서부터는 프라이팬 요리가 진짜 몇 배로 편해졌음ㅋㅋ';
-  assert.ok(count(original) > policy.MAX_LINE_CHARS, 'fixture must exceed the cap to exercise the repair path');
+  const original = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번째 줄`).join('\n');
+  assert.ok(policy.voiceProblems(original).includes(`${policy.MAX_LINES}줄 초과`), 'fixture must actually trigger a rejection to exercise the repair path');
   const out = await policy.reviewSourceVoice(original, { mode: 'product', sourceText: '집게형 실리콘 뒤집개 영상' }, async () => {
     calls++;
     return { text: '집게랑 뒤집개가 합쳐짐\n요리할 때 진짜 편함' };
@@ -159,9 +165,10 @@ test('runtime review repairs an overlong line instead of discarding the material
 
 test('runtime review retries one more time when first format repair still fails', async () => {
   let calls = 0;
-  const out = await policy.reviewSourceVoice('가'.repeat(45), { mode: 'product' }, async () => {
+  const tooManyLines = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번째 줄`).join('\n');
+  const out = await policy.reviewSourceVoice(tooManyLines, { mode: 'product' }, async () => {
     calls++;
-    if (calls === 1) return { text: '나'.repeat(45) };
+    if (calls === 1) return { text: Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번`).join('\n') };
     return { text: '이건 진짜 신기함\n써보면 바로 이해됨' };
   });
   assert.equal(calls, 2);
@@ -170,10 +177,11 @@ test('runtime review retries one more time when first format repair still fails'
 
 test('runtime review is bounded and rejects after two failed repairs', async () => {
   let calls = 0;
+  const tooManyLines = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번째 줄`).join('\n');
   await assert.rejects(
-    policy.reviewSourceVoice('가'.repeat(45), { mode: 'product' }, async () => {
+    policy.reviewSourceVoice(tooManyLines, { mode: 'product' }, async () => {
       calls++;
-      return { text: '나'.repeat(45) };
+      return { text: Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번`).join('\n') };
     }),
     { code: 'CONTENT_STYLE_REJECTED' }
   );
