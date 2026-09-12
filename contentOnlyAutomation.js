@@ -3,7 +3,8 @@ const { getAccount, getSystemApiSettings, getPexelsApiKey, getPixabayApiKey } = 
 const { searchFoodPhotos: searchPexels } = require('./pexelsApi');
 const { searchFoodPhotos: searchPixabay } = require('./pixabayApi');
 const { voiceGuide, assertVoice } = require('./threadsVoicePolicy');
-const { pickPersona } = require('./threadsPersonas');
+const { pickPersona, PERSONAS } = require('./threadsPersonas');
+const REACTION_PERSONA = PERSONAS.find(p => p.id === 'reaction');
 
 const FALLBACK_TOPICS = [
   '김치찌개','된장찌개','계란볶음밥','김치볶음밥','비빔국수','제육볶음','두부조림','감자조림',
@@ -206,8 +207,16 @@ async function generateRecipe(accountId, target) {
 
   for (const topic of topics.slice(0, 6)) {
     try {
-      const persona = pickPersona({ mode: 'recipe', text: topic });
-      console.log(`[ContentOnly][Recipe] persona picked="${persona.name}"(${persona.id}) topic="${topic}"`);
+      // Regression: pickPersona({mode:'recipe'}) can return housewife-recipe, whose entire
+      // structure is "build up to a hidden secret sauce/ingredient, reveal it in the comment" -
+      // that only makes sense when there's an actual affiliate secret ingredient to hide, like
+      // autopilotMaterialEngine.js's Coupang-linked recipes have (analysis.secretTerm). This
+      // no-Coupang-key path has no such thing - its own rule right below says "상품/구매/광고/
+      // 제휴 이야기는 절대 넣지 않는다", and recipeCommentText is just a plain, fully-disclosed
+      // ingredient/steps list with nothing marked as "the secret one". Picking housewife-recipe
+      // here would write a hook promising a reveal the comment can never deliver on, so this
+      // path always uses the base reaction persona instead of rotating through the recipe pool.
+      const persona = REACTION_PERSONA;
       const r = await callOpenAI(accountId,
         `한국 Threads 레시피 에디터다. JSON만 출력한다. 정확한 재료와 계량, 실제 따라할 수 있는 조리 순서 3~6단계를 만든다.
 

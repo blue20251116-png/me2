@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText } = require('./contentOnlyAutomation');
 
 test('recipe comment teaser is not a single hardcoded phrase repeated every time', () => {
@@ -44,4 +45,23 @@ test('buildRecipeText still returns the combined hook+teaser text for an ordinar
   const text = buildRecipeText('이 김치찌개 국물 미쳤음ㅋㅋ', '재료랑 만드는 순서는 댓글에 적어둘게.');
   assert.match(text, /김치찌개 국물 미쳤음/);
   assert.match(text, /재료랑 만드는 순서는 댓글에 적어둘게\./);
+});
+
+test('generateRecipe never rotates into the housewife-recipe persona - it has no secret ingredient to reveal', () => {
+  // Regression: pickPersona({mode:'recipe'}) can return housewife-recipe, whose whole structure
+  // is "build up to a hidden secret sauce/ingredient, reveal it in the comment" - that only makes
+  // sense when there's a real affiliate secret ingredient to hide, like
+  // autopilotMaterialEngine.js's Coupang-linked recipes have. This no-Coupang-key path's own rule
+  // says "상품/구매/광고/제휴 이야기는 절대 넣지 않는다", and its recipeCommentText is just a plain,
+  // fully-disclosed ingredient/steps list with nothing marked as "the secret one" - so picking
+  // housewife-recipe here would write a hook promising a reveal the comment can never deliver.
+  // A full functional test would need to mock callOpenAI/pickPhotos network calls, so this checks
+  // the source directly for the fix: the recipe-generation loop must use the reaction persona
+  // unconditionally, not pickPersona's recipe-category rotation.
+  const src = fs.readFileSync(require.resolve('./contentOnlyAutomation'), 'utf8');
+  const loopStart = src.indexOf('for (const topic of topics.slice(0, 6))');
+  const loopBody = src.slice(loopStart, src.indexOf('generateDailyStory'));
+  assert.ok(loopStart >= 0, 'recipe generation loop not found');
+  assert.match(loopBody, /const persona\s*=\s*REACTION_PERSONA/);
+  assert.doesNotMatch(loopBody, /const persona\s*=\s*pickPersona\(/, 'the recipe loop must not rotate through pickPersona (would risk housewife-recipe)');
 });
