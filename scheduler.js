@@ -47,7 +47,16 @@ function buildDoubleLinkComment(account,prefix,link,maxLength=450){
   const l=extractFirstHttpUrl(link);
   if(!l)throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');
   const disclosure=isCoupangLink(l)?DEFAULT_COUPANG_DISCLOSURE:'';
-  const tail=[l,l,disclosure].filter(Boolean).join('\n\n');
+  // Regression: this used to repeat the exact same URL string twice ([l, l, disclosure]) to make
+  // Threads see "2 URLs" and skip its single-link auto-preview card - an independently-written
+  // duplicate of the same idea threadsApi.js's applyCoupangReplyPreviewGuard() already implements
+  // with a differentiated #fragment variant instead of a literal repeat. Two identical copies of
+  // the same link may well still read as "one link" to Threads' crawler (which is presumably why
+  // the preview kept showing up), so this now uses the same fragment-variant technique instead -
+  // keeping the exact same length budget (still 2 URL-worth of space reserved in `cap`), only
+  // changing what the second URL string looks like.
+  const alternate=l.includes('#')?`${l}preview2`:`${l}#preview2`;
+  const tail=[l,alternate,disclosure].filter(Boolean).join('\n\n');
   if(tail.length>cap)throw new Error('쿠팡 링크 자체가 너무 길어 댓글을 만들 수 없습니다: '+tail.length+'자');
   const available=Math.max(0,cap-tail.length-2);
   const safePrefix=sanitizeCommentPrefix(prefix);
@@ -96,5 +105,5 @@ function classifyCoupangUrl(raw){try{const u=new URL(String(raw||'').trim());con
 async function makeAffiliateLink(account,result){const raw=String(result?.product?.url||'').trim();if(!raw)throw new Error('쿠팡 상품 URL이 비어 있어 자동발행을 중단했습니다');const info=classifyCoupangUrl(raw);if(!info.valid||!info.plainCoupang)throw new Error(`쿠팡 상품 URL 형식이 올바르지 않습니다: ${raw.slice(0,120)}`);if(info.alreadyAffiliate){console.log(`[Coupang][LINK] 이미 파트너스 링크라 딥링크 변환 생략 host=${info.host}`);return raw;}try{const links=await coupangApi.createDeeplink(account.id,[raw]);const first=Array.isArray(links)?links[0]:null;const affiliate=String(first?.shortenUrl||first?.landingUrl||first?.originalUrl||'').trim();if(!affiliate)throw new Error('쿠팡 파트너스 링크 생성 결과가 비어 있습니다');console.log(`[Coupang][LINK] 일반 상품 URL → 딥링크 변환 성공`);return affiliate;}catch(err){const msg=String(err?.message||err?.response?.data?.rMessage||'');if(/url convert failed/i.test(msg)){console.warn(`[Coupang][LINK] 딥링크 재변환 거부 → 검색 API productUrl 그대로 사용`);return raw;}throw err;}}
 async function runAutopilotOnce(account,scheduledAt=null){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target,scheduledAt);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=await chooseSourceMedia(result);saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead,scheduledAt});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V15 MATERIAL-MIXED-MEDIA] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
 function startAutopilotJob(){const nextRunAt=new Map();cron.schedule('* * * * *',async()=>{const now=Date.now();for(const s of listAllAccountsForSystem()){const account=getAccount(s.id);if(!account.autopilot_enabled){nextRunAt.delete(account.id);continue;}if(hasCoupangKeys(account)){const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown)continue;}const due=nextRunAt.get(account.id)||0;if(now<due)continue;nextRunAt.set(account.id,now+randomIntervalMinutes()*60*1000);try{await runAutopilotOnce(account);}catch(err){if(coupangApi.isRateLimitError?.(err)){console.error(`[완전자동화 중단][Coupang rate limit] account #${account.id}: ${err.message}`);continue;}console.error(`[완전자동화 실패] account #${account.id}:`,err.response?.data||err.message);}}});}
-module.exports={startPublishJob,startInsightsJob,startAutopilotJob,runAutopilotOnce};
+module.exports={startPublishJob,startInsightsJob,startAutopilotJob,runAutopilotOnce,buildDoubleLinkComment};
 
