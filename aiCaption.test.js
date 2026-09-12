@@ -35,3 +35,24 @@ test('makeSystemPrompt still works with no persona argument (default reaction pe
   assert.ok(prompt.includes('[캐릭터 강도'));
   assert.ok(prompt.includes('[좋은 문체 예시]'));
 });
+
+// Found via review: threadsPersonas.js's curiosity block explicitly allows deferring the
+// identity reveal to a comment ("아예 댓글로 넘긴다", with a worked example ending "정체
+// 궁금하면 댓글에서 확인") - but this tool's own rule two lines above bans exactly that shape of
+// phrase ("궁금하면 댓글" 같은 유도 문구). aiCaption.js's generateCaption() only returns text
+// variants with no comment field at all, so a caption that defers to a comment would be a promise
+// this tool can never keep. A model given both instructions could reasonably pick either one - this
+// locks in the added clarifying line that resolves the conflict by requiring the "reveal within
+// the post" branch instead, for this tool specifically (the shared curiosity persona text itself
+// is untouched, since the comment-defer option IS valid for tools that post a real follow-up
+// comment, like threadsMaterialWriter.js).
+test('makeSystemPrompt resolves the curiosity persona\'s comment-defer option against this tool\'s no-comment-inducing-phrase rule', () => {
+  const curiosity = PERSONAS.find(p => p.id === 'curiosity');
+  const prompt = makeSystemPrompt(curiosity.block);
+
+  const bannedPhraseRuleIndex = prompt.indexOf('궁금하면 댓글');
+  const resolutionNoteIndex = prompt.indexOf('본문 후반부에 정체를 밝히는');
+
+  assert.ok(bannedPhraseRuleIndex >= 0, 'the banned comment-inducing phrase rule must be present');
+  assert.ok(resolutionNoteIndex >= 0, 'a note resolving the conflict with the curiosity persona must be present');
+});
