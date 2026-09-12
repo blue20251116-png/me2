@@ -50,10 +50,33 @@ function extFromContentType(type, rawUrl) {
   return '.jpg';
 }
 
+// REGRESSION (found via review, tied to today's persistent-volume-full incident): every filename
+// was `Date.now()-random`, so cacheImage() was never idempotent for the same source URL. posts.image_url
+// in the DB always stays the ORIGINAL external Threads/Instagram URL (nothing ever writes the
+// cached local URL back to it - confirmed no UPDATE ... SET image_url exists anywhere), so every
+// retry of a post whose publish failed for an unrelated reason (a transient Threads API error,
+// a network blip) re-downloaded and re-wrote a brand new duplicate copy of the same image to the
+// persistent volume, on top of the still-unused copy from the previous attempt. Repeated retries
+// compound this into real, unbounded disk growth.
+function cacheFilePrefix(url) {
+  return `threads-img-${crypto.createHash('sha256').update(url).digest('hex').slice(0, 24)}`;
+}
+function findCachedFile(prefix) {
+  try { return fs.readdirSync(uploadsDir).find(f => f.startsWith(prefix)) || null; }
+  catch { return null; }
+}
+
 async function cacheImage(rawUrl) {
   const url = String(rawUrl || '').trim();
   if (!/^https?:\/\//i.test(url)) throw new Error(`이미지 URL 형식이 올바르지 않습니다: ${url.slice(0, 120)}`);
   if (isLocalUploadUrl(url)) return url;
+
+  const prefix = cacheFilePrefix(url);
+  const cachedFile = findCachedFile(prefix);
+  if (cachedFile) {
+    console.log(`[Autopilot][IMAGE CACHE] 재사용(이미 캐시됨) file=${cachedFile}`);
+    return publicUploadUrl(cachedFile);
+  }
 
   const response = await axios.get(url, {
     responseType: 'arraybuffer',
@@ -77,9 +100,16 @@ async function cacheImage(rawUrl) {
   if (body.length > MAX_IMAGE_BYTES) throw new Error(`이미지가 ${MAX_IMAGE_BYTES / 1024 / 1024}MB를 초과합니다.`);
 
   const ext = extFromContentType(type, url);
-  const filename = `threads-img-${Date.now()}-${crypto.randomBytes(3).toString('hex')}${ext}`;
+  const filename = `${prefix}${ext}`;
   const filepath = path.join(uploadsDir, filename);
-  fs.writeFileSync(filepath, body, { flag: 'wx' });
+  try {
+    fs.writeFileSync(filepath, body, { flag: 'wx' });
+  } catch (e) {
+    // Two concurrent caches of the exact same source URL raced here - the file this call would
+    // have written already exists (written by the other caller), so reuse it rather than fail.
+    if (e.code !== 'EEXIST') throw e;
+    console.log(`[Autopilot][IMAGE CACHE] 동시 캐시 경합 → 기존 파일 재사용 file=${filename}`);
+  }
   const localUrl = publicUploadUrl(filename);
   console.log(`[Autopilot][IMAGE CACHE] 성공 bytes=${body.length} sourceHost=${new URL(url).hostname} file=${filename}`);
   return localUrl;
@@ -163,3 +193,5 @@ threadsApi.publishMediaItemsPost = async function patchedPublishMediaItemsPost(a
 };
 
 console.log('[Threads][IMAGE CACHE PATCH] 외부 Threads/Instagram 이미지를 Railway uploads에 로컬 캐시 후 발행');
+
+module.exports = { cacheFilePrefix, findCachedFile, cacheImage, uploadsDir };
