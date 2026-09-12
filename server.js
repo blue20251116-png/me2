@@ -54,9 +54,17 @@ const app = express();
 if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) throw new Error('SESSION_SECRET is required in production');
 app.use(express.json());
 app.set('trust proxy', 1); // Railway 등 프록시 뒤에서 세션 쿠키가 정상 동작하도록
+// Railway's platform-level healthcheck gates ALL traffic to this deployment: while this returns
+// non-2xx, Railway refuses to route anything at all (not even the emergency-cleanup route below),
+// so this must never fail for a reason a request to this very app can't fix on its own. It used
+// to fail (503) whenever SQLite was unreachable (e.g. a full disk) - which is exactly the
+// situation the emergency-cleanup route below exists to recover from, so the old healthz was
+// blocking access to its own fix. This now always returns 200 and just reports dbOk for
+// diagnostics; DB-dependent routes still fail on their own if the DB is actually down.
 app.get('/healthz', (req,res)=>{
-  try { db.prepare('SELECT 1').get(); res.json({ok:true}); }
-  catch { res.status(503).json({ok:false}); }
+  let dbOk = true;
+  try { db.prepare('SELECT 1').get(); } catch { dbOk = false; }
+  res.json({ ok: true, dbOk });
 });
 
 // 비상 디스크 정리: 디스크가 가득 차면 SQLite(DB/세션) 전체가 죽어서 로그인조차 안 되므로,
