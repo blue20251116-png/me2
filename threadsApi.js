@@ -49,10 +49,18 @@ async function __me2NormalizeCarouselVideoUrl(rawUrl){
 // 실제 클릭 링크(https://.../abc123.)가 깨진 채로 발행되는 부작용이 있었다. applyCoupangReplyPreviewGuard가
 // 이 텍스트에서 URL을 다시 정규식으로 뽑아 쓰기 때문에, 마침표 제거보다 먼저 모든 URL의 끝에 붙은
 // .,; 를 떼어낸다 (scheduler.js의 extractFirstHttpUrl이 이미 쓰는 것과 같은 방식).
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): the sentence-final-period
+// strip below required whitespace or end-of-string right after the period, but real casual Korean
+// social posts very often tack a reaction straight onto the period with no space at all
+// ("실화냐.ㅋㅋ", "대박.😂") - exactly the "완벽하게 다듬어진 문어체" formal-period artifact this
+// whole function exists to remove, silently left untouched because of what followed it rather than
+// what preceded it. Widened the lookahead to also accept an emoji or a run of casual
+// laughing/crying jamo/punctuation right after the period, without touching the decimal-point
+// protection (still governed by the unrelated prefix check just before the period).
 function sanitizePublishedThreadsText(value){
   return String(value||'')
     .replace(/https?:\/\/\S+/gi,m=>m.replace(/[.,;]+$/,''))
-    .replace(/(^|[^.\d])\.(?!\.)(?=\s|$)/g,'$1')
+    .replace(/(^|[^.\d])\.(?!\.)(?=\s|$|\p{Extended_Pictographic}|[ㅋㅎㅜㅠ~!?])/gu,'$1')
     .replace(/[ \t]+\n/g,'\n')
     .trim();
 }

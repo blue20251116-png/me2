@@ -27,6 +27,25 @@ test('sanitizePublishedThreadsText trims trailing whitespace-newline runs', () =
   assert.equal(sanitizePublishedThreadsText('와 대박.\n진짜임'), '와 대박\n진짜임');
 });
 
+test('sanitizePublishedThreadsText strips a sentence period stuck directly to a trailing emoji or reaction, no space', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): the strip required
+  // whitespace or end-of-string right after the period, but real casual posts very often tack a
+  // reaction straight onto it with no space at all ("실화냐.ㅋㅋ", "대박.😂") - exactly the formal
+  // sentence-final period this function exists to remove, left untouched purely because of what
+  // followed it.
+  assert.equal(sanitizePublishedThreadsText('이거 완전 대박.😂'), '이거 완전 대박😂');
+  assert.equal(sanitizePublishedThreadsText('진짜 신기함.🤯'), '진짜 신기함🤯');
+  assert.equal(sanitizePublishedThreadsText('이 조합 실화냐.ㅋㅋ'), '이 조합 실화냐ㅋㅋ');
+  assert.equal(sanitizePublishedThreadsText('가성비 최고.👍'), '가성비 최고👍');
+  assert.equal(sanitizePublishedThreadsText('완전 웃김.ㅎㅎ'), '완전 웃김ㅎㅎ');
+  assert.equal(sanitizePublishedThreadsText('이거 실화냐.!'), '이거 실화냐!');
+});
+
+test('the emoji/reaction lookahead extension still preserves decimal points and ellipses right before a reaction', () => {
+  assert.equal(sanitizePublishedThreadsText('가격 1.5만원인데.ㅋㅋ'), '가격 1.5만원인데ㅋㅋ');
+  assert.equal(sanitizePublishedThreadsText('완전 신기함...😂'), '완전 신기함...😂');
+});
+
 test('sanitizePublishedThreadsText strips a trailing period stuck to a URL ending in a digit', () => {
   // REGRESSION found via synthetic testing: the sentence-period stripper above deliberately
   // skips periods preceded by a digit (to protect decimal points like "1.5"), but affiliate
