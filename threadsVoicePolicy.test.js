@@ -327,6 +327,17 @@ test('the ad-CTA guard catches the plain polite "-요" ending after 봐, not jus
   }
 });
 
+test('the ad-CTA guard catches the formal imperative register (-세요/-시길/-십시오), not just casual -봐', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): only the casual 아/어 봐
+  // register was covered - the formal imperative register of the exact same recommend-and-try CTA
+  // ("다들 한번 써보세요", "너도 한번 드셔보세요", "당신도 꼭 사용해보세요~", "너도 함 써보시길") slipped
+  // through completely untouched simply because it uses -세요/-시길/-십시오 instead of -봐/-보길.
+  for (const variant of ['다들 한번 써보세요', '너도 한번 드셔보세요', '당신도 꼭 사용해보세요~', '너도 함 써보시길']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
 test('the generalized ad-CTA guard does not flag ordinary sentences that merely contain "너도"', () => {
   for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬', '다들 이렇게 사나요?', '다들 힘내자']) {
     const post = '완전 신기했음\n' + safe;

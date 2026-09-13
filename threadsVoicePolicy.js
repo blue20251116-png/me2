@@ -41,7 +41,12 @@ const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 // "-요" straight after 봐 ("다들 한번 써봐요~", "너도 한번 먹어봐요") is at least as common as the
 // bare "봐" this guard already caught, and is the exact same formulaic recommend CTA - it just
 // slipped through because "요" wasn't one of the recognized optional suffixes after 봐/보길.
-const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보길|봐)(?:요|\s*바랍니다|\s*바래(?:요)?|\s*바람)?[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): only the casual 아/어 봐
+// register (봐/봐요/보길) was covered - the formal imperative register of the exact same
+// recommend-and-try CTA ("다들 한번 써보세요", "너도 한번 드셔보세요", "당신도 꼭 사용해보세요~",
+// "너도 함 써보시길") slipped through completely untouched simply because it uses -세요/-시길/
+// -십시오 instead of -봐/-봐요/-보길 for the same verb ending.
+const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보십시오|보시길|보세요|봐요|보길|봐)(?:\s*바랍니다|\s*바래(?:요)?|\s*바람)?[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
 
 function normalizeVoice(text) {
   return String(text || '').replace(/\r/g, '').replace(/\\n/g, '\n').split('\n').map(line => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
