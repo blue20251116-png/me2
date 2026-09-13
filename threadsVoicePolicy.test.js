@@ -251,6 +251,23 @@ test('the ad-CTA guard catches the same formulaic CTA under other reader-address
   }
 });
 
+test('the ad-CTA guard catches "~보길 바람/바래요/바랍니다" - the same CTA with a wish-verb tacked on', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "보길"/"봐" had to be the
+  // literal last word before the guard fired - "너희도 한번 써보길 바람" slipped through completely
+  // untouched simply because a wish-verb ("바람"/"바래요"/"바랍니다") came after "보길", even though
+  // it is the exact same formulaic recommend-and-hope CTA shape.
+  for (const variant of ['너희도 한번 써보길 바람', '너도 한번 해보길 바람', '다들 써보길 바래요', '당신도 한번 도전해보길 바랍니다']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
+test('the wish-verb CTA extension does not flag ordinary well-wishes that do not recommend trying the product', () => {
+  assert.deepEqual(policy.voiceProblems('이거 완전 신세계였음\n다들 좋아할 듯').filter(r => r === '뻔한 CTA 마무리'), []);
+  assert.deepEqual(policy.voiceProblems('요즘 다들 힘들텐데\n너도 좋아하는 스타일이길 바람').filter(r => r === '뻔한 CTA 마무리'), []);
+  assert.deepEqual(policy.voiceProblems('날씨 추운데\n다들 건강 챙기길 바람').filter(r => r === '뻔한 CTA 마무리'), []);
+});
+
 test('the generalized ad-CTA guard does not flag ordinary sentences that merely contain "너도"', () => {
   for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬', '다들 이렇게 사나요?', '다들 힘내자']) {
     const post = '완전 신기했음\n' + safe;

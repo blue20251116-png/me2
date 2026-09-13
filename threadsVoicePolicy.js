@@ -32,7 +32,12 @@ const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 // literal "너도" was matched, so a model avoiding just that one word ("너희도 써봐", "당신도
 // 써보길", "다들 써봐") could reproduce the exact same formulaic CTA shape untouched. These are
 // the same banned pattern under a different address form, not a different, legitimate ending.
-const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보길|봐)[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "보길"/"봐" had to be the
+// literal last word before the guard fires, but "~해보길 바람"/"~써보길 바래요"/"~해보길 바랍니다"
+// (tacking a wish-verb onto the recommendation) is at least as common a way to close this exact
+// formulaic CTA - "너희도 한번 써보길 바람" slipped through completely untouched simply because
+// "바람" came after "보길", not because it's a different, legitimate ending.
+const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보길|봐)(?:\s*바랍니다|\s*바래(?:요)?|\s*바람)?[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
 
 function normalizeVoice(text) {
   return String(text || '').replace(/\r/g, '').replace(/\\n/g, '\n').split('\n').map(line => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
