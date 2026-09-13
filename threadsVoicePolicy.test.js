@@ -90,6 +90,22 @@ test('connector-only guard does not flag words that can stand alone as a complet
   assert.deepEqual(policy.incompleteLineReasons('가는거 맞지\n그럼\n같이 준비하자'), []);
 });
 
+test('connector-only guard catches "그런데"/"그러니깐", the same words as 근데/그니까 just a different register or spelling', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "그런데" is the exact
+  // same word as "근데" (only more formal), and "그러니깐" is just a third common spelling of
+  // "그니까"/"그러니까" - both already in this list - but neither variant was itself listed, so a
+  // bare line consisting only of one of them went completely unflagged even though it needs a
+  // following clause exactly like its already-covered counterpart does.
+  const { repairConnectorOnlyBreaks } = require('./threadsVoiceLocalRepair');
+  const broken = ['그런데\n생각보다 비쌈', '그러니깐\n결국 산 거임'];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
 test('a bound-noun exclamation ("토할" / "뻔!") split across lines is caught and repaired, not shipped', () => {
   const broken = '올라오고... 진짜 토할\n뻔! 근데 이 세제';
   assert.ok(policy.incompleteLineReasons(broken).length > 0, 'must flag the mid-phrase split');

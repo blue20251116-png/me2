@@ -12,7 +12,12 @@
 // words but each one doubles as a genuine standalone interjection on its own line ("그치?" =
 // "right?", "그럼!" = "of course!", "아니!" = "no way!"), so flagging them would risk rejecting
 // a real complete thought as a mid-phrase split.
-const CONNECTOR_ONLY = /^(?:그리고|근데|그래서|하지만|또|또는|혹은|및|그니까|그러니까)$/;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "그런데" is the exact same
+// word as "근데" (only more formal in register) and is at least as common, but wasn't listed -
+// a bare "그런데" line went completely unflagged even though it needs a following clause exactly
+// like "근데" already does. "그러니깐" is likewise just a third common spelling of "그니까"/
+// "그러니까", already both in this list.
+const CONNECTOR_ONLY = /^(?:그리고|근데|그런데|그래서|하지만|또|또는|혹은|및|그니까|그러니까|그러니깐)$/;
 const DANGLING_PUNCTUATION_START = /^[!?~.…]/;
 // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): three more everyday
 // dependent bound nouns were missing entirely, so a model splitting "이 국물은 좀 순한 / 편이라
