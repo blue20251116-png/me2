@@ -808,6 +808,14 @@ input:focus, select:focus, textarea:focus {
 .status-pending { color: var(--amber); background: rgba(245,166,35,0.12); }
 .status-posted { color: var(--green); background: rgba(52,211,153,0.12); }
 .status-failed { color: var(--red); background: rgba(240,101,90,0.12); }
+.post-error-text {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  max-width: 220px;
+  white-space: normal;
+  word-break: break-word;
+}
 
 .del-btn {
   background: transparent;
