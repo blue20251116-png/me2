@@ -19,7 +19,20 @@ function stripAffiliateNoise(value, { preserveLines = true } = {}) {
     .replace(/네이버\s*쇼핑\s*커넥트[^\n.!?]*(?:제공받을\s*수\s*있습니다|받습니다)?\.?/gi, ' ')
     .replace(/^\s*스레드\s*조회\s*[\d.,천만억]+회\s*/gim, '')
     .replace(/^(?:인기순|최신순|전체)\s*/gim, '')
-    .replace(/\b(?:좋아요|답글|리포스트|공유)\b/g, ' ');
+    // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): \b is defined in terms
+    // of ASCII \w, which no Hangul character is ever part of - so \b좋아요\b (and the other three)
+    // never actually bounded anything: between two Hangul characters there is no \w/\W transition
+    // at all, so this line was a silent no-op for every realistic Korean sentence containing these
+    // words ("이거 좋아요 눌러줘" was left completely untouched, and so was the actual scraped-UI
+    // cluster "좋아요\n답글\n리포스트\n공유\n129" it exists to catch).
+    // A naive Hangul-boundary fix (matching each word whenever isolated, the same technique
+    // scrubSecret() uses) was tried and rejected: "좋아요"/"답글"/"공유" are also completely
+    // ordinary words in real sentences ("이거 완전 좋아요ㅋㅋ 진짜 만족함"), and stripping them
+    // there breaks the sentence ("이거 완전 ㅋㅋ 진짜 만족함") - worse than the original no-op.
+    // Only strip when 2+ of these labels appear back-to-back with nothing but whitespace/·/counts
+    // between them - the actual shape of a scraped Threads action-button row - which a real
+    // sentence using any one of these words on its own never matches.
+    .replace(/(?:(?:좋아요|답글|리포스트|공유)[\s,·|0-9]*){2,}/g, ' ');
   if (preserveLines) return s.split(/\r?\n/).map(x => x.replace(/[ \t]{2,}/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
   return s.replace(/\s+/g, ' ').trim();
 }
@@ -89,4 +102,4 @@ JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}]}`;
   return { mode: isRecipe ? 'recipe' : 'product', persona: persona.id, items: accepted, texts: accepted.map(x => x.text), comments: accepted.map(x => x.comment) };
 }
 
-module.exports = { generateFromThreadsMaterial, detectRecipe };
+module.exports = { generateFromThreadsMaterial, detectRecipe, stripAffiliateNoise };
