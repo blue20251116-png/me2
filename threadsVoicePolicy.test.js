@@ -316,6 +316,17 @@ test('the wish-verb CTA extension does not flag ordinary well-wishes that do not
   assert.deepEqual(policy.voiceProblems('날씨 추운데\n다들 건강 챙기길 바람').filter(r => r === '뻔한 CTA 마무리'), []);
 });
 
+test('the ad-CTA guard catches the plain polite "-요" ending after 봐, not just the bare form', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "요" straight after 봐
+  // ("다들 한번 써봐요~", "너도 한번 먹어봐요") is at least as common as the bare "봐" form this guard
+  // already caught, and is the exact same formulaic recommend CTA - it slipped through completely
+  // untouched simply because "요" wasn't a recognized optional suffix after 봐/보길.
+  for (const variant of ['다들 한번 써봐요~', '너도 한번 먹어봐요', '너희도 꼭 써봐요!', '당신도 한번 사봐요']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
 test('the generalized ad-CTA guard does not flag ordinary sentences that merely contain "너도"', () => {
   for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬', '다들 이렇게 사나요?', '다들 힘내자']) {
     const post = '완전 신기했음\n' + safe;

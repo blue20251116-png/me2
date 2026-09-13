@@ -37,7 +37,11 @@ const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 // (tacking a wish-verb onto the recommendation) is at least as common a way to close this exact
 // formulaic CTA - "너희도 한번 써보길 바람" slipped through completely untouched simply because
 // "바람" came after "보길", not because it's a different, legitimate ending.
-const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보길|봐)(?:\s*바랍니다|\s*바래(?:요)?|\s*바람)?[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): the plain polite ending
+// "-요" straight after 봐 ("다들 한번 써봐요~", "너도 한번 먹어봐요") is at least as common as the
+// bare "봐" this guard already caught, and is the exact same formulaic recommend CTA - it just
+// slipped through because "요" wasn't one of the recognized optional suffixes after 봐/보길.
+const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보길|봐)(?:요|\s*바랍니다|\s*바래(?:요)?|\s*바람)?[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
 
 function normalizeVoice(text) {
   return String(text || '').replace(/\r/g, '').replace(/\\n/g, '\n').split('\n').map(line => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
