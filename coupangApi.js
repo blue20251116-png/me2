@@ -11,7 +11,11 @@ const GLOBAL_CALLS_PER_MINUTE = 10;
 const PER_KEY_CALLS_PER_MINUTE = 50;
 const RATE_WINDOW_MS = 60 * 1000;
 
-db.exec(`
+// Same crash-at-boot class of bug found and fixed across db.js/bootstrap.js/server.js/
+// automationState.js/sessionStore.js/benchmarkAccounts.js during the 2026-09-12
+// persistent-volume-full incident: this ran completely unguarded at module load.
+try {
+  db.exec(`
 CREATE TABLE IF NOT EXISTS coupang_api_cache (
   account_id INTEGER NOT NULL,
   cache_key TEXT NOT NULL,
@@ -34,6 +38,9 @@ CREATE TABLE IF NOT EXISTS coupang_api_call_log (
 CREATE INDEX IF NOT EXISTS idx_coupang_api_call_log_time ON coupang_api_call_log(called_at_ms);
 CREATE INDEX IF NOT EXISTS idx_coupang_api_call_log_key_time ON coupang_api_call_log(access_key_hash, called_at_ms);
 `);
+} catch (e) {
+  console.error('[CoupangApi][INIT] 테이블 생성 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message);
+}
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 

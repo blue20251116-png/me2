@@ -1,17 +1,24 @@
 const { db } = require('./db');
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS threads_benchmark_accounts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-  CREATE TABLE IF NOT EXISTS threads_benchmark_used_posts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    post_url TEXT NOT NULL UNIQUE,
-    used_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-`);
+// Same crash-at-boot class of bug found and fixed across db.js/bootstrap.js/server.js/
+// automationState.js/sessionStore.js during the 2026-09-12 persistent-volume-full incident: this
+// ran completely unguarded at module load.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS threads_benchmark_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS threads_benchmark_used_posts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      post_url TEXT NOT NULL UNIQUE,
+      used_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+} catch (e) {
+  console.error('[BenchmarkAccounts][INIT] 테이블 생성 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message);
+}
 
 function normalizeUsername(value) {
   let v = String(value || '').trim();

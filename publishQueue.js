@@ -4,15 +4,33 @@ const api = require('./threadsApi');
 const cron = require('node-cron');
 const { setState } = require('./automationState');
 const { classifyPublishFailure, publishRetryable } = require('./publishRetryPolicy');
-for (const definition of ['publish_started_at TEXT','publish_creation_id TEXT','publish_retry_count INTEGER DEFAULT 0','publish_next_retry_at TEXT','comment_started_at TEXT','comment_creation_id TEXT','comment_retry_count INTEGER DEFAULT 0','comment_next_retry_at TEXT','recipe_comment_text TEXT']) {
-  const name = definition.split(' ')[0];
-  if (!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name===name)) db.exec(`ALTER TABLE posts ADD COLUMN ${definition}`);
+// Same crash class as the other files fixed in the 2026-09-12 persistent-volume-full incident:
+// this ran unguarded at module load. publishQueue.js is only require()'d lazily from inside
+// server.js's app.listen() callback (via scheduler.js's startPublishJob), so a throw here is the
+// same "crash after the healthcheck could already report healthy" risk as initializeRecovery()
+// below - a flapping crash-loop on a full disk instead of a clean failure.
+try {
+  for (const definition of ['publish_started_at TEXT','publish_creation_id TEXT','publish_retry_count INTEGER DEFAULT 0','publish_next_retry_at TEXT','comment_started_at TEXT','comment_creation_id TEXT','comment_retry_count INTEGER DEFAULT 0','comment_next_retry_at TEXT','recipe_comment_text TEXT']) {
+    const name = definition.split(' ')[0];
+    if (!db.prepare('PRAGMA table_info(posts)').all().some(c=>c.name===name)) db.exec(`ALTER TABLE posts ADD COLUMN ${definition}`);
+  }
+} catch (e) {
+  console.error('[PublishQueue][INIT] posts 컬럼 마이그레이션 실패 (디스크 문제로 추정) - 계속 부팅합니다:', e.message);
 }
 
 function retryable(err) { return publishRetryable(err); }
 function initializeRecovery() {
-  db.prepare("UPDATE posts SET status='failed',error_message='PUBLISH_OUTCOME_UNKNOWN: 재시작 전 발행 결과 확인 필요',publish_next_retry_at=NULL WHERE status='publishing'").run();
-  db.prepare("UPDATE posts SET comment_status='failed',comment_error_message='COMMENT_OUTCOME_UNKNOWN: 재시작 전 댓글 결과 확인 필요',comment_next_retry_at=NULL WHERE comment_status='publishing'").run();
+  // Same crash class as db.js/bootstrap.js/server.js/automationState.js/sessionStore.js/
+  // benchmarkAccounts.js/coupangApi.js (2026-09-12 persistent-volume-full incident): this runs
+  // unguarded, but from inside app.listen()'s callback (server.js) - i.e. AFTER the healthcheck
+  // could already report healthy. An uncaught exception here on a full disk crashes the process
+  // anyway, producing a flapping crash-loop instead of a clean "never became healthy" failure.
+  try {
+    db.prepare("UPDATE posts SET status='failed',error_message='PUBLISH_OUTCOME_UNKNOWN: 재시작 전 발행 결과 확인 필요',publish_next_retry_at=NULL WHERE status='publishing'").run();
+    db.prepare("UPDATE posts SET comment_status='failed',comment_error_message='COMMENT_OUTCOME_UNKNOWN: 재시작 전 댓글 결과 확인 필요',comment_next_retry_at=NULL WHERE comment_status='publishing'").run();
+  } catch (e) {
+    console.error('[PublishQueue][INIT] 복구 초기화 실패 (디스크 문제로 추정) - 계속 부팅합니다:', e.message);
+  }
 }
 
 function startPublishJob({ buildCommentText }) {

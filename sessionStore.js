@@ -1,7 +1,16 @@
 'use strict';
 const session = require('express-session');
 const { db } = require('./db');
-db.exec('CREATE TABLE IF NOT EXISTS login_sessions(sid TEXT PRIMARY KEY,payload TEXT NOT NULL,expires_ms INTEGER NOT NULL)');
+// Same crash-at-boot class of bug found and fixed across db.js/bootstrap.js/server.js/
+// automationState.js during the 2026-09-12 persistent-volume-full incident: this ran completely
+// unguarded at module load. server.js requires this file very early (line 8, before the session
+// middleware and the filesystem-only /admin/emergency-cleanup route are even registered), so on a
+// full disk this would crash the whole process right here.
+try {
+  db.exec('CREATE TABLE IF NOT EXISTS login_sessions(sid TEXT PRIMARY KEY,payload TEXT NOT NULL,expires_ms INTEGER NOT NULL)');
+} catch (e) {
+  console.error('[SessionStore][INIT] 테이블 생성 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message);
+}
 class SQLiteSessionStore extends session.Store {
   get(sid, cb) {
     try {
