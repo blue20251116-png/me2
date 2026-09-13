@@ -147,6 +147,37 @@ test('bound nouns with a trailing particle (만큼이나, 정도로) are still c
   for (const text of broken) assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
 });
 
+test('three more everyday bound nouns (편, 만한, 듯이) are caught as a dangling split, and repaired', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): 편/만한/듯이 are at least
+  // as common as 만큼/정도 in casual product reviews but were entirely missing from
+  // DANGLING_BOUND_NOUN_START, so a split like "이 국물은 좀 순한" / "편이라 아이도 잘 먹음" went
+  // completely undetected even though the second line is grammatically incomplete on its own.
+  const { repairConnectorOnlyBreaks } = require('./threadsVoiceLocalRepair');
+  const broken = [
+    '이 국물은 좀 순한\n편이라 아이도 잘 먹음',
+    '생각보다 훨씬 큼\n만한 사이즈였음',
+    '이거 써보니까\n듯이 편해짐',
+  ];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
+test('the new 편/만한/듯이 bound-noun check is not fooled by ordinary words sharing the same first syllable(s)', () => {
+  // Synthetic-sentence check mirroring the existing 채/리/참/겸/셈/법 false-positive test above:
+  // 편의점 (convenience store), 편하게 (comfortably), and other ordinary 편-led words must not be
+  // flagged just because they start with the same syllable as the bound noun 편.
+  const safe = [
+    '아까 갔다온\n편의점에서 산 거 완전 대박',
+    '이거 완전\n편하게 앉아서 볼 수 있음',
+    '어제 산\n편지지가 너무 예쁨',
+  ];
+  for (const text of safe) assert.deepEqual(policy.incompleteLineReasons(text), [], `false positive on: ${text}`);
+});
+
 test('runtime review repairs a too-many-lines post instead of discarding the material', async () => {
   // Fixture updated: an overlong single line used to be a rejection reason on its own and was
   // this test's trigger, but length alone no longer gates rejection - too-many-lines still does,
