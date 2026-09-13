@@ -33,6 +33,21 @@ function isNoCredits(e) {
   if (status !== 429 && status !== 400) return false;
   return /no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(errorMessage(e));
 }
+// REGRESSION (found via review, hourly review, 2026-09-13): the only way this ever computed a
+// precise retry delay was parsing OpenAI's specific "please try again in Xs" message text - which
+// never appears in an Anthropic 429 response, so every Claude rate-limit hit silently fell back to
+// the generic 1800ms default regardless of what the server actually asked for. Anthropic (like
+// most REST APIs) returns a standard `retry-after` response header on 429s - reading that first
+// gives an accurate wait for the actual provider now in use, while the OpenAI-era text parse stays
+// as a harmless fallback for any other API accessed through this file that does phrase it that way.
+function retryAfterMs(e) {
+  const headerSeconds = Number(e?.response?.headers?.['retry-after']);
+  if (Number.isFinite(headerSeconds) && headerSeconds > 0) return Math.ceil(headerSeconds * 1000);
+  const msg = errorMessage(e);
+  const m = msg.match(/try again in\s+([0-9.]+)\s*(ms|s)/i);
+  if (m) return m[2].toLowerCase() === 's' ? Math.ceil(Number(m[1]) * 1000) : Math.ceil(Number(m[1]));
+  return 1800;
+}
 function isCacheableAnalysis(data) {
   const t = Number(data?.temperature);
   return Number.isFinite(t) && t <= 0.2 && Array.isArray(data?.messages);
@@ -214,11 +229,7 @@ async function runGuardedRequest(url, rawData, config) {
     }
     if (!isTpm429(e)) throw e;
 
-    const msg = errorMessage(e);
-    const m = msg.match(/try again in\s+([0-9.]+)\s*(ms|s)/i);
-    let retryMs = 1800;
-    if (m) retryMs = m[2].toLowerCase() === 's' ? Math.ceil(Number(m[1]) * 1000) : Math.ceil(Number(m[1]));
-    retryMs = Math.max(1500, Math.min(6000, retryMs + 500));
+    let retryMs = Math.max(1500, Math.min(6000, retryAfterMs(e) + 500));
     console.warn(`[AI][RATE LIMIT GUARD] 429 → ${retryMs}ms 대기 후 1회 재시도`);
     await sleep(retryMs);
     assertHourlyBudget();
@@ -247,4 +258,4 @@ axios.post = function budgetGuardedPost(url, data, config) {
 
 console.log(`[AI][BUDGET GUARD] target=${ANTHROPIC_URL} concurrency=1 minGap=${MIN_GAP_MS}ms hourlyCap=${MAX_REQUESTS_PER_HOUR} textCap=${MAX_TEXT_CHARS}chars cache<=0.2 ttl=${Math.round(ANALYSIS_CACHE_MS / 3600000)}h`);
 
-module.exports = { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS };
+module.exports = { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS, retryAfterMs };

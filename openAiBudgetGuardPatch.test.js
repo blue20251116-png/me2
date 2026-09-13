@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS } = require('./openAiBudgetGuardPatch');
+const { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS, retryAfterMs } = require('./openAiBudgetGuardPatch');
 
 // REGRESSION (found via synthetic testing, hourly review): truncateString()'s head/tail had
 // hardcoded minimums (1000/500) that ignored the requested `max` once it dropped below ~1500 -
@@ -63,4 +63,23 @@ test('capRequestText caps the top-level Anthropic-style system field, not just m
 test('capRequestText leaves a request under budget untouched', () => {
   const data = { model: 'claude-sonnet-4-6', system: 'short system', messages: [{ role: 'user', content: 'hi' }] };
   assert.equal(capRequestText(data), data);
+});
+
+// REGRESSION (found via review, hourly review, 2026-09-13): the only way this ever computed a
+// precise retry delay was parsing OpenAI's specific "please try again in Xs" message text - which
+// never appears in an Anthropic 429 response, so every real Claude rate-limit hit silently fell
+// back to the generic 1800ms default regardless of what the server actually asked for.
+test('retryAfterMs prefers the standard retry-after response header over message-text parsing', () => {
+  const e = { response: { headers: { 'retry-after': '3' }, data: { error: { message: 'rate_limit_error' } } } };
+  assert.equal(retryAfterMs(e), 3000);
+});
+
+test('retryAfterMs falls back to parsing OpenAI-style "try again in Xs/Xms" message text when no header is present', () => {
+  assert.equal(retryAfterMs({ message: 'Rate limited, please try again in 2.5s' }), 2500);
+  assert.equal(retryAfterMs({ message: 'please try again in 900ms' }), 900);
+});
+
+test('retryAfterMs falls back to a sane default when neither a header nor parseable text is present', () => {
+  assert.equal(retryAfterMs({ message: 'rate_limit_error' }), 1800);
+  assert.equal(retryAfterMs({}), 1800);
 });
