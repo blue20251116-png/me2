@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+
 function freshPatchWith(fakePost) {
   const axios = require('axios');
   const originalPost = axios.post;
@@ -13,19 +15,20 @@ function freshPatchWith(fakePost) {
   return { axios, restore() { axios.post = originalPost; delete require.cache[patchPath]; } };
 }
 
-test('identical concurrent OpenAI chat requests share one upstream call', async () => {
+test('identical concurrent Anthropic requests share one upstream call', async () => {
   let calls = 0;
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   const ctx = freshPatchWith(async () => {
     calls += 1;
     await gate;
-    return { data: { choices: [{ message: { content: 'ok' } }] } };
+    return { data: { content: [{ type: 'text', text: 'ok' }] } };
   });
   try {
-    const body = { model: 'gpt-4o-mini', temperature: 0.2, max_tokens: 100, messages: [{ role: 'user', content: 'same' }] };
-    const a = ctx.axios.post('https://api.openai.com/v1/chat/completions', body, {});
-    const b = ctx.axios.post('https://api.openai.com/v1/chat/completions', body, {});
+    const body = { model: 'claude-sonnet-4-6', temperature: 0.2, max_tokens: 100, messages: [{ role: 'user', content: 'same' }] };
+    const config = { headers: { 'x-api-key': 'key-a' } };
+    const a = ctx.axios.post(ANTHROPIC_URL, body, config);
+    const b = ctx.axios.post(ANTHROPIC_URL, body, config);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(calls, 1);
     release();
@@ -34,19 +37,37 @@ test('identical concurrent OpenAI chat requests share one upstream call', async 
   } finally { ctx.restore(); }
 });
 
-test('different OpenAI prompts are not coalesced', async () => {
+test('different Anthropic prompts are not coalesced', async () => {
   let calls = 0;
   const ctx = freshPatchWith(async () => { calls += 1; return { data: {} }; });
   try {
+    const config = { headers: { 'x-api-key': 'key-a' } };
     await Promise.all([
-      ctx.axios.post('https://api.openai.com/v1/chat/completions', { model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'a' }] }, {}),
-      ctx.axios.post('https://api.openai.com/v1/chat/completions', { model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'b' }] }, {}),
+      ctx.axios.post(ANTHROPIC_URL, { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'a' }] }, config),
+      ctx.axios.post(ANTHROPIC_URL, { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'b' }] }, config),
     ]);
     assert.equal(calls, 2);
   } finally { ctx.restore(); }
 });
 
-test('non-OpenAI requests bypass dedupe', async () => {
+// REGRESSION (found during the OpenAI->Claude migration, 2026-09-13): Anthropic auth uses the
+// x-api-key header, not Authorization - requestKey() used to only read Authorization, so two
+// different accounts' identical-content concurrent requests would have collapsed into one shared
+// in-flight call regardless of which account's key was used.
+test('identical-content requests from two different accounts (different x-api-key) are not coalesced', async () => {
+  let calls = 0;
+  const ctx = freshPatchWith(async () => { calls += 1; return { data: {} }; });
+  try {
+    const body = { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'same' }] };
+    await Promise.all([
+      ctx.axios.post(ANTHROPIC_URL, body, { headers: { 'x-api-key': 'key-a' } }),
+      ctx.axios.post(ANTHROPIC_URL, body, { headers: { 'x-api-key': 'key-b' } }),
+    ]);
+    assert.equal(calls, 2);
+  } finally { ctx.restore(); }
+});
+
+test('non-Anthropic requests bypass dedupe', async () => {
   let calls = 0;
   const ctx = freshPatchWith(async () => { calls += 1; return { data: {} }; });
   try {

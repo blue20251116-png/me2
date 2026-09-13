@@ -1,12 +1,12 @@
 const { voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('./threadsVoicePolicy');
 const { pickPersona } = require('./threadsPersonas');
-const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
+const { callAnthropicJson } = require('./anthropicClient');
 
-function getOpenAIKey(accountId) {
+function getAnthropicKey(accountId) {
   const account = getAccount(accountId);
   const shared = getSystemApiSettings();
-  return shared.openai_api_key || process.env.OPENAI_API_KEY || account?.openai_api_key || null;
+  return shared.anthropic_api_key || process.env.ANTHROPIC_API_KEY || account?.anthropic_api_key || null;
 }
 
 function stripAffiliateNoise(value, { preserveLines = true } = {}) {
@@ -46,8 +46,8 @@ function detectRecipe(sourceText, authorReplies, requestedMode) {
 }
 
 async function generateFromThreadsMaterial(accountId, { keyword, sourceText, authorReplies = '', mode = 'product', visualEvidence = '', imageSummary = '', videoSummary = '' }) {
-  const apiKey = getOpenAIKey(accountId);
-  if (!apiKey) throw new Error('관리자 OpenAI API 키가 설정되어 있지 않습니다.');
+  const apiKey = getAnthropicKey(accountId);
+  if (!apiKey) throw new Error('관리자 Anthropic API 키가 설정되어 있지 않습니다.');
   const cleanedSource = stripAffiliateNoise(sourceText, { preserveLines: true });
   const cleanedReplies = sanitizeAuthorReplies(authorReplies);
   const isRecipe = detectRecipe(cleanedSource, cleanedReplies, mode);
@@ -68,20 +68,14 @@ ${isRecipe ? '- 레시피에서 핵심 재료를 숨기는 편이 자연스러�
 JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}]}`;
 
   const user = `키워드:${String(keyword || '').trim()}\n[원문]\n${cleanedSource.slice(0, 6000)}\n[작성자 추가설명]\n${cleanedReplies.slice(0, 4000)}\n[사진/영상 이해]\n${multimodal || '(별도 분석 없음)'}\n전체 입력을 이해한 뒤 가장 강한 바이럴 포인트로 써라.`;
-  const res = await axios.post('https://api.openai.com/v1/chat/completions', {
-    model: 'gpt-4o-mini', temperature: .82, max_tokens: 3000,
-    response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
-  }, { headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, timeout: 45000 });
-
-  const parsed = JSON.parse(res.data?.choices?.[0]?.message?.content || '{}');
+  const parsed = await callAnthropicJson(apiKey, { system, userContent: user, maxTokens: 3000, temperature: .82, timeout: 45000 });
   const items = Array.isArray(parsed.items) ? parsed.items.slice(0, 5) : [];
   const accepted = [];
   for (const x of items) {
     try {
       let text = formatVoice(x?.text || '');
       text = await reviewSourceVoice(text, { mode: isRecipe ? 'recipe' : 'product', sourceText: cleanedSource, authorReplies: cleanedReplies, visualEvidence: multimodal }, async (system, user) => {
-        const r = await axios.post('https://api.openai.com/v1/chat/completions', { model: 'gpt-4o-mini', temperature: .15, max_tokens: 900, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }, { headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, timeout: 30000 });
-        return JSON.parse(r.data?.choices?.[0]?.message?.content || '{}');
+        return callAnthropicJson(apiKey, { system, userContent: user, maxTokens: 900, temperature: .15, timeout: 30000 });
       });
       text = assertVoice(text, { mode: isRecipe ? 'recipe' : 'product' });
       const comment = sanitizeGeneratedComment(x?.comment || '');

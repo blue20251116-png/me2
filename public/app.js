@@ -639,12 +639,10 @@ function applyPickedProduct(p) {
   uploadedFilename = null; // 검색 결과 이미지로 교체되므로 이전 직접 업로드 참조는 해제
   lastScrapedLink = p.url; // 자동 스크래핑이 이 링크로 또 돌지 않도록 표시
   currentProduct = { name: p.name, price: p.price };
-  originalProductImage = p.image; // 라이프스타일 이미지 생성 시 레퍼런스로 사용
+  originalProductImage = p.image; // 이미지 구성 선택 시 레퍼런스로 사용
   // 쇼츠 찾기 입력창에도 상품명을 자동으로 채워준다 (직접 수정도 가능)
   const youtubeInput = document.getElementById('youtubeSearchInput');
   if (youtubeInput) youtubeInput.value = p.name || '';
-  currentScene = null;
-  resetLifestyleUI();
 
   document.getElementById('videoPreviewBox').classList.add('hidden');
   document.getElementById('videoUsageRow').classList.add('hidden');
@@ -652,7 +650,6 @@ function applyPickedProduct(p) {
   document.getElementById('imagePreviewImg').src = p.image;
   document.getElementById('imagePreviewBox').classList.remove('hidden');
   document.getElementById('imageToolsRow').classList.remove('hidden');
-  document.getElementById('lifestylePanel').classList.remove('hidden');
   document.getElementById('detailImagesGallery').classList.add('hidden');
   const scrapeStatus = document.getElementById('scrapeStatus');
   scrapeStatus.textContent = '상품 검색 결과에서 링크·사진을 채웠어요 · 이제 "AI로 글 써주기"를 눌러보세요';
@@ -1015,113 +1012,6 @@ let scrapeTimer = null;
 let lastScrapedLink = '';
 let currentDetailImages = [];
 let originalProductImage = '';
-let currentScene = null;
-
-function resetLifestyleUI() {
-  document.getElementById('sceneBox').classList.add('hidden');
-  document.getElementById('sceneText').textContent = '';
-  document.getElementById('sceneStatus').textContent = '';
-  document.getElementById('imageGenStatus').textContent = '';
-  document.getElementById('generateSceneBtn').classList.remove('hidden');
-  document.getElementById('regenerateSceneBtn').classList.add('hidden');
-  document.getElementById('generateImageBtn').classList.add('hidden');
-  document.getElementById('regenerateImageBtn').classList.add('hidden');
-}
-
-async function runGenerateScene() {
-  const status = document.getElementById('sceneStatus');
-  const productName = currentProduct.name || document.getElementById('composeForm').text.value.trim();
-  if (!productName) {
-    status.textContent = '먼저 상품을 검색하거나 링크를 넣어주세요';
-    status.className = 'ai-status error';
-    return;
-  }
-  status.textContent = 'AI가 배경 상황을 정하는 중…';
-  status.className = 'ai-status';
-  try {
-    const res = await apiFetch('/api/generate-scene', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        productName,
-        price: currentProduct.price,
-        target: document.getElementById('composeTargetSelect').value,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    currentScene = data.scene;
-
-    document.getElementById('sceneText').textContent = `${data.scene.location || ''} — ${data.scene.context || ''}`;
-    document.getElementById('sceneBox').classList.remove('hidden');
-    document.getElementById('generateSceneBtn').classList.add('hidden');
-    document.getElementById('regenerateSceneBtn').classList.remove('hidden');
-    document.getElementById('generateImageBtn').classList.remove('hidden');
-    status.textContent = '상황 완성 · 마음에 들면 "라이프스타일 이미지 만들기"를 눌러보세요';
-    status.className = 'ai-status ok';
-  } catch (err) {
-    status.textContent = '실패: ' + err.message;
-    status.className = 'ai-status error';
-  }
-}
-
-document.getElementById('generateSceneBtn').addEventListener('click', runGenerateScene);
-document.getElementById('regenerateSceneBtn').addEventListener('click', runGenerateScene);
-
-async function runGenerateLifestyleImage() {
-  const genBtn = document.getElementById('generateImageBtn');
-  const regenBtn = document.getElementById('regenerateImageBtn');
-  const status = document.getElementById('imageGenStatus');
-  const productName = currentProduct.name || document.getElementById('composeForm').text.value.trim();
-
-  if (!originalProductImage) {
-    status.textContent = '먼저 상품 사진이 있어야 라이프스타일 이미지를 만들 수 있어요';
-    status.className = 'ai-status error';
-    return;
-  }
-  if (!currentScene) {
-    status.textContent = '먼저 "상황 만들기"를 눌러주세요';
-    status.className = 'ai-status error';
-    return;
-  }
-
-  genBtn.disabled = true;
-  regenBtn.disabled = true;
-  status.textContent = '이미지 만드는 중… (30초~1분 정도 걸려요)';
-  status.className = 'ai-status';
-  try {
-    const res = await apiFetch('/api/generate-lifestyle-image', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productName, productImage: originalProductImage, scene: currentScene }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-
-    const img = data.images[0];
-    const form = document.getElementById('composeForm');
-    form.image_url.value = img.url;
-    form.video_url.value = '';
-    document.getElementById('videoPreviewBox').classList.add('hidden');
-    document.getElementById('imagePreviewImg').src = img.url;
-    document.getElementById('imagePreviewBox').classList.remove('hidden');
-    uploadedFilename = img.filename; // 첨부 삭제 버튼으로 지울 수 있게 등록
-
-    document.getElementById('generateImageBtn').classList.add('hidden');
-    document.getElementById('regenerateImageBtn').classList.remove('hidden');
-    status.textContent = '완성! 마음에 안 들면 "이미지 다시 만들기"를 눌러보세요';
-    status.className = 'ai-status ok';
-  } catch (err) {
-    status.textContent = '실패: ' + err.message;
-    status.className = 'ai-status error';
-  } finally {
-    genBtn.disabled = false;
-    regenBtn.disabled = false;
-  }
-}
-
-document.getElementById('generateImageBtn').addEventListener('click', runGenerateLifestyleImage);
-document.getElementById('regenerateImageBtn').addEventListener('click', runGenerateLifestyleImage);
 
 // ---- 상세페이지 사진 더 보기 (갤러리에서 골라서 대표 이미지로 교체) ----
 document.getElementById('showDetailImagesBtn').addEventListener('click', async () => {
@@ -1205,12 +1095,9 @@ async function runScrape(link) {
     previewImg.src = data.imageUrl;
     previewBox.classList.remove('hidden');
     document.getElementById('imageToolsRow').classList.remove('hidden');
-    document.getElementById('lifestylePanel').classList.remove('hidden');
     document.getElementById('detailImagesGallery').classList.add('hidden');
     currentDetailImages = data.images || [data.imageUrl];
     originalProductImage = data.imageUrl;
-    currentScene = null;
-    resetLifestyleUI();
 
     if (data.title) {
       currentProduct = { name: data.title, price: null };
@@ -1308,9 +1195,6 @@ document.getElementById('composeForm').addEventListener('submit', async (e) => {
     uploadedVideoUrl = '';
     currentDetailImages = [];
     originalProductImage = '';
-    currentScene = null;
-    resetLifestyleUI();
-    document.getElementById('lifestylePanel').classList.add('hidden');
     lastScrapedLink = '';
     uploadedFilename = null;
     currentProduct = { name: '', price: null };

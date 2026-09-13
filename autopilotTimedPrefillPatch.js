@@ -128,7 +128,7 @@ function credentialFingerprint(account) {
   ])).digest('hex');
 }
 function isCoupangAuthError(err) {
-  // A 401 from OpenAI, Threads, or a media URL is not a Coupang credential failure.
+  // A 401 from Claude, Threads, or a media URL is not a Coupang credential failure.
   let fromCoupang = err?.service === 'coupang';
   try {
     const config = err?.config || err?.response?.config;
@@ -144,16 +144,16 @@ async function ensureCoupangReady(accountId, account) {
   const fp = credentialFingerprint(account);
   if (!coupangApi.hasCredentials(account)) {
     coupangPreflightCache.set(accountId, { ok:false, reason:'missing_credentials', fp, until:Date.now()+COUPANG_INVALID_TTL_MS });
-    console.warn(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} API 키 없음 → OpenAI/Vision 생성 건너뜀`);
+    console.warn(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} API 키 없음 → AI/Vision 생성 건너뜀`);
     return false;
   }
   const cached = coupangPreflightCache.get(accountId);
   if (cached && cached.fp === fp && cached.until > Date.now()) {
-    if (!cached.ok) console.warn(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} cached-invalid reason=${cached.reason} → OpenAI/Vision 생성 건너뜀`);
+    if (!cached.ok) console.warn(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} cached-invalid reason=${cached.reason} → AI/Vision 생성 건너뜀`);
     return cached.ok;
   }
   try {
-    // OpenAI보다 먼저 실제 서명 요청 1회로 인증 상태를 검증한다. 정상 결과는 장시간 캐시한다.
+    // Claude보다 먼저 실제 서명 요청 1회로 인증 상태를 검증한다. 정상 결과는 장시간 캐시한다.
     await coupangApi.searchProducts(accountId, '물티슈', 1);
     coupangPreflightCache.set(accountId, { ok:true, reason:'ok', fp, until:Date.now()+COUPANG_PREFLIGHT_TTL_MS });
     console.log(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} AUTH OK ttl=${Math.round(COUPANG_PREFLIGHT_TTL_MS/3600000)}h`);
@@ -163,7 +163,7 @@ async function ensureCoupangReady(accountId, account) {
     const msg = String(err?.response?.data?.message || err?.response?.data?.rMessage || err?.message || err || '');
     if (isCoupangAuthError(err)) {
       coupangPreflightCache.set(accountId, { ok:false, reason:'invalid_signature', fp, until:Date.now()+COUPANG_INVALID_TTL_MS });
-      console.error(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} AUTH INVALID → OpenAI/Vision 생성 중단 reason="${msg.slice(0,160)}"`);
+      console.error(`[Autopilot][COUPANG PREFLIGHT] account #${accountId} AUTH INVALID → AI/Vision 생성 중단 reason="${msg.slice(0,160)}"`);
       return false;
     }
     // 호출 제한/일시 장애는 인증 실패로 오판하지 않는다.
@@ -205,7 +205,7 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
       const slots = chooseFutureSlots(accountId, target, need);
       if (!slots.length) return;
 
-      // 핵심: Coupang 인증을 OpenAI/Vision보다 먼저 확인한다.
+      // 핵심: Coupang 인증을 AI/Vision보다 먼저 확인한다.
       const coupangReady = await ensureCoupangReady(accountId, account);
       if (!coupangReady) { setState(accountId,'blocked','COUPANG_CREDENTIALS_INVALID'); return; }
 
@@ -277,5 +277,5 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
     return exp;
   };
 
-  console.log('[Autopilot][TIMED PREFILL] future schedule controller loaded · account-stagger v5 · Coupang preflight before OpenAI · 24h');
+  console.log('[Autopilot][TIMED PREFILL] future schedule controller loaded · account-stagger v5 · Coupang preflight before AI · 24h');
 }

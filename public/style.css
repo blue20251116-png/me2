@@ -778,27 +778,6 @@ input:focus, select:focus, textarea:focus {
 .detail-img-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .detail-img-thumb.selected { border-color: var(--green); }
 
-.lifestyle-panel {
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.lifestyle-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-.scene-box {
-  background: var(--surface-2);
-  border-radius: 8px;
-  padding: 10px 12px;
-}
-.scene-label {
-  font-size: 11px;
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-}
-.scene-box p { margin: 6px 0 0; font-size: 12.5px; color: var(--text); line-height: 1.5; }
-
 .posts-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .posts-table th {
   text-align: left;

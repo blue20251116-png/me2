@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { truncateString, capContent, countTextChars } = require('./openAiBudgetGuardPatch');
+const { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS } = require('./openAiBudgetGuardPatch');
 
 // REGRESSION (found via synthetic testing, hourly review): truncateString()'s head/tail had
 // hardcoded minimums (1000/500) that ignored the requested `max` once it dropped below ~1500 -
@@ -45,4 +45,22 @@ test('countTextChars ignores the url string itself when summing text length', ()
   // unrelated coincidence like a "type" field literally reading "image_url") still counts.
   const messages = [{ content: [{ note: 'hello', image_url: { url: 'https://example.com/x.jpg' } }] }];
   assert.equal(countTextChars(messages), 'hello'.length);
+});
+
+// REGRESSION (found during the OpenAI->Claude migration, 2026-09-13): OpenAI puts the system
+// prompt inside messages[] as a {role:'system'} entry, but Anthropic's Messages API sends it as a
+// separate top-level `system` string - often the largest single field (voiceGuide() alone runs to
+// several thousand characters). capRequestText() used to only look at data.messages, so it would
+// have silently stopped counting/capping the system prompt the moment callers switched to Claude's
+// request shape, defeating the cost cap for exactly the biggest field in most requests.
+test('capRequestText caps the top-level Anthropic-style system field, not just messages', () => {
+  const data = { model: 'claude-sonnet-4-6', system: 'S'.repeat(30000), messages: [{ role: 'user', content: 'hi' }] };
+  const capped = capRequestText(data);
+  assert.ok(capped.system.length < data.system.length, 'the oversized system field must actually be truncated');
+  assert.ok(countTextChars({ system: capped.system, messages: capped.messages }) <= MAX_TEXT_CHARS + 300);
+});
+
+test('capRequestText leaves a request under budget untouched', () => {
+  const data = { model: 'claude-sonnet-4-6', system: 'short system', messages: [{ role: 'user', content: 'hi' }] };
+  assert.equal(capRequestText(data), data);
 });

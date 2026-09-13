@@ -67,7 +67,7 @@ test('generateRecipe never rotates into the housewife-recipe persona - it has no
   // says "상품/구매/광고/제휴 이야기는 절대 넣지 않는다", and its recipeCommentText is just a plain,
   // fully-disclosed ingredient/steps list with nothing marked as "the secret one" - so picking
   // housewife-recipe here would write a hook promising a reveal the comment can never deliver.
-  // A full functional test would need to mock callOpenAI/pickPhotos network calls, so this checks
+  // A full functional test would need to mock callClaudeText/pickPhotos network calls, so this checks
   // the source directly for the fix: the recipe-generation loop must use the reaction persona
   // unconditionally, not pickPersona's recipe-category rotation.
   const src = fs.readFileSync(require.resolve('./contentOnlyAutomation'), 'utf8');

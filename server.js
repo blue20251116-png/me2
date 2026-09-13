@@ -41,7 +41,6 @@ const threadsApi = require('./threadsApi');
 const { scrapeProduct } = require('./scraper');
 const coupangApi = require('./coupangApi');
 const { generateCaption, suggestKeyword, suggestKeywordCandidates } = require('./aiCaption');
-const { generateScene, generateLifestyleImage } = require('./aiImage');
 const { rankKeywordsByTrend } = require('./naverTrends');
 const { startPublishJob, startInsightsJob, startAutopilotJob } = require('./scheduler');
 const youtubeApi = require('./youtubeApi');
@@ -325,7 +324,7 @@ app.get('/api/admin/system-api-settings', requireAdmin, (req, res) => {
     threads_redirect_uri: s.threads_redirect_uri || '',
     naver_client_id: s.naver_client_id || '',
     has_threads_app_secret: !!s.threads_app_secret,
-    has_openai_api_key: !!s.openai_api_key,
+    has_anthropic_api_key: !!s.anthropic_api_key,
     has_naver_client_secret: !!s.naver_client_secret,
     has_youtube_api_key: !!s.youtube_api_key,
   });
@@ -337,7 +336,7 @@ app.post('/api/admin/system-api-settings', requireAdmin, (req, res) => {
     threads_app_id: body.threads_app_id,
     threads_app_secret: body.threads_app_secret,
     threads_redirect_uri: body.threads_redirect_uri,
-    openai_api_key: body.openai_api_key,
+    anthropic_api_key: body.anthropic_api_key,
     naver_client_id: body.naver_client_id,
     naver_client_secret: body.naver_client_secret,
     youtube_api_key: body.youtube_api_key,
@@ -641,7 +640,7 @@ app.delete('/api/video/frames/:jobId', requireAccount, (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- AI 베스트컷 추천 (이미 추출된 프레임을 OpenAI Vision으로 분석) ----------
+// ---------- AI 베스트컷 추천 (이미 추출된 프레임을 Claude Vision으로 분석) ----------
 // 실패해도(Key 없음/네트워크 오류/응답 파싱 실패 등) 전체 기능이 죽지 않도록 422로 부드럽게 응답한다 —
 // 프론트는 이 경우 "AI 추천 없이 수동 선택 가능" 상태로 넘어가면 된다.
 const visionLocks = new Set(); // 계정당 동시 분석 1개 (연타 방지, imageGenerationLocks와 동일 패턴)
@@ -813,47 +812,6 @@ app.post('/api/scrape-product', async (req, res) => {
   }
 });
 
-// ---------- 상품 라이프스타일 상황(Scene) 생성 ----------
-app.post('/api/generate-scene', requireAccount, async (req, res) => {
-  const { productName, price, target } = req.body;
-  if (!productName) return res.status(400).json({ error: 'productName이 필요합니다' });
-  try {
-    const scene = await generateScene(req.account.id, { productName, price, target });
-    logUsage(req.currentUser.id, 'text');
-    res.json({ scene });
-  } catch (err) {
-    res.status(422).json({ error: err.response?.data?.error?.message || err.message });
-  }
-});
-
-// 이미지 생성은 비용이 크므로, 같은 계정이 동시에 두 번 요청하는 걸(연타/중복 네트워크 재시도) 막아둠
-const imageGenerationLocks = new Set();
-
-// ---------- 상품 라이프스타일 이미지 생성 ----------
-app.post('/api/generate-lifestyle-image', requireAccount, async (req, res) => {
-  const { productName, productImage, scene } = req.body;
-  if (!productName || !productImage) {
-    return res.status(400).json({ error: 'productName과 productImage가 필요합니다' });
-  }
-  if (imageGenerationLocks.has(req.account.id)) {
-    return res.status(429).json({ error: '이미 이미지 생성 중입니다, 잠시 후 다시 시도해주세요' });
-  }
-  imageGenerationLocks.add(req.account.id);
-  try {
-    const result = await generateLifestyleImage(
-      req.account.id,
-      { productName, productImageUrl: productImage, scene },
-      getPublicBaseUrl(req, req.account)
-    );
-    logUsage(req.currentUser.id, 'image');
-    res.json(result);
-  } catch (err) {
-    res.status(422).json({ error: err.response?.data?.error?.message || err.message });
-  } finally {
-    imageGenerationLocks.delete(req.account.id);
-  }
-});
-
 // ---------- 글 등록 (예약) ----------
 app.post('/api/posts', requireAccount, (req, res) => {
   const {
@@ -1003,7 +961,6 @@ app.get('/api/accounts/:accountId/settings', requireAccount, (req, res) => {
     hasCoupangSecret: !!a.coupang_secret_key,
     COUPANG_DISCLOSURE_TEMPLATE: a.coupang_disclosure_template || DEFAULT_DISCLOSURE_TEMPLATE,
     hasAnthropicKey: !!a.anthropic_api_key,
-    hasOpenaiKey: !!a.openai_api_key,
     NAVER_CLIENT_ID: a.naver_client_id || '',
     hasNaverSecret: !!a.naver_client_secret,
   });
@@ -1018,9 +975,7 @@ app.post('/api/accounts/:accountId/settings', requireAccount, (req, res) => {
     COUPANG_SECRET_KEY,
     COUPANG_SUB_ID,
     ANTHROPIC_API_KEY,
-    OPENAI_API_KEY,
     CLEAR_ANTHROPIC_KEY,
-    CLEAR_OPENAI_KEY,
     NAVER_CLIENT_ID,
     NAVER_CLIENT_SECRET,
     CLEAR_NAVER_KEY,
@@ -1034,9 +989,7 @@ app.post('/api/accounts/:accountId/settings', requireAccount, (req, res) => {
   if (COUPANG_SECRET_KEY) fields.coupang_secret_key = COUPANG_SECRET_KEY;
   if (COUPANG_SUB_ID !== undefined) fields.coupang_sub_id = COUPANG_SUB_ID;
   if (ANTHROPIC_API_KEY) fields.anthropic_api_key = ANTHROPIC_API_KEY;
-  if (OPENAI_API_KEY) fields.openai_api_key = OPENAI_API_KEY;
   if (CLEAR_ANTHROPIC_KEY) fields.anthropic_api_key = null;
-  if (CLEAR_OPENAI_KEY) fields.openai_api_key = null;
   if (NAVER_CLIENT_ID !== undefined) fields.naver_client_id = NAVER_CLIENT_ID;
   if (NAVER_CLIENT_SECRET) fields.naver_client_secret = NAVER_CLIENT_SECRET;
   if (CLEAR_NAVER_KEY) {

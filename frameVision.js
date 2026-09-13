@@ -1,8 +1,8 @@
-const axios = require('axios');
 const { resolveModelKeys } = require('./aiCaption');
 const { getAccount } = require('./db');
+const { callAnthropic, extractJson, imageBlock } = require('./anthropicClient');
 
-// 추출된 영상 프레임들을 OpenAI Vision으로 분석해서, Threads 게시 이미지로 쓰기 좋은 순서로
+// 추출된 영상 프레임들을 Claude Vision으로 분석해서, Threads 게시 이미지로 쓰기 좋은 순서로
 // 추천해주는 모듈. 사람의 실제 신원/유명인 이름은 절대 판별하지 않는다 — "사람이 잘 보이는
 // 장면인가"만 평가한다. 실패해도 예외만 던지고(호출부가 catch해서 수동 선택으로 폴백), 여기서
 // 완전자동화나 수동 흐름 전체를 막지 않는다.
@@ -55,9 +55,9 @@ async function analyzeFrames(accountId, frames) {
   if (!frames || !frames.length) return [];
 
   const account = getAccount(accountId);
-  const { openaiKey } = resolveModelKeys(account);
-  if (!openaiKey) {
-    throw new Error('OpenAI API 키가 설정되지 않았습니다');
+  const { anthropicKey } = resolveModelKeys(account);
+  if (!anthropicKey) {
+    throw new Error('Anthropic API 키가 설정되지 않았습니다');
   }
 
   const content = [
@@ -68,36 +68,20 @@ async function analyzeFrames(accountId, frames) {
   ];
   for (const f of frames) {
     content.push({ type: 'text', text: `frameId: ${f.id}` });
-    content.push({ type: 'image_url', image_url: { url: f.url } });
+    content.push(imageBlock(f.url));
   }
 
-  const res = await axios.post(
-    'https://api.openai.com/v1/chat/completions',
-    {
-      model: 'gpt-4o-mini',
-      max_tokens: 1500,
-      temperature: 0.2,
-      messages: [
-        { role: 'system', content: buildSystemPrompt() },
-        { role: 'user', content },
-      ],
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${openaiKey}`,
-        'content-type': 'application/json',
-      },
-      timeout: 45000,
-    }
-  );
+  const text = await callAnthropic(anthropicKey, {
+    system: buildSystemPrompt(),
+    userContent: content,
+    maxTokens: 1500,
+    temperature: 0.2,
+    timeout: 45000,
+  });
 
-  const text = res.data?.choices?.[0]?.message?.content;
-  if (!text) throw new Error('AI 분석 결과를 받지 못했습니다');
-
-  const cleaned = text.replace(/```json|```/g, '').trim();
   let parsed;
   try {
-    parsed = JSON.parse(cleaned);
+    parsed = extractJson(text);
   } catch {
     throw new Error('AI 분석 결과를 해석할 수 없습니다');
   }

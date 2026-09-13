@@ -4,21 +4,18 @@ const axios = require('axios');
 const { db, getAccount, getSystemApiSettings } = require('./db');
 const { collectBenchmarkMaterials, collectPostDetails, markUsedPost } = require('./benchmarkAccounts');
 const coupangApi = require('./coupangApi');
+const { callAnthropic, extractJson, imageBlockFromDataUri } = require('./anthropicClient');
 
-function getOpenAIKey(accountId){
+function getAnthropicKey(accountId){
   const a=getAccount(accountId),s=getSystemApiSettings();
-  return s.openai_api_key||process.env.OPENAI_API_KEY||a?.openai_api_key||null;
+  return s.anthropic_api_key||process.env.ANTHROPIC_API_KEY||a?.anthropic_api_key||null;
 }
-async function callOpenAI(accountId,system,user,{maxTokens=1800,temperature=.55}={}){
-  const apiKey=getOpenAIKey(accountId);
-  if(!apiKey)throw new Error('OpenAI API 키가 설정되지 않았습니다');
-  const r=await axios.post('https://api.openai.com/v1/chat/completions',{
-    model:'gpt-4o-mini',temperature,max_tokens:maxTokens,response_format:{type:'json_object'},
-    messages:[{role:'system',content:system},{role:'user',content:user}]
-  },{headers:{Authorization:`Bearer ${apiKey}`,'content-type':'application/json'},timeout:45000});
-  const raw=r.data?.choices?.[0]?.message?.content;
+async function callClaudeText(accountId,system,user,{maxTokens=1800,temperature=.55}={}){
+  const apiKey=getAnthropicKey(accountId);
+  if(!apiKey)throw new Error('Anthropic API 키가 설정되지 않았습니다');
+  const raw=await callAnthropic(apiKey,{system,userContent:user,maxTokens,temperature,timeout:45000});
   if(!raw)throw new Error('AI 결과가 비어 있습니다');
-  return JSON.parse(raw);
+  return extractJson(raw);
 }
 async function prepareVisionImageUrls(imageUrls){
   const out=[];
@@ -35,20 +32,16 @@ async function prepareVisionImageUrls(imageUrls){
   }
   return out;
 }
-async function callOpenAIVision(accountId,system,text,imageUrls,{maxTokens=1400,temperature=.15}={}){
-  const apiKey=getOpenAIKey(accountId);
-  if(!apiKey)throw new Error('OpenAI API 키가 설정되지 않았습니다');
+async function callClaudeVision(accountId,system,text,imageUrls,{maxTokens=1400,temperature=.15}={}){
+  const apiKey=getAnthropicKey(accountId);
+  if(!apiKey)throw new Error('Anthropic API 키가 설정되지 않았습니다');
   const content=[{type:'text',text}];
   const safeImageUrls=await prepareVisionImageUrls(imageUrls);
   if(!safeImageUrls.length)throw new Error('VISION_IMAGE_CACHE_EMPTY');
-  for(const url of safeImageUrls)content.push({type:'image_url',image_url:{url}});
-  const r=await axios.post('https://api.openai.com/v1/chat/completions',{
-    model:'gpt-4o-mini',temperature,max_tokens:maxTokens,response_format:{type:'json_object'},
-    messages:[{role:'system',content:system},{role:'user',content}]
-  },{headers:{Authorization:`Bearer ${apiKey}`,'content-type':'application/json'},timeout:45000});
-  const raw=r.data?.choices?.[0]?.message?.content;
+  for(const dataUri of safeImageUrls)content.push(imageBlockFromDataUri(dataUri));
+  const raw=await callAnthropic(apiKey,{system,userContent:content,maxTokens,temperature,timeout:45000});
   if(!raw)throw new Error('Vision 결과가 비어 있습니다');
-  return JSON.parse(raw);
+  return extractJson(raw);
 }
 function clean(v){return String(v||'').replace(/\s+/g,' ').trim();}
 function decodeEscapedNewlines(v){return String(v||'').replace(/\\r\\n/g,'\n').replace(/\\n/g,'\n').replace(/\\r/g,'\n').replace(/\n{3,}/g,'\n\n').trim();}
@@ -182,7 +175,7 @@ async function identifyCommerceTarget(accountId,m){
   const text=commerceTargetText(m);
   if(images.length){
     try{
-      const d=await callOpenAIVision(accountId,system,`${text}\n\n대표 시각자료 ${images.length}장.`,images,{maxTokens:1200,temperature:.1});
+      const d=await callClaudeVision(accountId,system,`${text}\n\n대표 시각자료 ${images.length}장.`,images,{maxTokens:1200,temperature:.1});
       const result=normalizeVisionResult(d);
       console.log(`[AutopilotV3][VISION TARGET] kind=${result.kind} sold="${result.soldObject||'-'}" dish="${result.dish||'-'}" ingredient="${result.promotedIngredient||'-'}" confidence=${result.confidence} terms="${result.searchTerms.join(' / ')}"`);
       return result;
@@ -191,7 +184,7 @@ async function identifyCommerceTarget(accountId,m){
     }
   }
   try{
-    const d=await callOpenAI(accountId,system,text,{maxTokens:1200,temperature:.1});
+    const d=await callClaudeText(accountId,system,text,{maxTokens:1200,temperature:.1});
     const result=normalizeVisionResult(d);
     console.log(`[AutopilotV3][TEXT TARGET] kind=${result.kind} sold="${result.soldObject||'-'}" dish="${result.dish||'-'}" ingredient="${result.promotedIngredient||'-'}" confidence=${result.confidence} terms="${result.searchTerms.join(' / ')}"`);
     return result;
@@ -276,7 +269,7 @@ function purchasableTerm(term){
 async function analyzeMaterial(accountId,m,target,vision){
   const evidence=`${m.sourceText}\n${m.authorReplies}`;
   const visionText=vision&&vision.confidence>=45?JSON.stringify(vision):'(Vision/Text 타겟 확신 부족 또는 없음)';
-  const d=await callOpenAI(accountId,
+  const d=await callClaudeText(accountId,
     `너는 한국 Threads 쇼핑 소재를 쿠팡파트너스 상품과 연결하는 편집자다. 실제 구매 가능한 상품을 식별한다. mode(recipe/product/lifestyle), topic, secretTerm, searchTerms, facts, hookStyle을 판단한다. searchTerms는 최대 2개이며 반드시 쿠팡에서 구매 가능한 구체적인 물건/식품/소스명이어야 한다. '운동','다이어트','일상','레시피' 같은 추상 주제어만 출력하면 안 된다. 본문·작성자 댓글·이미지/영상에서 실제 구매 가능한 대상을 최대한 구체적으로 추론하되 근거 없는 브랜드/모델은 만들지 않는다. 작성자 댓글에 쇼핑 링크가 없어도 정상 소재로 처리한다. JSON만 출력: {"mode":"recipe|product|lifestyle","topic":"","secretTerm":"","hideInBody":true,"searchTerms":[""],"facts":[""],"hookStyle":""}`,
     `타겟:${target||'전체'}\n[원 게시물]\n${m.sourceText.slice(0,5000)}\n[작성자 추가댓글]\n${m.authorReplies.slice(0,5000)||'(없음)'}\n[판매대상 검수]\n${visionText}`,
     {maxTokens:1200,temperature:.15}
@@ -341,13 +334,13 @@ function normalizeThreadsLayout(text){return formatVoice(text);}
 async function rewriteThreadsTone(accountId,text,{mode,material,comment=false,visualEvidence=''}){
   if(comment&&!String(text||'').trim())return '';
   return reviewSourceVoice(text,{mode,comment,sourceText:material?.sourceText,authorReplies:material?.authorReplies,visualEvidence},
-    (system,user)=>callOpenAI(accountId,system,user,{maxTokens:1000,temperature:.15}));
+    (system,user)=>callClaudeText(accountId,system,user,{maxTokens:1000,temperature:.15}));
 }
 async function repairRecipeComment(accountId,{commentLead,material,analysis,productName}){
   let fixed=normalizeRecipeHeadings(commentLead);
   if(hasIngredientHeading(fixed)&&hasMethodHeading(fixed))return fixed;
   try{
-    const d=await callOpenAI(accountId,
+    const d=await callClaudeText(accountId,
       `레시피 댓글 포맷 교정기다. 기존 내용을 최대한 보존하면서 반드시 '🥘 재료' 섹션과 '🍳 만드는 법' 섹션을 둘 다 만든다. 실제로 따라할 수 있게 작성한다. 조리 단계는 짧고 자연스러운 반말로 쓴다. 음슴체와 존댓말은 금지한다. 쿠팡 상품명/브랜드명/정확한 비밀소스 이름은 쓰지 말고 핵심 제휴재료는 '비밀 소스' 또는 '비밀 재료'라고만 쓴다. 링크와 광고고지는 쓰지 않는다. JSON만 출력: {"commentLead":""}`,
       `[기존 댓글]\n${commentLead}\n\n[원문]\n${material.sourceText.slice(0,3500)}\n\n내부 비밀재료:${analysis.secretTerm||productName}`,
       {maxTokens:1800,temperature:.25}
@@ -362,7 +355,7 @@ async function generatePost(accountId,{material,analysis,product,target}){
   const personaText=[analysis.topic,analysis.vision?.soldObject,analysis.vision?.dish,material.sourceText,material.authorReplies].filter(Boolean).join(' ');
   const persona=pickPersona({mode:analysis.mode,text:personaText});
   console.log(`[AutopilotV3][PERSONA] picked="${persona.name}"(${persona.id}) mode=${analysis.mode}`);
-  const d=await callOpenAI(accountId,
+  const d=await callClaudeText(accountId,
 `너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 아래 문체 정책에 따라 원 소재를 가장 바이럴한 각도로 재구성한다.
 
 ${voiceGuide(persona.block)}

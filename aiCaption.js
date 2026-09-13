@@ -1,17 +1,16 @@
-const axios = require('axios');
 const { getAccount, getSystemApiSettings } = require('./db');
 const { voiceGuide } = require('./threadsVoicePolicy');
 const { pickPersona } = require('./threadsPersonas');
+const { callAnthropic } = require('./anthropicClient');
 
-// SaaS 전환 이후 OpenAI는 회원 개별 키가 아니라 운영자가 등록한 공용 키(system_api_settings)를
-// 우선 쓰기로 했는데(아이Image.js와 동일 원칙), 이 파일(aiCaption.js)만 공용키 조회 없이
-// account 개별 키만 보고 있어서 "API 키가 설정되지 않았습니다" 오류가 났었다 — 여기서 통일한다.
-// Anthropic 키는 공용화 대상이 아니라서(system_api_settings에 없음) 계정 개별 키만 확인한다.
+// OpenAI 완전히 걷어내고 Claude(Anthropic)만 쓰도록 전환 (2026-09-13): 이제 Anthropic 키도
+// OpenAI가 쓰던 것과 같은 SaaS 공용키 우선순위를 따른다 — 운영자가 system_api_settings에 등록한
+// 공용 키 → 서버 환경변수 → 계정 개별 키 순. 이렇게 안 하면 계정에 직접 키를 넣지 않은 기존
+// 회원들이 OpenAI 제거와 동시에 전부 "API 키가 설정되지 않았습니다" 에러를 보게 된다.
 function resolveModelKeys(account) {
   const shared = getSystemApiSettings();
   return {
-    anthropicKey: account?.anthropic_api_key || null,
-    openaiKey: shared.openai_api_key || process.env.OPENAI_API_KEY || account?.openai_api_key || null,
+    anthropicKey: shared.anthropic_api_key || process.env.ANTHROPIC_API_KEY || account?.anthropic_api_key || null,
   };
 }
 
@@ -283,29 +282,15 @@ ${priceText ? `가격: ${priceText}` : ''}${youtubeContext}
 날씨는 임의로 만들어내지 마.
 `.trim();
 
-  const { anthropicKey, openaiKey } = resolveModelKeys(account);
+  const { anthropicKey } = resolveModelKeys(account);
   const persona = pickPersona({ mode: 'product', text: `${productName || ''} ${youtubeSource?.title || ''}` });
   console.log(`[Caption] persona picked="${persona.name}"(${persona.id}) productName="${productName}"`);
 
-  if (anthropicKey) {
-    return generateWithAnthropic(
-      anthropicKey,
-      userMessage,
-      persona.block
-    );
+  if (!anthropicKey) {
+    throw new Error('Anthropic API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
   }
 
-  if (openaiKey) {
-    return generateWithOpenAI(
-      openaiKey,
-      userMessage,
-      persona.block
-    );
-  }
-
-  throw new Error(
-    '이 계정에 Anthropic 또는 OpenAI API 키가 설정되지 않았습니다 (연결 설정에서 입력)'
-  );
+  return generateWithAnthropic(anthropicKey, userMessage, persona.block);
 }
 
 // ----------------------------------------------------
@@ -358,76 +343,12 @@ function splitVariants(text) {
 // Anthropic
 // ----------------------------------------------------
 async function generateWithAnthropic(apiKey, userMessage, personaBlock) {
-  const res = await axios.post(
-    'https://api.anthropic.com/v1/messages',
-    {
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1200,
-      temperature: 0.9,
-      system: makeSystemPrompt(personaBlock),
-      messages: [
-        {
-          role: 'user',
-          content: userMessage,
-        },
-      ],
-    },
-    {
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      timeout: 30000,
-    }
-  );
-
-  const textBlock = res.data?.content?.find(
-    (block) => block.type === 'text'
-  );
-
-  if (!textBlock?.text) {
-    throw new Error('생성 결과를 받지 못했습니다');
-  }
-
-  return splitVariants(textBlock.text);
-}
-
-// ----------------------------------------------------
-// OpenAI
-// ----------------------------------------------------
-async function generateWithOpenAI(apiKey, userMessage, personaBlock) {
-  const res = await axios.post(
-    'https://api.openai.com/v1/chat/completions',
-    {
-      model: 'gpt-4o-mini',
-      max_tokens: 1200,
-      temperature: 0.9,
-      messages: [
-        {
-          role: 'system',
-          content: makeSystemPrompt(personaBlock),
-        },
-        {
-          role: 'user',
-          content: userMessage,
-        },
-      ],
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'content-type': 'application/json',
-      },
-      timeout: 30000,
-    }
-  );
-
-  const text = res.data?.choices?.[0]?.message?.content;
-
-  if (!text) {
-    throw new Error('생성 결과를 받지 못했습니다');
-  }
+  const text = await callAnthropic(apiKey, {
+    system: makeSystemPrompt(personaBlock),
+    userContent: userMessage,
+    maxTokens: 1200,
+    temperature: 0.9,
+  });
 
   return splitVariants(text);
 }
@@ -469,55 +390,20 @@ function parseKeywordList(text) {
 
 async function suggestKeywordCandidates(accountId, target) {
   const account = getAccount(accountId);
-  const { anthropicKey, openaiKey } = resolveModelKeys(account);
+  const { anthropicKey } = resolveModelKeys(account);
   const targetText = target && target !== '전체' ? `타겟 독자: ${target}` : '타겟 독자: 전체 연령/성별';
   const userMessage = `${targetText}\n\n위 시스템 규칙에 맞는 검색 키워드 5개를 제안해줘.`;
 
-  let text;
-  if (anthropicKey) {
-    const res = await axios.post(
-      'https://api.anthropic.com/v1/messages',
-      {
-        model: 'claude-sonnet-4-6',
-        max_tokens: 300,
-        temperature: 0.9,
-        system: makeKeywordSystemPrompt(),
-        messages: [{ role: 'user', content: userMessage }],
-      },
-      {
-        headers: {
-          'x-api-key': anthropicKey,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-        },
-        timeout: 20000,
-      }
-    );
-    text = res.data?.content?.find((b) => b.type === 'text')?.text;
-  } else if (openaiKey) {
-    const res = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4o-mini',
-        max_tokens: 300,
-        temperature: 0.9,
-        messages: [
-          { role: 'system', content: makeKeywordSystemPrompt() },
-          { role: 'user', content: userMessage },
-        ],
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${openaiKey}`,
-          'content-type': 'application/json',
-        },
-        timeout: 20000,
-      }
-    );
-    text = res.data?.choices?.[0]?.message?.content;
-  } else {
-    throw new Error('이 계정에 Anthropic 또는 OpenAI API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
+  if (!anthropicKey) {
+    throw new Error('이 계정에 Anthropic API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
   }
+  const text = await callAnthropic(anthropicKey, {
+    system: makeKeywordSystemPrompt(),
+    userContent: userMessage,
+    maxTokens: 300,
+    temperature: 0.9,
+    timeout: 20000,
+  });
 
   if (!text) throw new Error('키워드 후보를 받지 못했습니다');
   return parseKeywordList(text);
@@ -543,54 +429,19 @@ function makeYoutubeKeywordSystemPrompt() {
 
 async function suggestYoutubeSearchKeywords(accountId, productName) {
   const account = getAccount(accountId);
-  const { anthropicKey, openaiKey } = resolveModelKeys(account);
+  const { anthropicKey } = resolveModelKeys(account);
   const userMessage = `쿠팡 상품명: ${productName}\n\n위 규칙에 맞는 YouTube 검색 키워드를 만들어줘.`;
 
-  let text;
-  if (anthropicKey) {
-    const res = await axios.post(
-      'https://api.anthropic.com/v1/messages',
-      {
-        model: 'claude-sonnet-4-6',
-        max_tokens: 150,
-        temperature: 0.7,
-        system: makeYoutubeKeywordSystemPrompt(),
-        messages: [{ role: 'user', content: userMessage }],
-      },
-      {
-        headers: {
-          'x-api-key': anthropicKey,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-        },
-        timeout: 15000,
-      }
-    );
-    text = res.data?.content?.find((b) => b.type === 'text')?.text;
-  } else if (openaiKey) {
-    const res = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4o-mini',
-        max_tokens: 150,
-        temperature: 0.7,
-        messages: [
-          { role: 'system', content: makeYoutubeKeywordSystemPrompt() },
-          { role: 'user', content: userMessage },
-        ],
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${openaiKey}`,
-          'content-type': 'application/json',
-        },
-        timeout: 15000,
-      }
-    );
-    text = res.data?.choices?.[0]?.message?.content;
-  } else {
-    throw new Error('이 계정에 Anthropic 또는 OpenAI API 키가 설정되지 않았습니다');
+  if (!anthropicKey) {
+    throw new Error('이 계정에 Anthropic API 키가 설정되지 않았습니다');
   }
+  const text = await callAnthropic(anthropicKey, {
+    system: makeYoutubeKeywordSystemPrompt(),
+    userContent: userMessage,
+    maxTokens: 150,
+    temperature: 0.7,
+    timeout: 15000,
+  });
 
   if (!text) throw new Error('키워드 후보를 받지 못했습니다');
   return text

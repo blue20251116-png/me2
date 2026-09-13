@@ -1,9 +1,9 @@
-const axios = require('axios');
 const { getAccount, getSystemApiSettings, getPexelsApiKey, getPixabayApiKey } = require('./db');
 const { searchFoodPhotos: searchPexels } = require('./pexelsApi');
 const { searchFoodPhotos: searchPixabay } = require('./pixabayApi');
 const { voiceGuide, assertVoice } = require('./threadsVoicePolicy');
 const { pickPersona, PERSONAS } = require('./threadsPersonas');
+const { callAnthropic, callAnthropicJson, imageBlock } = require('./anthropicClient');
 const REACTION_PERSONA = PERSONAS.find(p => p.id === 'reaction');
 
 const FALLBACK_TOPICS = [
@@ -12,26 +12,17 @@ const FALLBACK_TOPICS = [
   '닭갈비','잔치국수','메밀국수','두부강정','감자채볶음','떡볶이'
 ];
 
-function getOpenAIKey(accountId) {
+function getAnthropicKey(accountId) {
   const account = getAccount(accountId);
   const shared = getSystemApiSettings();
-  return shared.openai_api_key || process.env.OPENAI_API_KEY || account?.openai_api_key || null;
+  return shared.anthropic_api_key || process.env.ANTHROPIC_API_KEY || account?.anthropic_api_key || null;
 }
 
-async function callOpenAI(accountId, system, user, { maxTokens = 1000, json = false, temperature = 0.85 } = {}) {
-  const apiKey = getOpenAIKey(accountId);
-  if (!apiKey) throw new Error('OpenAI API 키가 설정되지 않았습니다');
-  const payload = {
-    model: 'gpt-4o-mini', temperature, max_tokens: maxTokens,
-    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-  };
-  if (json) payload.response_format = { type: 'json_object' };
-  const res = await axios.post('https://api.openai.com/v1/chat/completions', payload, {
-    headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, timeout: 30000,
-  });
-  const text = res.data?.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new Error('AI 결과를 받지 못했습니다');
-  return json ? JSON.parse(text) : text;
+async function callClaudeText(accountId, system, user, { maxTokens = 1000, json = false, temperature = 0.85 } = {}) {
+  const apiKey = getAnthropicKey(accountId);
+  if (!apiKey) throw new Error('Anthropic API 키가 설정되지 않았습니다');
+  if (json) return callAnthropicJson(apiKey, { system, userContent: user, maxTokens, temperature, timeout: 30000 });
+  return callAnthropic(apiKey, { system, userContent: user, maxTokens, temperature, timeout: 30000 });
 }
 
 function looksBloggy(text) {
@@ -57,7 +48,7 @@ async function humanizeHook(accountId, hook, dishName) {
   let text = String(hook || '').trim();
   if (!text || !looksBloggy(text)) return text;
   try {
-    const d = await callOpenAI(accountId,
+    const d = await callClaudeText(accountId,
       `한국 Threads 말투 교정기다. 블로그/광고/AI 문체로 감지된 문장을 실제 사람이 친구한테 툭 말하는 짧은 반말로 바꾼다.
 
 ${voiceGuide()}
@@ -86,7 +77,7 @@ async function buildImageQueries(accountId, dish) {
   };
   push(dish);
   try {
-    const d = await callOpenAI(
+    const d = await callClaudeText(
       accountId,
       '너는 음식 이미지 검색어 생성기다. 요리명을 Pexels/Pixabay에서 잘 검색되는 짧은 영어 음식명으로 바꾼다. 수식어를 줄이고 음식 자체를 나타내는 2~5단어 검색어를 만든다. 첫 검색어는 최대한 정확하게, 두 번째는 조금 더 넓게 만든다. JSON={"queries":["tomato pasta","pasta"]} 형식만 출력한다.',
       `요리명: ${dish}`,
@@ -100,20 +91,17 @@ async function buildImageQueries(accountId, dish) {
 }
 
 async function visionCheck(accountId, dish, imageUrl) {
-  const apiKey = getOpenAIKey(accountId);
+  const apiKey = getAnthropicKey(accountId);
   if (!apiKey) return false;
   try {
-    const res = await axios.post('https://api.openai.com/v1/chat/completions', {
-      model: 'gpt-4o-mini', temperature: 0, max_tokens: 170, response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: '음식 사진 검수기다. 목표 음식과 완전히 동일하거나 일반 사용자가 봤을 때 같은 종류의 완성요리로 자연스럽게 받아들일 수 있으면 accept=true. 조리 전 재료, 포장제품, 완전히 다른 음식, 음식이 아닌 이미지는 false. 토핑/그릇/고명/재료 배치 차이는 허용한다. JSON={"accept":true/false,"confidence":0-100,"reason":"짧은 이유"}' },
-        { role: 'user', content: [
-          { type: 'text', text: `목표 음식: ${dish}\n이 사진이 Threads 레시피 대표사진으로 써도 자연스러운 같은 종류의 완성요리인지 판정해.` },
-          { type: 'image_url', image_url: { url: imageUrl, detail: 'low' } },
-        ] },
+    const d = await callAnthropicJson(apiKey, {
+      system: '음식 사진 검수기다. 목표 음식과 완전히 동일하거나 일반 사용자가 봤을 때 같은 종류의 완성요리로 자연스럽게 받아들일 수 있으면 accept=true. 조리 전 재료, 포장제품, 완전히 다른 음식, 음식이 아닌 이미지는 false. 토핑/그릇/고명/재료 배치 차이는 허용한다. JSON={"accept":true/false,"confidence":0-100,"reason":"짧은 이유"}',
+      userContent: [
+        { type: 'text', text: `목표 음식: ${dish}\n이 사진이 Threads 레시피 대표사진으로 써도 자연스러운 같은 종류의 완성요리인지 판정해.` },
+        imageBlock(imageUrl),
       ],
-    }, { headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, timeout: 30000 });
-    const d = JSON.parse(res.data.choices[0].message.content);
+      temperature: 0, maxTokens: 170, timeout: 30000,
+    });
     const confidence = Number(d.confidence || 0);
     const reason = String(d.reason || '');
     const hardReject = /다른 음식|조리 전|생재료|포장|제품 사진|음식이 아님|완성요리가 아님/i.test(reason);
@@ -199,7 +187,7 @@ async function pickPhotos(accountId, dish) {
 async function generateRecipe(accountId, target) {
   let topics = FALLBACK_TOPICS.slice().sort(() => Math.random() - 0.5).slice(0, 8);
   try {
-    const d = await callOpenAI(accountId,
+    const d = await callClaudeText(accountId,
       '한국 Threads용 레시피 주제 기획자다. 실생활에서 쉽게 해먹는 서로 다른 요리 8개를 JSON으로 출력한다. 너무 희귀한 요리는 제외한다. JSON={"topics":["..."]}',
       `타겟: ${target || '전체'}\n오늘 올리기 좋은 레시피 주제 8개`, { maxTokens: 400, json: true });
     if (Array.isArray(d.topics) && d.topics.length) topics = [...new Set(d.topics.map(x => String(x).trim()).filter(Boolean))].slice(0, 8);
@@ -217,7 +205,7 @@ async function generateRecipe(accountId, target) {
       // here would write a hook promising a reveal the comment can never deliver on, so this
       // path always uses the base reaction persona instead of rotating through the recipe pool.
       const persona = REACTION_PERSONA;
-      const r = await callOpenAI(accountId,
+      const r = await callClaudeText(accountId,
         `한국 Threads 레시피 에디터다. JSON만 출력한다. 정확한 재료와 계량, 실제 따라할 수 있는 조리 순서 3~6단계를 만든다.
 
 ${voiceGuide(persona.block)}
@@ -277,7 +265,7 @@ async function generateDailyStory(accountId, target) {
   const persona = pickPersona({ mode: 'lifestyle', text: '' });
   console.log(`[ContentOnly][DailyStory] persona picked="${persona.name}"(${persona.id})`);
   const system = buildDailyStorySystemPrompt(persona.block);
-  let text = await callOpenAI(accountId, system, `타겟: ${target || '전체'}\n오늘 Threads에 올릴 자연스러운 일상글 하나만 작성해.`, { maxTokens: 350, temperature: 1.0 });
+  let text = await callClaudeText(accountId, system, `타겟: ${target || '전체'}\n오늘 Threads에 올릴 자연스러운 일상글 하나만 작성해.`, { maxTokens: 350, temperature: 1.0 });
   text = text.replace(/^["'“”]+|["'“”]+$/g, '').trim();
   if (looksBloggy(text)) text = await humanizeHook(accountId, text, '일상');
   text = assertVoice(text, { mode: 'lifestyle' });
