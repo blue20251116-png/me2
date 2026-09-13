@@ -29,10 +29,20 @@ function sanitizeAuthorReplies(value) {
   return raw.split(/\n\n+/).map(x => x.trim()).filter(x => x.length >= 2).slice(0, 8).join('\n\n');
 }
 function sanitizeGeneratedComment(value) { return stripAffiliateNoise(value, { preserveLines: true }).trim(); }
+// REGRESSION (found via synthetic testing, hourly review): "썰" (to cut/slice) is at least as
+// common in ordinary knife/cutting-board/kitchenware reviews ("이 도마 고기 썰기 편함", "이 칼
+// 진짜 잘 썰림") as in actual recipes - it does not, on its own, indicate the source material is
+// a recipe at all. Combined with a food noun, it was misclassifying plain kitchen-tool reviews as
+// recipe mode, which then applies the wrong persona pool (reaction/housewife-recipe only) and the
+// wrong prompt framing (hide a "secret ingredient" that doesn't exist for a knife or cutting
+// board) to a product that has nothing to do with cooking instructions. The remaining cooking
+// process verbs (볶/굽/끓/튀기/찜/삶/섞) and measurement units are left as-is - they still
+// correctly catch real recipes (verified: dishes described with an actual cooking method or a
+// measured ingredient still detect as recipe).
 function detectRecipe(sourceText, authorReplies, requestedMode) {
   if (requestedMode === 'recipe') return true;
   const t = `${sourceText}\n${authorReplies}`.toLowerCase();
-  return /(레시피|재료|양념|소스|계란|두부|고기|밥|면|요리)/.test(t) && /(볶|굽|끓|튀기|찜|삶|썰|섞|큰술|작은술|스푼|ml|\bg\b)/i.test(t);
+  return /(레시피|재료|양념|소스|계란|두부|고기|밥|면|요리)/.test(t) && /(볶|굽|끓|튀기|찜|삶|섞|큰술|작은술|스푼|ml|\bg\b)/i.test(t);
 }
 
 async function generateFromThreadsMaterial(accountId, { keyword, sourceText, authorReplies = '', mode = 'product', visualEvidence = '', imageSummary = '', videoSummary = '' }) {
@@ -85,4 +95,4 @@ JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}]}`;
   return { mode: isRecipe ? 'recipe' : 'product', persona: persona.id, items: accepted, texts: accepted.map(x => x.text), comments: accepted.map(x => x.comment) };
 }
 
-module.exports = { generateFromThreadsMaterial };
+module.exports = { generateFromThreadsMaterial, detectRecipe };
