@@ -415,6 +415,27 @@ test('"병" was removed from the disease-keyword list - it is bare-word ambiguou
   assert.ok(policy.voiceProblems('이 질환 완치됨').includes('고위험 효능 주장'));
 });
 
+test('highRiskClaim also covers finance, as voiceGuide() itself promises ("건강·의학·안전·금융")', () => {
+  // REGRESSION (found via re-reading voiceGuide() against the code, hourly review, 2026-09-13):
+  // the shared rule explicitly lists finance alongside health/medicine/safety as a category that
+  // must never get an unverified absolute claim, but the code only ever checked the first three -
+  // a plain prose-vs-code contradiction. A model writing about a financial product/service with an
+  // absolute guarantee should be caught exactly like a health claim is.
+  assert.ok(policy.voiceProblems('이 적금 가입하면 무조건 이득임').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이거 사면 원금 손실 절대 없음').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('무조건 수익 나는 재테크 방법임').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('복리로 무조건 돈 불어남').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이 주식 무조건 오릅니다').includes('고위험 효능 주장'));
+});
+
+test('the finance-claim guard does not flag ordinary savings/budgeting content or unrelated "무조건"', () => {
+  assert.deepEqual(policy.voiceProblems('원금 손실 없는 편이라 그나마 안심하고 가입함'), []);
+  assert.deepEqual(policy.voiceProblems('이 통장 이자 진짜 짭짤함'), []);
+  assert.deepEqual(policy.voiceProblems('가계부 쓰는 습관 들이니까 돈이 좀 모임'), []);
+  assert.deepEqual(policy.voiceProblems('이 다이어리 쓰면서 저축 습관 생김'), []);
+  assert.deepEqual(policy.voiceProblems('무조건 예쁜 디자인이라 삼'), []);
+});
+
 test('source is a creative seed: invented low-risk connective copy is allowed', async () => {
   const text = '처음엔 별거 아닌데\n보다가 계속 보게 됨ㅋㅋ';
   const out = await policy.reviewSourceVoice(text, { sourceText: '금붕어가 먹이를 먹는 영상' }, async () => {

@@ -118,7 +118,16 @@ function formatVoice(text){return normalizeVoice(text);}
 // every sentence-final absolute form (없어/없음/없다/없네/없죠) AND the noun-modifying absolute
 // shape ("없는 사이즈", "없는 제품" - "없는" followed directly by a noun, not a hedge word, is
 // still an absolute "risk-free X" claim and must stay caught, per the existing test below).
-function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로)\s*(?:빠졌|빠짐|감량|뺐|감소)/i.test(t)||/(?:암|통증|질환|염증|당뇨|고혈압)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/삼켜도\s*(?:완전\s*|100\s*%\s*)?(?:안전|괜찮)|질식\s*위험(?:이|가)?\s*없(?!\s*는\s*(?:편|것|거|셈))|알레르기\s*(?:걱정|위험)(?:이|가)?\s*(?:전혀\s*)?없(?!\s*는\s*(?:편|것|거|셈))/.test(t);}
+// REGRESSION (found via re-reading voiceGuide() against the code, hourly review, 2026-09-13): the
+// shared rule below explicitly names "건강·의학·안전·금융" (health/medicine/safety/AND finance) as
+// the four categories that must never get an unverified absolute claim - but until now this
+// function only ever checked the first three. A model writing "이 적금 가입하면 무조건 이득임" or
+// "이거 사면 원금 손실 절대 없음" about a financial product/service sailed through completely
+// unchecked - a straightforward prose-vs-code contradiction where the policy promised a protection
+// the guard never implemented. Kept as narrow as the existing health-claim branches (원금/손실
+// paired with an absolute 없/보장, or a bare "무조건 <수익어>") to avoid flagging ordinary
+// savings/budgeting content ("가계부 쓰니까 돈이 좀 모임", "무조건 예쁜 디자인이라 삼").
+function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로)\s*(?:빠졌|빠짐|감량|뺐|감소)/i.test(t)||/(?:암|통증|질환|염증|당뇨|고혈압)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/삼켜도\s*(?:완전\s*|100\s*%\s*)?(?:안전|괜찮)|질식\s*위험(?:이|가)?\s*없(?!\s*는\s*(?:편|것|거|셈))|알레르기\s*(?:걱정|위험)(?:이|가)?\s*(?:전혀\s*)?없(?!\s*는\s*(?:편|것|거|셈))/.test(t)||/(?:원금|손실)[^\n.!?]{0,16}(?:없(?!\s*는\s*(?:편|것|거|셈))|보장)|무조건\s*(?:수익|돈|이득|오른다|오릅니다|번다|법니다)/.test(t);}
 // REGRESSION (found live, 2026-09-13): voiceGuide() explicitly instructs grouping a 1~3-line
 // thought and inserting a blank line (two line breaks) before the next one - "이렇게 나눠야 보기
 // 좋다" - but until now nothing ever checked whether the model actually did this. Two real
