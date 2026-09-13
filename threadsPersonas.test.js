@@ -25,6 +25,15 @@ test('detectPersonaCategory: fitness keywords are detected for non-recipe materi
   }
 });
 
+test('detectPersonaCategory: posture/alignment fitness material is detected without a workout-specific word', () => {
+  // REGRESSION (found live, 2026-09-13): a real 골반 비틀림 교정(pelvis/posture correction) product
+  // post matched none of the old keywords and fell through to 'general', missing the
+  // trainer-expert persona pool even though "PT쌤이 알려준 골반 교정" fits it well.
+  for (const text of ['골반 비틀림 교정이 이렇게 쉽다니', '스트레칭 하나로 체형 교정', '자세 교정 밴드 써봤는데', '코어 근력 키우기 좋음']) {
+    assert.equal(detectPersonaCategory({ mode: 'product', text }), 'fitness');
+  }
+});
+
 test('detectPersonaCategory: kids keywords are detected for non-recipe material', () => {
   for (const text of ['신생아 기저귀 추천템', '유아 장난감 이거 미쳤음', '이유식 만들 때 이거 씀']) {
     assert.equal(detectPersonaCategory({ mode: 'product', text }), 'kids');

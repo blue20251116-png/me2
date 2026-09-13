@@ -427,3 +427,25 @@ test('short posts are valid; ten lines are never mandatory', () => {
     assertThreadsShape(policy.assertVoice(text));
   }
 });
+
+test('a real published post with a hard line break after every line and zero paragraph breaks is rejected', () => {
+  // REGRESSION (found live, 2026-09-13): voiceGuide() explicitly instructs grouping a 1~3-line
+  // thought and inserting a blank line before the next one, but nothing ever checked whether the
+  // model actually did this. Two real published posts came back as a flat wall of one-liners -
+  // a hard line break after every single line, not one blank line anywhere - and voiceProblems()
+  // passed both silently.
+  const realPost1 = '골반 비틀림 교정이\n이렇게 쉽다니! ㅋㅋ\n이거 해보니까\n힙라인이 확 달라짐 ㄷㄷ\n1주일 만에 효과가\n보이더라? ㅠㅠ\n이거 따라해봐!\n소리 질렀음;;\n효과 진짜 대박임\n링크는 댓글에!';
+  const realPost2 = '이거 진짜 대박임! 😍\n협탁 위가 깔끔해지면서\n동시 충전까지 가능해\n보조배터리처럼 쏙 넣어 다니기\n편한 것도 완전 좋음\n이런 거 있으면 삶의 질\n확실히 올라가니까,\n앱등이들은 무조건 사야 해! 🔥';
+  assert.ok(policy.voiceProblems(realPost1).includes('문단 구분 없음'));
+  assert.ok(policy.voiceProblems(realPost2).includes('문단 구분 없음'));
+});
+
+test('the paragraph-break guard does not force a blank line into a short, single-thought post', () => {
+  assert.deepEqual(policy.voiceProblems('이거 진짜 좋음\n너무 신기함'), []);
+  assert.deepEqual(policy.voiceProblems('처음엔 반신반의했는데\n막상 써보니까\n생각보다 괜찮음\n다음에 또 살 듯'), []);
+});
+
+test('the paragraph-break guard passes a post that already groups thoughts with a blank line', () => {
+  const wellFormatted = '옷은 많은데\n막상 나가려면 입을 게 없음ㅋㅋ\n\n이런 코트 하나 보고 있는데\n가을 오면 바로 입을 듯\n\n색감 진짜 예쁘더라\n이번 주에 주문할 듯';
+  assert.deepEqual(policy.voiceProblems(wellFormatted).filter(r => r === '문단 구분 없음'), []);
+});

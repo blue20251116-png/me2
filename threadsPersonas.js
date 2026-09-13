@@ -78,7 +78,12 @@ const PERSONAS = [
   { id: 'parenting-mom', name: '육아맘형', categories: ['kids'], block: PARENTING_MOM_BLOCK },
 ];
 
-const FITNESS_KEYWORDS = /(운동|헬스|다이어트|단백질|보충제|프로틴|근육|PT|피티|트레이너|홈트|요가|필라테스|헬스장|런닝머신|러닝|덤벨|폼롤러|헬스용품)/i;
+// REGRESSION (found live, 2026-09-13): a real 골반 비틀림 교정(pelvis/posture correction) product
+// post matched none of these keywords, so detectPersonaCategory() fell through to 'general' -
+// missing the trainer-expert persona pool entirely even though "PT쌤이 알려준 골반 교정" is exactly
+// the kind of material that persona fits best. Posture/stretching/body-alignment content is a
+// common fitness-adjacent category this bot covers but the keyword list never named.
+const FITNESS_KEYWORDS = /(운동|헬스|다이어트|단백질|보충제|프로틴|근육|PT|피티|트레이너|홈트|요가|필라테스|헬스장|런닝머신|러닝|덤벨|폼롤러|헬스용품|스트레칭|골반|체형|자세\s*교정|코어)/i;
 const KIDS_KEYWORDS = /(아기|유아|이유식|기저귀|어린이|장난감|아동용|육아|신생아|초등학생|아이용|유모차|젖병|딸랑이)/i;
 
 // mode is autopilotMaterialEngine.js's analysis.mode ('recipe'|'product'|'lifestyle') - only
