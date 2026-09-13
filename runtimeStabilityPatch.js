@@ -7,8 +7,18 @@ const path = require('path');
 const originalCompile = Module.prototype._compile;
 const patched = new Set();
 
+// REGRESSION (found live, 2026-09-13, in direct response to a user question about Claude credit
+// exhaustion): this line's error-text regex was written for OpenAI's old phrasing and never
+// updated for the OpenAI->Claude migration earlier today. Anthropic's actual insufficient-credit
+// error reads "Your credit balance is too low to access the Claude API..." - which matches none of
+// "no credits remaining"/"add credits" - so even where this guard successfully injects (confirmed
+// via boot log: "engine budget propagation ON"), a real Claude credit-exhaustion error would still
+// fall through the injected check and get silently swallowed into a generic zero-confidence
+// default a few lines below, surfacing to the user as a misleading "판매 대상 신뢰도 부족" instead
+// of the actual, fixable "add more credits" cause - exactly the failure mode this whole guard
+// exists to prevent, just for a different provider's wording than it was written to expect.
 function budgetGuardLine() {
-  return "if(e?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED'||e?.__openAiNoRetry||/OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits/i.test(String(e?.message||'')+' '+String(e?.response?.data?.error?.message||''))){throw e;}";
+  return "if(e?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED'||e?.__openAiNoRetry||/OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(String(e?.message||'')+' '+String(e?.response?.data?.error?.message||''))){throw e;}";
 }
 
 Module.prototype._compile = function runtimeStabilityCompile(content, filename) {

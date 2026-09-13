@@ -235,7 +235,13 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
               break;
             }
             // Stop this account's batch, but never poison the Coupang auth cache.
-            if (status === 401 || err?.isContentQualityHold || err?.code==='CONTENT_QUALITY_HOLD' || err?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED' || err?.__openAiNoRetry || /no credits remaining|OPENAI_HOURLY_BUDGET_EXCEEDED/i.test(msg)) break;
+            // REGRESSION (found live, 2026-09-13, in direct response to a user question about
+            // Claude credit exhaustion): this regex was written for OpenAI's old phrasing and
+            // never updated for the OpenAI->Claude migration earlier today - Anthropic's actual
+            // insufficient-credit error ("Your credit balance is too low...") matched neither
+            // phrase, so a real Claude credit-exhaustion error would keep retrying every
+            // remaining slot for this account instead of stopping immediately.
+            if (status === 401 || err?.isContentQualityHold || err?.code==='CONTENT_QUALITY_HOLD' || err?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED' || err?.__openAiNoRetry || /no credits remaining|OPENAI_HOURLY_BUDGET_EXCEEDED|credit balance is too low|insufficient_quota/i.test(msg)) break;
             console.log(`[Autopilot][TIMED PREFILL] account #${accountId} 실패 1건은 건너뛰고 다음 예약 슬롯 계속 시도`);
           } finally {
             if (global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID === accountId) delete global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID;
