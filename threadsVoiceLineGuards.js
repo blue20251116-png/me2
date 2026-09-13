@@ -17,7 +17,14 @@
 // a bare "그런데" line went completely unflagged even though it needs a following clause exactly
 // like "근데" already does. "그러니깐" is likewise just a third common spelling of "그니까"/
 // "그러니까", already both in this list.
-const CONNECTOR_ONLY = /^(?:그리고|근데|그런데|그래서|하지만|또|또는|혹은|및|그니까|그러니까|그러니깐)$/;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "그치만" (casual "하지만"),
+// "게다가" (moreover), and "왜냐하면" (because) are just as grammatically dependent as the
+// connectives already listed - each one only ever introduces a following clause and is never a
+// complete standalone utterance on its own - but were missing entirely, so lines like "가격도
+// 착함 / 그치만 / 배송이 좀 느림" went completely unflagged. Deliberately NOT adding "그래도" here
+// for the same reason 그치/그럼/아니 were excluded above: "그래도!" genuinely stands alone as a
+// defiant one-word reply in casual Korean, so it isn't safe to flag as always-incomplete.
+const CONNECTOR_ONLY = /^(?:그리고|근데|그런데|그래서|하지만|그치만|또|또는|혹은|및|그니까|그러니까|그러니깐|게다가|왜냐하면)$/;
 const DANGLING_PUNCTUATION_START = /^[!?~.…]/;
 // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): three more everyday
 // dependent bound nouns were missing entirely, so a model splitting "이 국물은 좀 순한 / 편이라

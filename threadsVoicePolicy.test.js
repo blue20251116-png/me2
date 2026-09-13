@@ -106,6 +106,29 @@ test('connector-only guard catches "그런데"/"그러니깐", the same words as
   }
 });
 
+test('connector-only guard also catches "그치만"/"게다가"/"왜냐하면" - dependent connectives missing from the list', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "그치만" (casual
+  // "하지만"), "게다가" (moreover), and "왜냐하면" (because) are just as grammatically dependent
+  // as the connectives already in this list - each only ever introduces a following clause and
+  // is never a complete standalone utterance - but were missing entirely, so a bare line
+  // consisting only of one of them went completely unflagged.
+  const { repairConnectorOnlyBreaks } = require('./threadsVoiceLocalRepair');
+  const broken = ['그치만\n배송이 좀 느림', '게다가\n디자인도 예쁨', '왜냐하면\n기능이 다름'];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
+test('connector-only guard does not flag "그래도" - it genuinely stands alone as a defiant one-word reply', () => {
+  // Deliberately excluded for the same reason as 그치/그럼/아니 above: "그래도!" is a real,
+  // complete standalone utterance in casual Korean ("still, I will"), not proof of a cut-off
+  // sentence, so it must not be treated the same as the always-dependent connectives.
+  assert.deepEqual(policy.incompleteLineReasons('하지 말라니까\n그래도\n할 거임'), []);
+});
+
 test('a bound-noun exclamation ("토할" / "뻔!") split across lines is caught and repaired, not shipped', () => {
   const broken = '올라오고... 진짜 토할\n뻔! 근데 이 세제';
   assert.ok(policy.incompleteLineReasons(broken).length > 0, 'must flag the mid-phrase split');
