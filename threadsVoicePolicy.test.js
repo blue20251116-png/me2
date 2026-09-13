@@ -194,6 +194,38 @@ test('the new 편/만한/듯이 bound-noun check is not fooled by ordinary words
   for (const text of safe) assert.deepEqual(policy.incompleteLineReasons(text), [], `false positive on: ${text}`);
 });
 
+test('the bound noun 터 is caught as a dangling split in its 터인데/터였는데 forms, not just 터라', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): DANGLING_BOUND_NOUN_START
+  // only matched "터라" - the equally common "터인데"/"터였는데" conjugations went completely
+  // undetected, so a split like "나가려던" / "터인데 비가 옴" was shipped as two lines even though
+  // the second line is grammatically incomplete without "터인데" attaching to the line before it.
+  const { repairConnectorOnlyBreaks } = require('./threadsVoiceLocalRepair');
+  const broken = [
+    '나가려던\n터인데 비가 옴',
+    '이미 산\n터였는데 세일함',
+    '막 도착한\n터라 정신없음',
+  ];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
+test('the 터 bound-noun check is not fooled by ordinary words that merely start with 터', () => {
+  // Synthetic-sentence check mirroring the existing 편/만한/듯이 false-positive test above:
+  // 터널/터졌음/터미널/터치감 are ordinary words unrelated to the bound-noun meaning and must not
+  // be flagged just because they start with the same syllable as 터.
+  const safe = [
+    '아까 지나온\n터널 진짜 길었음',
+    '풍선이 결국\n터졌음ㅋㅋ 완전 놀람',
+    '버스\n터미널 도착해서 바로 탐',
+    '이 케이스\n터치감 진짜 좋음',
+  ];
+  for (const text of safe) assert.deepEqual(policy.incompleteLineReasons(text), [], `false positive on: ${text}`);
+});
+
 test('runtime review repairs a too-many-lines post instead of discarding the material', async () => {
   // Fixture updated: an overlong single line used to be a rejection reason on its own and was
   // this test's trigger, but length alone no longer gates rejection - too-many-lines still does,
