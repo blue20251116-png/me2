@@ -25,6 +25,14 @@ async function callClaudeText(accountId, system, user, { maxTokens = 1000, json 
   return callAnthropic(apiKey, { system, userContent: user, maxTokens, temperature, timeout: 30000 });
 }
 
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): same hardcoded-list
+// under-match class already found and fixed several times this session (FITNESS_KEYWORDS,
+// KIDS_KEYWORDS, GENERIC_CTA_ENDING, highRiskClaim). "일품이다/일품인" (a classic "this dish is
+// excellent" blog word), "온 가족이 좋아할" (a stock family-friendly-menu blurb), and "누구나 쉽게
+// 따라할 수 있는" (a stock recipe-blog opener) are all at least as common in real AI-generated
+// Korean food content as the phrases already listed below, but none of them end in a formal
+// 요./니다. sentence ending either - so they slipped past both the explicit list AND the
+// "2+ formal endings" fallback heuristic completely unflagged.
 function looksBloggy(text) {
   const t = String(text || '').trim();
   if (!t) return false;
@@ -40,6 +48,9 @@ function looksBloggy(text) {
     /꼭\s*시도해/,
     /즐겨보세요/,
     /완벽한\s*(?:메뉴|선택)/,
+    /일품(?:이다|이에요|입니다|인|이네)/,
+    /온\s*가족(?:이|도)?\s*(?:좋아할|사랑할|만족할)/,
+    /누구나\s*(?:쉽게|간단하게)\s*(?:따라|만들)/,
   ];
   return bad.some(r => r.test(t)) || (t.match(/(?:요\.|니다\.)/g) || []).length >= 2;
 }
@@ -272,4 +283,4 @@ async function generateDailyStory(accountId, target) {
   return { text, link: null, imageUrl: null, extraImageUrl: null, keyword: '일상', trendNote: '쿠팡 API 없음 · 순수 일상형', target, persona: persona.id };
 }
 
-module.exports = { generateRecipe, generateDailyStory, RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText, buildDailyStorySystemPrompt };
+module.exports = { generateRecipe, generateDailyStory, RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText, buildDailyStorySystemPrompt, looksBloggy };

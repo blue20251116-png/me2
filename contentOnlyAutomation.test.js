@@ -2,8 +2,31 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText, buildDailyStorySystemPrompt } = require('./contentOnlyAutomation');
+const { RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText, buildDailyStorySystemPrompt, looksBloggy } = require('./contentOnlyAutomation');
 const { PERSONAS } = require('./threadsPersonas');
+
+test('looksBloggy catches common AI-blog food clichés missing from the explicit list', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): same hardcoded-list
+  // under-match class already found and fixed several times this session. "일품이다/일품인",
+  // "온 가족이 좋아할", and "누구나 쉽게 따라할 수 있는" are all at least as common in real
+  // AI-generated Korean food content as the phrases already in the list, but none of them end in
+  // a formal 요./니다. sentence ending either, so they slipped past the list AND the "2+ formal
+  // endings" fallback heuristic completely unflagged.
+  assert.ok(looksBloggy('따뜻한 국물이 일품인 이 레시피 강추'));
+  assert.ok(looksBloggy('이 소스 진짜 일품이다'));
+  assert.ok(looksBloggy('온 가족이 좋아할 만한 메뉴예요'));
+  assert.ok(looksBloggy('온 가족도 만족할 맛'));
+  assert.ok(looksBloggy('누구나 쉽게 따라할 수 있는 초간단 레시피'));
+  assert.ok(looksBloggy('누구나 간단하게 만들 수 있음'));
+});
+
+test('the new looksBloggy patterns do not flag ordinary casual sentences', () => {
+  assert.ok(!looksBloggy('이 냄비 하나로 요리 다 됨'));
+  assert.ok(!looksBloggy('오늘 저녁은 이걸로 정함'));
+  assert.ok(!looksBloggy('국물 진짜 시원함'));
+  assert.ok(!looksBloggy('가족들이 다 좋아함ㅋㅋ'));
+  assert.ok(!looksBloggy('이거 진짜 쉬움'));
+});
 
 test('recipe comment teaser is not a single hardcoded phrase repeated every time', () => {
   // Regression: generateRecipe() used to append the exact same literal closing
