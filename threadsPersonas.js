@@ -84,7 +84,13 @@ const PERSONAS = [
 // the kind of material that persona fits best. Posture/stretching/body-alignment content is a
 // common fitness-adjacent category this bot covers but the keyword list never named.
 const FITNESS_KEYWORDS = /(운동|헬스|다이어트|단백질|보충제|프로틴|근육|PT|피티|트레이너|홈트|요가|필라테스|헬스장|런닝머신|러닝|덤벨|폼롤러|헬스용품|스트레칭|골반|체형|자세\s*교정|코어)/i;
-const KIDS_KEYWORDS = /(아기|유아|이유식|기저귀|어린이|장난감|아동용|육아|신생아|초등학생|아이용|유모차|젖병|딸랑이)/i;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): same hardcoded-list
+// under-match class as the FITNESS_KEYWORDS fix above. "애기" - the colloquial spelling of "아기"
+// that Korean parents actually type far more often than the standard form on social media - wasn't
+// listed at all, so ordinary posts like "애기 옷 이거 완전 편함"/"우리 애기가 너무 좋아함" fell through
+// to 'general', missing the parenting-mom persona pool entirely. Common baby-gear product nouns
+// (분유/카시트/속싸개) that don't happen to contain "아기"/"유아"/etc. as a substring had the same gap.
+const KIDS_KEYWORDS = /(아기|애기|유아|이유식|기저귀|어린이|장난감|아동용|육아|신생아|초등학생|아이용|유모차|젖병|딸랑이|분유|카시트|속싸개)/i;
 
 // mode is autopilotMaterialEngine.js's analysis.mode ('recipe'|'product'|'lifestyle') - only
 // 'recipe' maps directly to a category here. For everything else, this only decides which VOICE

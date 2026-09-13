@@ -40,6 +40,15 @@ test('detectPersonaCategory: kids keywords are detected for non-recipe material'
   }
 });
 
+test('detectPersonaCategory: colloquial "애기" and common baby-gear nouns are detected without the standard "아기" spelling', () => {
+  // REGRESSION (found live, 2026-09-13): "애기" is the spelling Korean parents actually type far
+  // more often than "아기" on social media, and 분유/카시트/속싸개 are common baby-product nouns that
+  // don't contain any other kids keyword as a substring - all of these fell through to 'general'.
+  for (const text of ['애기 옷 이거 완전 편함', '우리 애기가 너무 좋아함', '분유 타는 거 이거 진짜 편함', '카시트 이거 안전벨트 짱', '속싸개 이거 진짜 포근함']) {
+    assert.equal(detectPersonaCategory({ mode: 'product', text }), 'kids');
+  }
+});
+
 test('detectPersonaCategory: falls back to general when nothing matches', () => {
   assert.equal(detectPersonaCategory({ mode: 'product', text: '무선 청소기 이거 완전 신세계' }), 'general');
   assert.equal(detectPersonaCategory({ mode: 'lifestyle', text: '' }), 'general');
