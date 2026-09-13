@@ -25,16 +25,28 @@ function extractJson(text) {
   try {
     return JSON.parse(cleaned);
   } catch {}
-  const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
-  if (arrayMatch) {
-    try {
-      return JSON.parse(arrayMatch[0]);
-    } catch {}
-  }
+  // REGRESSION (found via review, hourly review, 2026-09-13): this used to try the array pattern
+  // FIRST. Nearly every JSON schema this app asks Claude for is a top-level OBJECT that itself
+  // contains an array value ({"items":[...]}, {"searchTerms":[...]}, {"queries":[...]}, etc.) -
+  // whenever the model wraps its answer in any surrounding text (breaking the direct parse
+  // above), the array-first regex greedily matched just the INNER array substring and parsed it
+  // successfully on its own, returning early with only the array and silently discarding the
+  // object it actually belonged to (e.g. {"items":[{"text":"a"}]} -> [{"text":"a"}], losing the
+  // "items" key entirely). Callers reading parsed.items off that then saw undefined and treated
+  // the whole response as empty. Trying the object pattern first fixes this without breaking the
+  // one real bare-top-level-array schema in this app (frameVision.js's frame list): an object
+  // match spanning multiple comma-separated array elements isn't valid JSON on its own, so it
+  // fails to parse and correctly falls through to the array check below.
   const objectMatch = cleaned.match(/\{[\s\S]*\}/);
   if (objectMatch) {
     try {
       return JSON.parse(objectMatch[0]);
+    } catch {}
+  }
+  const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+  if (arrayMatch) {
+    try {
+      return JSON.parse(arrayMatch[0]);
     } catch {}
   }
   throw new Error('AI 응답을 JSON으로 해석할 수 없습니다');
