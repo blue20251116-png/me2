@@ -169,10 +169,29 @@ function normalizeVisionResult(d){
     confidence:(()=>{let n=Number(d?.confidence);if(Number.isFinite(n)&&n>0&&n<=1)n*=100;if(!Number.isFinite(n)||n<0)n=0;n=Math.min(100,n);if(n===0){const sold=clean(d?.soldObject),dish=clean(d?.dish),ingredient=clean(d?.promotedIngredient),terms=(Array.isArray(d?.searchTerms)?d.searchTerms:[]).map(clean).filter(Boolean);if(sold&&terms.length)n=75;else if(dish&&ingredient&&terms.length)n=70;else if((sold||dish)&&terms.length)n=60;}return n;})(),evidence:clean(d?.evidence).slice(0,300)
   };
 }
+// REGRESSION (found live, 2026-09-13, right after the OpenAI->Claude migration): when
+// getAnthropicKey() has nothing to return, every call this function makes throws "Anthropic API
+// 키가 설정되지 않았습니다" - but both catch blocks below swallow that into a generic warn log and
+// (for the text fallback) a zero-confidence default object, not a rethrow. buildThreadsFirstAutopilot
+// then reads that as "판매 대상 신뢰도 부족" (low match confidence) and skips to the next material -
+// completely masking the real, fixable cause (missing API key) behind a misleading message for
+// every single material, every single run, making the actual outage undiagnosable from the logs.
+// Checking this once, up front, throws the real error before either catch block gets a chance to
+// bury it - it still reaches buildThreadsFirstAutopilot's own try/catch same as before, just with
+// the true message intact.
+// NOTE: the guard below is placed AFTER the original 3-line prologue (images/system/text), not
+// before it - videoFrameVisionPatch.js does an exact-string-marker replace of that exact prologue
+// (signature line through `const text=commerceTargetText(m);`) to splice in video-frame-extraction
+// vision support. Putting the guard before it broke that marker (confirmed via a MISS log on boot);
+// putting it after leaves the marker's literal text untouched while still checking the key before
+// any real API call happens, in both the unpatched and video-patched versions of this function.
 async function identifyCommerceTarget(accountId,m){
   const images=(Array.isArray(m.images)?m.images:[]).filter(Boolean).slice(0,3);
   const system=commerceTargetPrompt();
   const text=commerceTargetText(m);
+  if(!getAnthropicKey(accountId)){
+    throw new Error('Anthropic API 키가 설정되지 않았습니다');
+  }
   if(images.length){
     try{
       const d=await callClaudeVision(accountId,system,`${text}\n\n대표 시각자료 ${images.length}장.`,images,{maxTokens:1200,temperature:.1});
