@@ -46,6 +46,18 @@ test('the emoji/reaction lookahead extension still preserves decimal points and 
   assert.equal(sanitizePublishedThreadsText('완전 신기함...😂'), '완전 신기함...😂');
 });
 
+test('sanitizePublishedThreadsText also strips the period before ㄷㄷ/;; - voiceGuide()\'s own other two sanctioned reaction markers', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): voiceGuide() explicitly
+  // names "ㅋㅋ, ㄷㄷ, ㅠㅠ, ;;" as the sanctioned casual reaction markers, but the lookahead above
+  // only ever covered ㅋㅎㅜㅠ~!? - "ㄷ" (ㄷㄷ) and ";" (;;) were both missing, so "실화냐.ㄷㄷ" and
+  // "대박.;;" kept the exact formal-period artifact this function exists to strip, while the
+  // otherwise-identical "실화냐.ㅋㅋ" was already handled correctly.
+  assert.equal(sanitizePublishedThreadsText('이거 실화냐.ㄷㄷ'), '이거 실화냐ㄷㄷ');
+  assert.equal(sanitizePublishedThreadsText('가격 실화냐.ㄷㄷㄷ'), '가격 실화냐ㄷㄷㄷ');
+  assert.equal(sanitizePublishedThreadsText('이거 대박.;;'), '이거 대박;;');
+  assert.equal(sanitizePublishedThreadsText('가격 1.5만원인데.ㄷㄷ'), '가격 1.5만원인데ㄷㄷ');
+});
+
 test('sanitizePublishedThreadsText strips a trailing period stuck to a URL ending in a digit', () => {
   // REGRESSION found via synthetic testing: the sentence-period stripper above deliberately
   // skips periods preceded by a digit (to protect decimal points like "1.5"), but affiliate

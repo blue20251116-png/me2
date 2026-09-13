@@ -57,10 +57,16 @@ async function __me2NormalizeCarouselVideoUrl(rawUrl){
 // what preceded it. Widened the lookahead to also accept an emoji or a run of casual
 // laughing/crying jamo/punctuation right after the period, without touching the decimal-point
 // protection (still governed by the unrelated prefix check just before the period).
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): voiceGuide() itself
+// explicitly names "ㅋㅋ, ㄷㄷ, ㅠㅠ, ;;" as the sanctioned casual reaction markers, but this
+// lookahead's jamo/punctuation class only ever covered ㅋㅎㅜㅠ~!? - "ㄷ" (ㄷㄷ, a very common
+// "shocked" reaction in this bot's persona voice) and ";" (;;) were both missing, so "실화냐.ㄷㄷ"
+// and "대박.;;" kept the exact formal-period artifact this function exists to strip while the
+// otherwise-identical "실화냐.ㅋㅋ" was already handled correctly.
 function sanitizePublishedThreadsText(value){
   return String(value||'')
     .replace(/https?:\/\/\S+/gi,m=>m.replace(/[.,;]+$/,''))
-    .replace(/(^|[^.\d])\.(?!\.)(?=\s|$|\p{Extended_Pictographic}|[ㅋㅎㅜㅠ~!?])/gu,'$1')
+    .replace(/(^|[^.\d])\.(?!\.)(?=\s|$|\p{Extended_Pictographic}|[ㅋㅎㅜㅠㄷ~!?;])/gu,'$1')
     .replace(/[ \t]+\n/g,'\n')
     .trim();
 }
