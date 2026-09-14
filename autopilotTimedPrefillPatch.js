@@ -260,6 +260,19 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
           const accounts = db.prepare(`SELECT id FROM accounts WHERE autopilot_enabled=1 ORDER BY id`).all();
           // Resume after the last attempted account instead of starving later accounts.
           const ordered = [...accounts.filter(r=>Number(r.id)>lastAccountId), ...accounts.filter(r=>Number(r.id)<=lastAccountId)];
+          // REGRESSION (found live, 2026-09-14, reported by the user watching a Railway deploy log
+          // that showed a tick taking durationMs=617801 - about 10.3 minutes - on a cron that fires
+          // every 10 minutes, causing the next scheduled tick to be skipped by node-cron's
+          // noOverlap guard): this time check used to run AFTER each account's refill call, so it
+          // only stopped the loop from STARTING another account once 8 minutes had already
+          // elapsed - it never bounded the account that was already in flight. Since a single
+          // account can legitimately run for up to ACCOUNT_REFILL_TIMEOUT_MS (6 minutes) via
+          // withTimeout(), the real worst case was starting a fresh account just under the 8-minute
+          // mark and then waiting out its full 6-minute timeout - up to ~14 minutes total, well past
+          // both the intended 8-minute budget and the 10-minute cron interval itself. Moved the
+          // check to BEFORE starting each account, budgeting for that account's worst-case
+          // duration up front, so the tick can never run longer than TICK_TIME_BUDGET_MS in total.
+          const TICK_TIME_BUDGET_MS = 8*60000;
           for (const row of ordered) {
             const budget = budgetState();
             if (!budget.available) {
@@ -267,10 +280,10 @@ if (!global.__ME2_TIMED_PREFILL_PATCH__) {
               console.log(`[Autopilot][BUDGET WAIT] retryAt=${new Date(budget.retryAt).toISOString()}`);
               return;
             }
+            if (Date.now()-startedAt + ACCOUNT_REFILL_TIMEOUT_MS > TICK_TIME_BUDGET_MS) break;
             lastAccountId = Number(row.id);
             try { await withTimeout(refillAccount(lastAccountId), ACCOUNT_REFILL_TIMEOUT_MS, `account #${lastAccountId} refill exceeded ${ACCOUNT_REFILL_TIMEOUT_MS}ms`); }
             catch (err) { setState(lastAccountId,'retry',err.code||'PREFLIGHT_FAILED'); console.error(`[Autopilot][ACCOUNT ERROR] #${lastAccountId}: ${err.message}`); }
-            if (Date.now()-startedAt >= 8*60000) break;
           }
           setState(0, 'idle', 'refill complete');
         } finally { refillTickRunning = false; console.log(`[Autopilot][TICK COMPLETE] durationMs=${Date.now()-startedAt} lastAccount=${lastAccountId}`); }
