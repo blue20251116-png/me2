@@ -6,7 +6,7 @@ const path = require('path');
 
 process.env.PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://example.test';
 
-const { cacheFilePrefix, findCachedFile, cacheImage, uploadsDir } = require('./imageCachePatch');
+const { cacheFilePrefix, findCachedFile, cacheImage, uploadsDir } = require('./threadsApi');
 const axios = require('axios');
 
 // REGRESSION (found via review, tied to a real disk-full production incident): cacheImage() used

@@ -1,8 +1,91 @@
 const axios = require('axios');
-const { getAccount, getSystemApiSettings } = require('./db');
+const crypto = require('crypto');
+const { db, getAccount, getSystemApiSettings } = require('./db');
 const __me2Fs = require('fs');
 const __me2Path = require('path');
 const { editVideo: __me2EditVideo } = require('./videoEditor');
+
+const uploadsDir = __me2Path.join(__dirname, 'db', 'uploads');
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+if (!__me2Fs.existsSync(uploadsDir)) __me2Fs.mkdirSync(uploadsDir, { recursive: true });
+
+function getPublicBaseUrl() {
+  const explicit = String(process.env.PUBLIC_BASE_URL || process.env.APP_URL || '').trim().replace(/\/$/, '');
+  if (/^https?:\/\//i.test(explicit)) return explicit;
+  const railway = String(process.env.RAILWAY_PUBLIC_DOMAIN || '').trim().replace(/^https?:\/\//i, '').replace(/\/$/, '');
+  if (railway) return `https://${railway}`;
+  throw new Error('공개 서비스 주소를 확인할 수 없습니다. PUBLIC_BASE_URL 또는 RAILWAY_PUBLIC_DOMAIN이 필요합니다.');
+}
+function publicUploadUrl(filename) { return `${getPublicBaseUrl()}/uploads/${encodeURIComponent(filename)}`; }
+function isLocalUploadUrl(raw) {
+  try { return new URL(String(raw || '')).pathname.startsWith('/uploads/'); }
+  catch { return false; }
+}
+function extFromContentType(type, rawUrl) {
+  const t = String(type || '').toLowerCase().split(';')[0].trim();
+  const byType = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'image/heic': '.heic', 'image/heif': '.heic', 'image/avif': '.avif' };
+  if (byType[t]) return byType[t];
+  try {
+    const ext = __me2Path.extname(new URL(rawUrl).pathname).toLowerCase();
+    if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.avif'].includes(ext)) return ext === '.jpeg' ? '.jpg' : ext;
+  } catch {}
+  return '.jpg';
+}
+// posts.image_url in the DB always stays the ORIGINAL external Threads/Instagram URL (nothing ever
+// writes the cached local URL back to it), so the filename must be deterministic from the source
+// URL - otherwise every retry of a post whose publish failed for an unrelated reason re-downloads
+// and re-writes a brand new duplicate copy of the same image, growing the persistent volume without bound.
+function cacheFilePrefix(url) { return `threads-img-${crypto.createHash('sha256').update(url).digest('hex').slice(0, 24)}`; }
+function findCachedFile(prefix) {
+  try { return __me2Fs.readdirSync(uploadsDir).find(f => f.startsWith(prefix)) || null; }
+  catch { return null; }
+}
+async function cacheImage(rawUrl) {
+  const url = String(rawUrl || '').trim();
+  if (!/^https?:\/\//i.test(url)) throw new Error(`이미지 URL 형식이 올바르지 않습니다: ${url.slice(0, 120)}`);
+  if (isLocalUploadUrl(url)) return url;
+
+  const prefix = cacheFilePrefix(url);
+  const cachedFile = findCachedFile(prefix);
+  if (cachedFile) {
+    console.log(`[Autopilot][IMAGE CACHE] 재사용(이미 캐시됨) file=${cachedFile}`);
+    return publicUploadUrl(cachedFile);
+  }
+
+  const response = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 30000,
+    maxRedirects: 5,
+    maxContentLength: MAX_IMAGE_BYTES,
+    maxBodyLength: MAX_IMAGE_BYTES,
+    headers: {
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
+      referer: 'https://www.threads.com/',
+      accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    },
+    validateStatus: status => status >= 200 && status < 400,
+  });
+
+  const type = String(response.headers['content-type'] || '').toLowerCase();
+  if (!type.startsWith('image/')) throw new Error(`이미지 파일이 아닌 응답을 받았습니다 (${type || 'unknown'}).`);
+
+  const body = Buffer.from(response.data || []);
+  if (body.length < 512) throw new Error(`이미지 파일이 비정상적으로 작습니다 (${body.length} bytes).`);
+  if (body.length > MAX_IMAGE_BYTES) throw new Error(`이미지가 ${MAX_IMAGE_BYTES / 1024 / 1024}MB를 초과합니다.`);
+
+  const ext = extFromContentType(type, url);
+  const filename = `${prefix}${ext}`;
+  const filepath = __me2Path.join(uploadsDir, filename);
+  try {
+    __me2Fs.writeFileSync(filepath, body, { flag: 'wx' });
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    console.log(`[Autopilot][IMAGE CACHE] 동시 캐시 경합 → 기존 파일 재사용 file=${filename}`);
+  }
+  const localUrl = publicUploadUrl(filename);
+  console.log(`[Autopilot][IMAGE CACHE] 성공 bytes=${body.length} sourceHost=${new URL(url).hostname} file=${filename}`);
+  return localUrl;
+}
 
 function resolveThreadsAppCreds(account){
   const shared=getSystemApiSettings();
@@ -222,6 +305,7 @@ async function publishPost(accountId,{text,imageUrl,videoUrl}){
   text=sanitizePublishedThreadsText(text);
   const bundle=decodeMediaBundle(imageUrl);
   if(bundle?.length)return publishMediaItemsPost(accountId,{text,mediaItems:bundle});
+  if(imageUrl)imageUrl=await cacheImage(imageUrl);
   const account=getAccount(accountId);
   if(!account)throw new Error('존재하지 않는 계정입니다');
   if(!account.threads_access_token)throw new Error('스레드 Access Token이 없습니다. 계정을 다시 연결해주세요.');
@@ -279,6 +363,10 @@ async function publishMediaItemsPost(accountId,{text,mediaItems}){
   text=sanitizePublishedThreadsText(text);
   const items=normalizeMediaItems(mediaItems);
   if(!items.length)return publishPost(accountId,{text});
+  let originalImages=0,cachedImages=0;
+  for(const item of items){if(item.type==='IMAGE'){originalImages++;item.url=await cacheImage(item.url);cachedImages++;}}
+  if(originalImages)console.log(`[Autopilot][IMAGE CACHE] 원본=${originalImages} 로컬성공=${cachedImages}`);
+  if(cachedImages!==originalImages)throw new Error(`Threads 원본 이미지 ${originalImages}장 중 ${cachedImages}장만 로컬 캐시에 성공했습니다.`);
   if(items.length===1){
     try{return await publishPost(accountId,{text,imageUrl:items[0].type==='IMAGE'?items[0].url:null,videoUrl:items[0].type==='VIDEO'?items[0].url:null});}
     catch(err){if(!isMediaProcessingError(err)&&!isTransientThreadsError(err))throw err;console.warn(`[Threads][MEDIA_FALLBACK] 단일 ${items[0].type} 실패 → TEXT 발행 url=${items[0].url} reason="${err.message}"`);return publishPost(accountId,{text});}
@@ -348,8 +436,26 @@ async function publishMediaItemsPost(accountId,{text,mediaItems}){
 
 async function publishCarouselPost(accountId,{text,imageUrls}){return publishMediaItemsPost(accountId,{text,mediaItems:(imageUrls||[]).filter(Boolean).map(url=>({type:'IMAGE',url}))});}
 
+function ensureCoupangDisclosureFirst(text) {
+  const raw = String(text || '').replace(/\r/g, '').trim();
+  if (!raw) return raw;
+  const lines = raw.split('\n');
+  const disclosureIndex = lines.findIndex(line => /쿠팡\s*파트너스\s*활동의\s*일환/i.test(line));
+  if (disclosureIndex < 0) return raw;
+  const disclosure = lines[disclosureIndex].trim();
+  const rest = lines
+    .filter((_, index) => index !== disclosureIndex)
+    .join('\n')
+    .replace(/^\s+/, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return rest ? `${disclosure}\n\n${rest}` : disclosure;
+}
 async function publishReply(accountId,parentMediaId,text,options={}){
   const account=getAccount(accountId);if(!account)throw new Error('존재하지 않는 계정입니다');if(!account.threads_access_token)throw new Error('스레드 Access Token이 없습니다');const accessToken=account.threads_access_token;
+  const beforeDisclosure=String(text||'').trim();
+  text=ensureCoupangDisclosureFirst(beforeDisclosure);
+  if(text!==beforeDisclosure)console.log(`[Threads][COUPANG DISCLOSURE FIRST] account=${accountId} parentMediaId=${parentMediaId}`);
   const guarded=applyCoupangReplyPreviewGuard(text);
   if(options.creationId){
     const status=await getContainerStatus(options.creationId,accessToken);
@@ -365,9 +471,26 @@ async function publishReply(accountId,parentMediaId,text,options={}){
   return publishContainer(creationId,accessToken,3,2500);
 }
 
+function isDeadMediaError(err) {
+  const data = err?.response?.data?.error || err?.response?.data || {};
+  const code = Number(data?.code || err?.code || 0);
+  const subcode = Number(data?.error_subcode || data?.subcode || err?.error_subcode || 0);
+  const msg = String(data?.message || err?.message || '');
+  return (code === 100 && subcode === 33) || /Unsupported get request.*does not exist|missing permissions|does not support this operation/i.test(msg);
+}
 async function getMediaInsights(accountId,mediaId){
   const account=getAccount(accountId);if(!account||!account.threads_access_token)throw new Error('스레드 Access Token이 없습니다');
-  try{const res=await axios.get(`${GRAPH_BASE}/${mediaId}/insights`,{params:{metric:'views,likes,replies,reposts,quotes',access_token:account.threads_access_token},timeout:20000});const data={};for(const item of res.data?.data||[])data[item.name]=item.values?.[0]?.value??item.total_value?.value??0;return data;}catch(err){logThreadsError('INSIGHTS',err,{accountId,mediaId});throw err;}
+  try{const res=await axios.get(`${GRAPH_BASE}/${mediaId}/insights`,{params:{metric:'views,likes,replies,reposts,quotes',access_token:account.threads_access_token},timeout:20000});const data={};for(const item of res.data?.data||[])data[item.name]=item.values?.[0]?.value??item.total_value?.value??0;return data;}
+  catch(err){
+    logThreadsError('INSIGHTS',err,{accountId,mediaId});
+    if(isDeadMediaError(err)&&mediaId){
+      try{
+        const result=db.prepare(`UPDATE posts SET threads_media_id=NULL WHERE account_id=? AND threads_media_id=?`).run(Number(accountId),String(mediaId));
+        console.warn(`[Threads][INSIGHTS DEAD-ID] mediaId=${mediaId} accountId=${accountId} → 향후 인사이트 조회 제외 rows=${result.changes||0}`);
+      }catch(dbErr){console.warn(`[Threads][INSIGHTS DEAD-ID] DB 제외 실패 mediaId=${mediaId}: ${dbErr.message}`);}
+    }
+    throw err;
+  }
 }
 
-module.exports={getAuthUrl,exchangeCodeForToken,exchangeForLongLivedToken,refreshLongLivedToken,fetchProfile,publishPost,publishCarouselPost,publishMediaItemsPost,publishReply,getMediaInsights,sanitizePublishedThreadsText,applyCoupangReplyPreviewGuard};
+module.exports={getAuthUrl,exchangeCodeForToken,exchangeForLongLivedToken,refreshLongLivedToken,fetchProfile,publishPost,publishCarouselPost,publishMediaItemsPost,publishReply,getMediaInsights,sanitizePublishedThreadsText,applyCoupangReplyPreviewGuard,cacheFilePrefix,findCachedFile,cacheImage,uploadsDir};
