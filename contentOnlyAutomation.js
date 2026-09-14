@@ -51,6 +51,13 @@ function looksBloggy(text) {
     /일품(?:이다|이에요|입니다|인|이네)/,
     /온\s*가족(?:이|도)?\s*(?:좋아할|사랑할|만족할)/,
     /누구나\s*(?:쉽게|간단하게)\s*(?:따라|만들)/,
+    // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): "영양 만점", "든든한 한
+    // 끼", "정성 가득" are exactly the same class of blog/marketing food-writing cliche as the
+    // already-listed "맛과 영양"/"특별한 저녁·식사·한 끼", but were missing, so a hook using them
+    // slipped past looksBloggy() and skipped the humanizeHook() rewrite entirely.
+    /영양\s*만점/,
+    /든든한\s*한\s*끼/,
+    /정성\s*가득/,
   ];
   return bad.some(r => r.test(t)) || (t.match(/(?:요\.|니다\.)/g) || []).length >= 2;
 }

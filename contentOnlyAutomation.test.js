@@ -28,6 +28,18 @@ test('the new looksBloggy patterns do not flag ordinary casual sentences', () =>
   assert.ok(!looksBloggy('이거 진짜 쉬움'));
 });
 
+test('looksBloggy also catches "영양 만점"/"든든한 한 끼"/"정성 가득", the same clichés missing from the list', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): same hardcoded-list
+  // under-match class as the 일품/온 가족/누구나 fix above. "영양 만점", "든든한 한 끼", "정성 가득"
+  // are exactly the same class of blog/marketing food-writing cliche as the already-listed "맛과
+  // 영양"/"특별한 저녁·식사·한 끼", but were missing entirely.
+  assert.ok(looksBloggy('오늘 저녁으로 든든한 한 끼 준비했어요'));
+  assert.ok(looksBloggy('영양 만점 반찬이라 애들도 잘 먹어요'));
+  assert.ok(looksBloggy('정성 가득 담아 만들어봤어요'));
+  assert.ok(!looksBloggy('오늘 저녁 뭐 해먹지 고민하다가 이거 만듦'));
+  assert.ok(!looksBloggy('이거 진짜 정성 들어간 맛임'));
+});
+
 test('recipe comment teaser is not a single hardcoded phrase repeated every time', () => {
   // Regression: generateRecipe() used to append the exact same literal closing
   // sentence to every single post from this unattended (no Coupang keys)
