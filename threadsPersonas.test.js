@@ -34,6 +34,16 @@ test('detectPersonaCategory: posture/alignment fitness material is detected with
   }
 });
 
+test('detectPersonaCategory: common exercise names (스쿼트/런지/플랭크) are detected as fitness', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): same hardcoded-list
+  // under-match class as the posture/alignment fix above. 스쿼트/런지/플랭크 are unambiguous
+  // exercise names with no unrelated everyday meaning, but a post naming only one of them fell
+  // through to 'general', missing the trainer-expert persona pool.
+  for (const text of ['스쿼트할 때 무릎 안 아픔', '런지 자세 잡기 편함', '플랭크 자세 유지하기 좋음']) {
+    assert.equal(detectPersonaCategory({ mode: 'product', text }), 'fitness');
+  }
+});
+
 test('detectPersonaCategory: kids keywords are detected for non-recipe material', () => {
   for (const text of ['신생아 기저귀 추천템', '유아 장난감 이거 미쳤음', '이유식 만들 때 이거 씀']) {
     assert.equal(detectPersonaCategory({ mode: 'product', text }), 'kids');

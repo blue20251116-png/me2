@@ -83,7 +83,13 @@ const PERSONAS = [
 // missing the trainer-expert persona pool entirely even though "PT쌤이 알려준 골반 교정" is exactly
 // the kind of material that persona fits best. Posture/stretching/body-alignment content is a
 // common fitness-adjacent category this bot covers but the keyword list never named.
-const FITNESS_KEYWORDS = /(운동|헬스|다이어트|단백질|보충제|프로틴|근육|PT|피티|트레이너|홈트|요가|필라테스|헬스장|런닝머신|러닝|덤벨|폼롤러|헬스용품|스트레칭|골반|체형|자세\s*교정|코어)/i;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): same hardcoded-list
+// under-match class as the fix directly above. 스쿼트/런지/플랭크 (squat/lunge/plank) are common,
+// unambiguous exercise names with no unrelated everyday meaning - at least as clear a fitness
+// signal as 스트레칭/코어 already listed - but a post naming only one of them ("스쿼트할 때 무릎 안
+// 아픔") fell through to 'general', missing the trainer-expert persona pool the same way the
+// pelvis-correction case did.
+const FITNESS_KEYWORDS = /(운동|헬스|다이어트|단백질|보충제|프로틴|근육|PT|피티|트레이너|홈트|요가|필라테스|헬스장|런닝머신|러닝|덤벨|폼롤러|헬스용품|스트레칭|골반|체형|자세\s*교정|코어|스쿼트|런지|플랭크)/i;
 // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): same hardcoded-list
 // under-match class as the FITNESS_KEYWORDS fix above. "애기" - the colloquial spelling of "아기"
 // that Korean parents actually type far more often than the standard form on social media - wasn't
