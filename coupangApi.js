@@ -266,7 +266,13 @@ async function searchProducts(accountId, keyword, limit = 10) {
   if (account.coupang_sub_id) params.set('subId', account.coupang_sub_id);
   const path = `${PARTNERS_BASE}/products/search`;
   const data = await signedGet(accountId, `${path}?${params.toString()}`, '쿠팡 상품검색');
-  const list = Array.isArray(data?.data?.productData) ? data.data.productData.map(mapProduct) : [];
+  const rawList = Array.isArray(data?.data?.productData) ? data.data.productData.map(mapProduct) : [];
+  // 상품검색 URL을 canonical 상품 URL로 변환 후 딥링크 단축 사용
+  const list = rawList.map((product) => {
+    const productId = String(product?.productId || '').trim();
+    if (!/^\d+$/.test(productId)) return product;
+    return { ...product, originalProductUrl: product.url || null, url: `https://www.coupang.com/vp/products/${productId}` };
+  });
   cacheSet(accountId, cacheKey, list, list.length ? SEARCH_CACHE_MS : EMPTY_CACHE_MS);
   return list;
 }
