@@ -380,18 +380,29 @@ test('the generalized ad-CTA guard does not flag ordinary sentences that merely 
 });
 
 test('the persona guide never recommends the exact CTA pattern it also bans', () => {
-  const guide = policy.voiceGuide();
   // The closing-pattern example list once suggested "너도 꼭 써봐!" as a good ending while a
   // later rule banned "너도 해봐/도전해봐/써봐" ad-CTAs outright — a self-contradiction that could
   // lead the model straight into the exact ending GENERIC_CTA_ENDING rejects. Only check the
   // "패턴 예시" (recommended pattern) lines, not the ban rule's own quoted counter-examples.
-  const exampleLines = guide.split('\n').filter(line => /\[(?:오프닝|마무리) 패턴 예시/.test(line));
-  assert.ok(exampleLines.length >= 2, 'expected both opening and closing pattern-example lines');
-  for (const line of exampleLines) {
-    const quotedExamples = [...line.matchAll(/"([^"]+)"/g)].map(m => m[1]);
-    for (const example of quotedExamples) {
-      assert.deepEqual(policy.voiceProblems(example).filter(r => r === '뻔한 CTA 마무리'), [],
-        `voiceGuide() recommended example is a CTA it also bans: "${example}"`);
+  // REGRESSION-PREVENTION (hourly review, 2026-09-14): this used to call voiceGuide() with no
+  // argument, which only exercises DEFAULT_PERSONA_BLOCK (reaction) - GENERIC_CTA_ENDING has since
+  // been broadened three separate times this session (-요, formal -세요/-시길/-십시오, 여러분도),
+  // and each of the other 4 persona blocks in threadsPersonas.js (curiosity, housewife-recipe,
+  // trainer-expert, parenting-mom) has its own independent "[마무리 패턴 예시]" line that a broader
+  // guard could just as easily start matching without this test ever noticing. Checking all 5
+  // confirmed no current contradiction, but only checking the default going forward would leave
+  // the other 4 blocks free to silently regress the next time either side changes.
+  const { PERSONAS } = require('./threadsPersonas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    const exampleLines = guide.split('\n').filter(line => /\[(?:오프닝|마무리) 패턴 예시/.test(line));
+    assert.ok(exampleLines.length >= 2, `expected both opening and closing pattern-example lines for persona "${persona.id}"`);
+    for (const line of exampleLines) {
+      const quotedExamples = [...line.matchAll(/"([^"]+)"/g)].map(m => m[1]);
+      for (const example of quotedExamples) {
+        assert.deepEqual(policy.voiceProblems(example).filter(r => r === '뻔한 CTA 마무리'), [],
+          `persona "${persona.id}"'s recommended example is a CTA it also bans: "${example}"`);
+      }
     }
   }
 });
