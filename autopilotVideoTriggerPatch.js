@@ -1,7 +1,3 @@
-const engine = require('./autopilotMaterialEngine');
-
-const originalBuildThreadsFirstAutopilot = engine.buildThreadsFirstAutopilot.bind(engine);
-
 async function detectThreadsVideo(postUrl) {
   if (process.env.ME2_BROWSER_WORKER !== '1') {
     try { return await require('./isolatedTask').isolatedBrowserTask('autopilotVideoTriggerPatch', 'detectThreadsVideo', [postUrl], 45000); }
@@ -56,31 +52,33 @@ async function detectThreadsVideo(postUrl) {
   }
 }
 
-engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutopilot(accountId, options) {
-  const result = await originalBuildThreadsFirstAutopilot(accountId, options);
-  const existingVideos = Array.isArray(result?.sourceVideos)
-    ? result.sourceVideos.filter(Boolean)
-    : [];
+function wrap(originalBuild) {
+  return async function autopilotVideoTriggerBuild(accountId, options) {
+    const result = await originalBuild(accountId, options);
+    const existingVideos = Array.isArray(result?.sourceVideos)
+      ? result.sourceVideos.filter(Boolean)
+      : [];
 
-  if (existingVideos.length || !result?.sourceUrl) {
-    return result;
-  }
+    if (existingVideos.length || !result?.sourceUrl) {
+      return result;
+    }
 
-  const hasVideo = await detectThreadsVideo(result.sourceUrl);
-  console.log(`[Autopilot][VIDEO DETECT] source=${result.sourceUrl} detected=${hasVideo ? 'yes' : 'no'} playableUrls=${existingVideos.length}`);
+    const hasVideo = await detectThreadsVideo(result.sourceUrl);
+    console.log(`[Autopilot][VIDEO DETECT] source=${result.sourceUrl} detected=${hasVideo ? 'yes' : 'no'} playableUrls=${existingVideos.length}`);
 
-  if (!hasVideo) return result;
+    if (!hasVideo) return result;
 
-  // scheduler의 chooseSourceMedia()는 sourceVideos.length > 0일 때 실제 importer를 실행한다.
-  // 여기서는 다운로드 URL을 위조하지 않고, '영상 존재' 신호용으로 원본 post URL을 넣는다.
-  // importer는 sourceVideos 값 자체를 사용하지 않고 sourceUrl을 다시 열어 실제 mp4를 찾아 다운로드한다.
-  return {
-    ...result,
-    sourceVideos: [result.sourceUrl],
-    sourceHasVideo: true,
+    // scheduler의 chooseSourceMedia()는 sourceVideos.length > 0일 때 실제 importer를 실행한다.
+    // 여기서는 다운로드 URL을 위조하지 않고, '영상 존재' 신호용으로 원본 post URL을 넣는다.
+    // importer는 sourceVideos 값 자체를 사용하지 않고 sourceUrl을 다시 열어 실제 mp4를 찾아 다운로드한다.
+    return {
+      ...result,
+      sourceVideos: [result.sourceUrl],
+      sourceHasVideo: true,
+    };
   };
-};
+}
 
 console.log('[Autopilot][VIDEO TRIGGER PATCH] 영상 존재 감지 시 mp4 importer 강제 실행 활성화');
 
-module.exports.detectThreadsVideo = detectThreadsVideo;
+module.exports = { detectThreadsVideo, wrap };

@@ -1,8 +1,5 @@
-const engine = require('./autopilotMaterialEngine');
 const { getAccount, getSystemApiSettings } = require('./db');
 const { callAnthropicJson } = require('./anthropicClient');
-
-const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 
 function clean(v){ return String(v || '').trim(); }
 function stripTerminalPeriods(text){
@@ -69,7 +66,8 @@ async function rewriteRecipe(accountId, result){
   return stripTerminalPeriods(clean(parsed.commentLead));
 }
 
-engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutopilot(accountId, options){
+function wrap(originalBuild) {
+  return async function recipeQualityBuild(accountId, options){
   let last;
   for (let attempt=1; attempt<=3; attempt++) {
     const result = await originalBuild(accountId, options);
@@ -90,9 +88,10 @@ engine.buildThreadsFirstAutopilot = async function patchedBuildThreadsFirstAutop
     }
   }
   throw new Error(`원본 소재와 일치하는 완결된 레시피를 생성하지 못했습니다: ${clean(last?.topic) || 'recipe'}`);
-};
+  };
+}
 
 console.log('[Autopilot][RECIPE SOURCE CHECK] 원본 핵심재료 보존 + 재료/조리법 일치 + 가짜 비밀재료 금지 활성화');
-module.exports = { badRecipe, importantSourceIngredients, recipeContainsIngredient };
+module.exports = { badRecipe, importantSourceIngredients, recipeContainsIngredient, wrap };
 
 

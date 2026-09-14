@@ -1,8 +1,5 @@
 const axios = require('axios');
 const { collectPostDetails } = require('./benchmarkAccounts');
-const engine = require('./autopilotMaterialEngine');
-
-const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 
 function clean(v) {
   return String(v || '').replace(/\s+/g, ' ').trim();
@@ -395,26 +392,28 @@ async function findExactSourceProduct(result) {
   };
 }
 
-engine.buildThreadsFirstAutopilot = async function sourceAffiliateExactProductBuild(accountId, options) {
-  const result = await originalBuild(accountId, options);
-  if (!result) return result;
-  try {
-    const exact = await findExactSourceProduct(result);
-    if (exact?.product?.url) {
-      result.product = exact.product;
-      result.productSearchTerm = exact.groundTruth ? 'source-author-affiliate-link-ground-truth' : 'source-author-affiliate-link-unique-winner';
-      result.sourceAffiliateProduct = true;
-      result.sourceAffiliateGroundTruth = !!exact.groundTruth;
-      result.sourceAffiliateOriginalUrl = exact.sourceUrl;
-      console.log(`[AutopilotV3][SOURCE AFFILIATE] 작성자 상품 적용 productId=${exact.product.productId || '-'} itemId=${exact.product.itemId || '-'} vendorItemId=${exact.product.vendorItemId || '-'} product="${clean(exact.product.name)}" method=${exact.method} groundTruth=${exact.groundTruth?'yes':'no'}`);
-    } else {
-      console.log(`[AutopilotV3][SOURCE AFFILIATE] 작성자 링크 덮어쓰기 없음 → SOLD-FIRST 상품 유지 product="${clean(result?.product?.name) || '-'}"`);
+function wrap(originalBuild) {
+  return async function sourceAffiliateExactProductBuild(accountId, options) {
+    const result = await originalBuild(accountId, options);
+    if (!result) return result;
+    try {
+      const exact = await findExactSourceProduct(result);
+      if (exact?.product?.url) {
+        result.product = exact.product;
+        result.productSearchTerm = exact.groundTruth ? 'source-author-affiliate-link-ground-truth' : 'source-author-affiliate-link-unique-winner';
+        result.sourceAffiliateProduct = true;
+        result.sourceAffiliateGroundTruth = !!exact.groundTruth;
+        result.sourceAffiliateOriginalUrl = exact.sourceUrl;
+        console.log(`[AutopilotV3][SOURCE AFFILIATE] 작성자 상품 적용 productId=${exact.product.productId || '-'} itemId=${exact.product.itemId || '-'} vendorItemId=${exact.product.vendorItemId || '-'} product="${clean(exact.product.name)}" method=${exact.method} groundTruth=${exact.groundTruth?'yes':'no'}`);
+      } else {
+        console.log(`[AutopilotV3][SOURCE AFFILIATE] 작성자 링크 덮어쓰기 없음 → SOLD-FIRST 상품 유지 product="${clean(result?.product?.name) || '-'}"`);
+      }
+    } catch (e) {
+      console.warn(`[AutopilotV3][SOURCE AFFILIATE] 원문 댓글 상품 적용 실패 → SOLD-FIRST 기존 상품 유지 reason="${e.response?.data?.message || e.message}"`);
     }
-  } catch (e) {
-    console.warn(`[AutopilotV3][SOURCE AFFILIATE] 원문 댓글 상품 적용 실패 → SOLD-FIRST 기존 상품 유지 reason="${e.response?.data?.message || e.message}"`);
-  }
-  return result;
-};
+    return result;
+  };
+}
 
 console.log('[Autopilot][SOURCE AFFILIATE EXACT PRODUCT] v3 single-link productId+title ground truth · item/vendor identity · multi-link unique-winner · axios+browser fail-safe');
-module.exports.resolveWithBrowser = resolveWithBrowser;
+module.exports = { resolveWithBrowser, wrap };

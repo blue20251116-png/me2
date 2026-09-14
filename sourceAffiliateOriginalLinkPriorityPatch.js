@@ -2,9 +2,6 @@
 
 const axios = require('axios');
 const { collectPostDetails } = require('./benchmarkAccounts');
-const engine = require('./autopilotMaterialEngine');
-
-const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 
 function clean(v) {
   return String(v || '').replace(/\s+/g, ' ').trim();
@@ -127,7 +124,8 @@ function failClosed(message, code) {
   return err;
 }
 
-engine.buildThreadsFirstAutopilot = async function sourceAffiliateOriginalLinkPriorityBuild(accountId, options) {
+function wrap(originalBuild) {
+  return async function sourceAffiliateOriginalLinkPriorityBuild(accountId, options) {
   const result = await originalBuild(accountId, options);
   if (!result) return result;
 
@@ -191,6 +189,8 @@ engine.buildThreadsFirstAutopilot = async function sourceAffiliateOriginalLinkPr
 
   console.log(`[AutopilotV3][SOURCE LINK PRIORITY][GROUND TRUTH] @${result.sourceUsername} productId=${picked.productId} itemId=${picked.itemId || '-'} vendorItemId=${picked.vendorItemId || '-'} method=${picked.method || '-'} → 작성자 원본 상품 최우선 · SOLD-FIRST 덮어쓰기 차단`);
   return result;
-};
+  };
+}
 
 console.log('[Autopilot][SOURCE LINK PRIORITY] v2 author Coupang productId ground-truth first · redirect Location resolver · unresolved/ambiguous fail-closed · SOLD-FIRST fallback blocked when source link exists');
+module.exports = { wrap };

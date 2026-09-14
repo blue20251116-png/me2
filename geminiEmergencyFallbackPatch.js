@@ -1,7 +1,5 @@
 'use strict';
 
-const engine = require('./autopilotMaterialEngine');
-
 // REGRESSION (found live, 2026-09-13, in direct response to a user question about Claude credit
 // exhaustion): this regex was written for OpenAI's old phrasing and never updated for the
 // OpenAI->Claude migration earlier today. Anthropic's actual insufficient-credit error reads
@@ -28,12 +26,8 @@ function qualityHoldError(cause) {
   return err;
 }
 
-if (!global.__ME2_GEMINI_EMERGENCY_FALLBACK__) {
-  global.__ME2_GEMINI_EMERGENCY_FALLBACK__ = true;
-
-  const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
-
-  engine.buildThreadsFirstAutopilot = async function emergencyFallbackBuild(accountId, options) {
+function wrap(originalBuild) {
+  return async function emergencyFallbackBuild(accountId, options) {
     try {
       return await originalBuild(accountId, options);
     } catch (e) {
@@ -45,8 +39,8 @@ if (!global.__ME2_GEMINI_EMERGENCY_FALLBACK__) {
       throw qualityHoldError(e);
     }
   };
-
-  console.log('[Autopilot][QUALITY HOLD] v3 AI 호출 제한 시 저품질 emergency 고정문구 발행 금지 · 정상화 후 재시도');
 }
 
-module.exports = { isGeminiDown, qualityHoldError };
+console.log('[Autopilot][QUALITY HOLD] v3 AI 호출 제한 시 저품질 emergency 고정문구 발행 금지 · 정상화 후 재시도');
+
+module.exports = { isGeminiDown, qualityHoldError, wrap };

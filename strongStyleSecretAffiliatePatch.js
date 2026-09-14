@@ -1,7 +1,4 @@
-const engine = require('./autopilotMaterialEngine');
 const coupangApi = require('./coupangApi');
-
-const originalBuild = engine.buildThreadsFirstAutopilot.bind(engine);
 
 function clean(v){ return String(v || '').replace(/\s+/g, ' ').trim(); }
 function normalize(v){ return clean(v).toLowerCase().replace(/[\s\-_/()[\]{}.,!?~'"“”‘’]/g, ''); }
@@ -60,27 +57,30 @@ async function findSecretAffiliateProduct(accountId, result){
 
 function appendSecretAffiliateBridge(commentLead, secretTerm){ return stripTerminalPeriods(commentLead); }
 
-engine.buildThreadsFirstAutopilot = async function strongStyleSecretAffiliateBuild(accountId, options){
-  const result = await originalBuild(accountId, options);
-  if (!result) return result;
+function wrap(originalBuild) {
+  return async function strongStyleSecretAffiliateBuild(accountId, options){
+    const result = await originalBuild(accountId, options);
+    if (!result) return result;
 
-  result.text = stripTerminalPeriods(result.text);
-  result.commentLead = stripTerminalPeriods(result.commentLead);
+    result.text = stripTerminalPeriods(result.text);
+    result.commentLead = stripTerminalPeriods(result.commentLead);
 
-  if (result.mode === 'recipe') {
-    const replacement = await findSecretAffiliateProduct(accountId, result);
-    if (replacement?.product) {
-      result.product = replacement.product;
-      result.productSearchTerm = replacement.searchTerm;
-      result.secretTerm = replacement.searchTerm;
-      result.commentLead = appendSecretAffiliateBridge(result.commentLead, replacement.searchTerm);
-      console.log(`[AutopilotV3][SECRET AFFILIATE] 댓글 원문 유지 term="${replacement.searchTerm}"`);
-    } else {
-      console.warn(`[AutopilotV3][SECRET AFFILIATE] 비밀재료용 적합 상품을 못 찾아 기존 상품 유지 topic="${clean(result.topic)}"`);
+    if (result.mode === 'recipe') {
+      const replacement = await findSecretAffiliateProduct(accountId, result);
+      if (replacement?.product) {
+        result.product = replacement.product;
+        result.productSearchTerm = replacement.searchTerm;
+        result.secretTerm = replacement.searchTerm;
+        result.commentLead = appendSecretAffiliateBridge(result.commentLead, replacement.searchTerm);
+        console.log(`[AutopilotV3][SECRET AFFILIATE] 댓글 원문 유지 term="${replacement.searchTerm}"`);
+      } else {
+        console.warn(`[AutopilotV3][SECRET AFFILIATE] 비밀재료용 적합 상품을 못 찾아 기존 상품 유지 topic="${clean(result.topic)}"`);
+      }
     }
-  }
-  return result;
-};
+    return result;
+  };
+}
 
 console.log('[Autopilot][STRONG STYLE+SECRET AFFILIATE] 종결 마침표 제거 + 레시피 비밀재료 쿠팡 우선연결 + 자연스러운 링크 연결문 활성화');
+module.exports = { wrap };
 
