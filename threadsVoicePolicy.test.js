@@ -249,6 +249,26 @@ test('the 터 bound-noun check is not fooled by ordinary words that merely start
   for (const text of safe) assert.deepEqual(policy.incompleteLineReasons(text), [], `false positive on: ${text}`);
 });
 
+test('the bound nouns 덕분에/대신에/때문에 are caught as a dangling split, and repaired', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 덕분에("thanks to")/
+  // 대신에("instead of")/때문에("because of") are dependent on a preceding noun/clause exactly
+  // like the already-listed 김에/바람에/탓에 - "때문에" especially is likely the single most common
+  // causal bound expression in Korean - but none were in the list, so a split like "이 가격 /
+  // 때문에 망설여짐" went completely undetected.
+  const { repairConnectorOnlyBreaks } = require('./threadsVoiceLocalRepair');
+  const broken = [
+    '이 필터를 쓴\n덕분에 물이 깨끗해짐',
+    '이거 산\n대신에 다른 걸 포기함',
+    '이 가격\n때문에 망설여짐',
+  ];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
 test('runtime review repairs a too-many-lines post instead of discarding the material', async () => {
   // Fixture updated: an overlong single line used to be a rejection reason on its own and was
   // this test's trigger, but length alone no longer gates rejection - too-many-lines still does,

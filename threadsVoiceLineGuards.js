@@ -40,6 +40,12 @@ const DANGLING_PUNCTUATION_START = /^[!?~.…]/;
 // "이미 산 / 터였는데 세일함" across two lines, and went completely undetected. Ordinary words that
 // merely start with "터" (터널/터졌음/터미널/터치감 etc.) are unaffected since none of them are
 // followed by 라/인데/였는데.
-const DANGLING_BOUND_NOUN_START = /^(?:뻔|만큼(?:이나|만|도|은|는)?|만한|듯(?:이)?|채(?:로)?|김에|바람에|탓에|터(?:라|인데|였는데)|뿐|데다|셈|법|리|참|겸|정도(?:로|까지|는|도|의)?|편(?:이[라야]|이다|이고|인데|이지만|임)?)(?=[!?~.…,\s]|$)/;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 덕분에("thanks to")/
+// 대신에("instead of")/때문에("because of") are dependent on a preceding noun/clause exactly like
+// the already-listed 김에/바람에/탓에 - "때문에" especially is likely the single most common causal
+// bound expression in Korean - but none were in the list, so a split like "이 가격 / 때문에
+// 망설여짐" went completely undetected even though "때문에 망설여짐" alone is grammatically
+// dependent on the line before it.
+const DANGLING_BOUND_NOUN_START = /^(?:뻔|만큼(?:이나|만|도|은|는)?|만한|듯(?:이)?|채(?:로)?|김에|바람에|탓에|덕분에|대신에|때문에|터(?:라|인데|였는데)|뿐|데다|셈|법|리|참|겸|정도(?:로|까지|는|도|의)?|편(?:이[라야]|이다|이고|인데|이지만|임)?)(?=[!?~.…,\s]|$)/;
 
 module.exports = { CONNECTOR_ONLY, DANGLING_PUNCTUATION_START, DANGLING_BOUND_NOUN_START };
