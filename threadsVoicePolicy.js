@@ -46,7 +46,11 @@ const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 // recommend-and-try CTA ("다들 한번 써보세요", "너도 한번 드셔보세요", "당신도 꼭 사용해보세요~",
 // "너도 함 써보시길") slipped through completely untouched simply because it uses -세요/-시길/
 // -십시오 instead of -봐/-봐요/-보길 for the same verb ending.
-const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보십시오|보시길|보세요|봐요|보길|봐)(?:\s*바랍니다|\s*바래(?:요)?|\s*바람)?[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): "여러분도" (a very common
+// formal-plural way to address an audience on social media, at least as common as the already-
+// covered 다들/모두) was still missing from the pronoun list, so "여러분도 한번 써보세요"
+// reproduced the exact same banned CTA shape completely untouched.
+const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두|여러분도)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보십시오|보시길|보세요|봐요|보길|봐)(?:\s*바랍니다|\s*바래(?:요)?|\s*바람)?[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
 
 function normalizeVoice(text) {
   return String(text || '').replace(/\r/g, '').replace(/\\n/g, '\n').split('\n').map(line => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();

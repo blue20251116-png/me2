@@ -361,8 +361,19 @@ test('the ad-CTA guard catches the formal imperative register (-세요/-시길/-
   }
 });
 
+test('the ad-CTA guard catches "여러분도", a common audience address form missing from the pronoun list', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): "여러분도" is at least as
+  // common a formal-plural way to address an audience on social media as the already-covered
+  // 다들/모두, but was still missing, so "여러분도 한번 써보세요" reproduced the exact same banned
+  // CTA shape completely untouched.
+  for (const variant of ['여러분도 한번 써보세요', '여러분도 꼭 써봐요~', '여러분도 한번 써봐', '여러분도 써보길 바람']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
 test('the generalized ad-CTA guard does not flag ordinary sentences that merely contain "너도"', () => {
-  for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬', '다들 이렇게 사나요?', '다들 힘내자']) {
+  for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬', '다들 이렇게 사나요?', '다들 힘내자', '여러분도 이런 경험 있으신가요?']) {
     const post = '완전 신기했음\n' + safe;
     assert.deepEqual(policy.voiceProblems(post).filter(r => r === '뻔한 CTA 마무리'), [], `should not catch: "${safe}"`);
   }
