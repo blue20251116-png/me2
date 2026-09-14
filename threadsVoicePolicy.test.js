@@ -424,6 +424,17 @@ test('the ad-CTA guard catches "여러분도", a common audience address form mi
   }
 });
 
+test('the ad-CTA guard catches "보시기"/"보시기를", the uncontracted form of the already-covered "보시길"', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 보시길 is a contraction of
+  // 보시기를, already paired with the 바랍니다/바래요/바람 trailing group - but the uncontracted
+  // "보시기"/"보시기를" form is at least as common a formal invitation ending ("너도 꼭 사용해보시기
+  // 바랍니다") and was missing entirely, so it sailed through unflagged.
+  for (const variant of ['너도 꼭 사용해보시기 바랍니다', '여러분도 꼭 드셔보시기를 바랍니다', '다들 한번 써보시기 바람']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
 test('the generalized ad-CTA guard does not flag ordinary sentences that merely contain "너도"', () => {
   for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬', '다들 이렇게 사나요?', '다들 힘내자', '여러분도 이런 경험 있으신가요?']) {
     const post = '완전 신기했음\n' + safe;
