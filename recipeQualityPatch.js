@@ -33,11 +33,18 @@ function recipeContainsIngredient(text, item){
 // perfectly valid recipe, forcing pointless rewrite attempts and - after 3 failures - throwing and
 // killing the whole autopilot run for that topic. The intentionally-hidden ingredient can never
 // literally appear by name, by design, so it must be excluded from this check.
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the format check required
+// a literal newline directly after "재료"/"만드는 법", with no tolerance for a colon - but the
+// system prompt below never actually forbids one, and "재료:"/"만드는 법:" is an extremely common,
+// harmless way for a model to format a labeled list. A recipe using that colon variant was
+// otherwise perfectly complete and source-accurate, but this rejected it as "bad" anyway, forcing
+// a pointless rewrite loop that (after 3 failed attempts, since the model has no reason to drop a
+// colon it wasn't told was wrong) throws and kills the whole autopilot run for that topic.
 function badRecipe(text, result){
   const t = clean(text);
-  if (!/🥘\s*재료\s*\n/.test(t) || !/🍳\s*만드는 법\s*\n/.test(t)) return true;
+  if (!/🥘\s*재료\s*[:：]?\s*\n/.test(t) || !/🍳\s*만드는 법\s*[:：]?\s*\n/.test(t)) return true;
   if (/(양념\s*재료들?|기본\s*재료|원문에\s*나온|적당량의\s*양념|알맞게\s*익혀|재료를\s*준비해)/i.test(t)) return true;
-  const ingredient = (t.split(/🍳\s*만드는 법/)[0] || '').replace(/^.*?🥘\s*재료\s*/s, '');
+  const ingredient = (t.split(/🍳\s*만드는 법/)[0] || '').replace(/^.*?🥘\s*재료\s*[:：]?\s*/s, '');
   const method = (t.split(/🍳\s*만드는 법/)[1] || '');
   const concreteItems = ingredient.split(/\n|,/).map(x=>x.trim()).filter(x=>x && !/^[-•]?\s*(비밀 소스|비밀 재료)$/i.test(x));
   const steps = method.split(/\n/).filter(x=>/^\s*\d+[.)]/.test(x));

@@ -30,6 +30,20 @@ test('badRecipe still flags a recipe missing the secret ingredient placeholder e
   assert.equal(badRecipe(commentLead, result), true);
 });
 
+test('badRecipe does not reject a well-formed recipe just because it puts a colon after the section labels', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the format check required
+  // a literal newline directly after "재료"/"만드는 법", with zero tolerance for a colon - but the
+  // system prompt never actually forbids one, and "재료:"/"만드는 법:" is an extremely common,
+  // harmless way to format a labeled list. A perfectly complete, source-accurate recipe using that
+  // colon variant was rejected as "bad" anyway, forcing a pointless rewrite loop that eventually
+  // throws and kills the whole autopilot run for that topic.
+  const result = { sourceText: '이 요리에는 계란이랑 대파가 들어가요' };
+  const colonRecipe = '🥘 재료:\n계란 2개, 대파 1대, 소금 약간\n\n🍳 만드는 법:\n1. 계란을 풀어 소금을 넣는다\n2. 대파를 썰어 넣고 볶는다';
+  assert.equal(badRecipe(colonRecipe, result), false);
+  const fullwidthColonRecipe = '🥘 재료：\n계란 2개, 대파 1대, 소금 약간\n\n🍳 만드는 법：\n1. 계란을 풀어 소금을 넣는다\n2. 대파를 썰어 넣고 볶는다';
+  assert.equal(badRecipe(fullwidthColonRecipe, result), false);
+});
+
 test('recipeContainsIngredient supports checking whether a secret phrase corresponds to a tracked ingredient', () => {
   assert.equal(recipeContainsIngredient('마늘', '마늘'), true);
   assert.equal(recipeContainsIngredient('다진 마늘', '마늘'), true);
