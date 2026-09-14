@@ -280,7 +280,11 @@ async function publishContainer(creationId,accessToken,maxTries=5,baseWaitMs=200
   for(let i=0;i<maxTries;i++){
     try{
       console.log(`[Threads][PUBLISH] 시작 creationId=${creationId} try=${i+1}/${maxTries}`);
-      const res=await axios.post(`${GRAPH_BASE}/me/threads_publish`,null,{params:{creation_id:creationId,access_token:accessToken},timeout:20000});
+      let res;
+      // publishQueue uses err.creationId/publishOutcomeUnknown to fail closed instead of
+      // creating a duplicate post when /threads_publish errors after Threads already accepted it.
+      try{res=await axios.post(`${GRAPH_BASE}/me/threads_publish`,null,{params:{creation_id:creationId,access_token:accessToken},timeout:20000});}
+      catch(publishErr){publishErr.creationId=String(creationId);publishErr.publishOutcomeUnknown=true;throw publishErr;}
       const mediaId=res.data?.id;
       if(!mediaId)throw new Error('Threads 발행 응답에 media id가 없습니다');
       console.log(`[Threads][PUBLISH] 성공 creationId=${creationId} mediaId=${mediaId}`);
@@ -493,4 +497,4 @@ async function getMediaInsights(accountId,mediaId){
   }
 }
 
-module.exports={getAuthUrl,exchangeCodeForToken,exchangeForLongLivedToken,refreshLongLivedToken,fetchProfile,publishPost,publishCarouselPost,publishMediaItemsPost,publishReply,getMediaInsights,sanitizePublishedThreadsText,applyCoupangReplyPreviewGuard,cacheFilePrefix,findCachedFile,cacheImage,uploadsDir};
+module.exports={getAuthUrl,exchangeCodeForToken,exchangeForLongLivedToken,refreshLongLivedToken,fetchProfile,publishPost,publishCarouselPost,publishMediaItemsPost,publishReply,publishContainer,getMediaInsights,sanitizePublishedThreadsText,applyCoupangReplyPreviewGuard,cacheFilePrefix,findCachedFile,cacheImage,uploadsDir};
