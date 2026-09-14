@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { scrubSecret } = require('./autopilotMaterialEngine');
+const { scrubSecret, hasIngredientHeading, hasMethodHeading, normalizeRecipeHeadings } = require('./autopilotMaterialEngine');
 
 // REGRESSION (found via synthetic testing, hourly review): scrubSecret() used a plain
 // split/join, which replaced the secret ingredient/product term wherever it appeared as a bare
@@ -36,4 +36,39 @@ test('scrubSecret scrubs both the secret term and the product name independently
 test('scrubSecret leaves text unchanged when secret/product are empty or too short', () => {
   assert.equal(scrubSecret('그냥 평범한 문장', '', ''), '그냥 평범한 문장');
   assert.equal(scrubSecret('가 붙은 문장', '가', ''), '가 붙은 문장');
+});
+
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): both heading checks matched
+// "재료"/"만드는 법" etc. ANYWHERE in the text with no anchoring, so an ordinary sentence merely
+// mentioning the bare word ("이 재료 진짜 신선하고 만들기도 쉬움", with no actual heading structure)
+// made both return true - incorrectly signaling a properly-formatted recipe comment when there was
+// none. Worse, normalizeRecipeHeadings() used the exact same unanchored pattern to REPLACE the
+// first match: on an already well-formed "🥘 재료\n...\n\n🍳 만드는 법\n..." recipe, the unanchored
+// \s* before each label greedily ate the newline after it, turning "🥘 재료\n계란 2개" into "🥘
+// 재료계란 2개" - corrupting a perfectly good recipe EVERY TIME this ran, since it is called
+// unconditionally on every recipe-mode commentLead before any other check.
+test('hasIngredientHeading/hasMethodHeading require the label to stand alone on its own line, not just appear anywhere', () => {
+  assert.equal(hasIngredientHeading('이 재료 진짜 신선하고 만들기도 쉬움'), false);
+  assert.equal(hasMethodHeading('이 재료 진짜 신선하고 만들기도 쉬움'), false);
+  assert.equal(hasIngredientHeading('🥘 재료\n계란 2개'), true);
+  assert.equal(hasMethodHeading('🍳 만드는 법\n1. 볶는다'), true);
+  assert.equal(hasIngredientHeading('재료:\n계란 2개'), true);
+  assert.equal(hasMethodHeading('조리 방법:\n1. 볶는다'), true);
+});
+
+test('normalizeRecipeHeadings does not corrupt an already well-formed recipe by eating the newline after the label', () => {
+  const wellFormed = '🥘 재료\n계란 2개, 대파 1대\n\n🍳 만드는 법\n1. 볶는다\n2. 간한다';
+  assert.equal(normalizeRecipeHeadings(wellFormed), wellFormed);
+});
+
+test('normalizeRecipeHeadings does not insert a spurious heading into an unrelated sentence that merely mentions the bare word', () => {
+  const input = '이 재료들 다 냉장고에 있는 것들임\n\n🥘 재료\n계란 2개, 대파 1대\n\n🍳 만드는 법\n1. 볶는다';
+  const out = normalizeRecipeHeadings(input);
+  assert.ok(out.startsWith('이 재료들 다 냉장고에 있는 것들임'), `unrelated intro line must stay untouched: ${out}`);
+  assert.equal((out.match(/🥘/g) || []).length, 1, `must not duplicate the heading: ${out}`);
+});
+
+test('normalizeRecipeHeadings still normalizes bare/colon-variant standalone headers into the canonical emoji form', () => {
+  assert.equal(normalizeRecipeHeadings('재료:\n계란 2개\n\n만드는 법:\n1. 볶는다'), '🥘 재료\n계란 2개\n\n🍳 만드는 법\n1. 볶는다');
+  assert.equal(normalizeRecipeHeadings('재료\n계란 2개\n\n만들기\n1. 볶는다'), '🥘 재료\n계란 2개\n\n🍳 만드는 법\n1. 볶는다');
 });

@@ -341,12 +341,28 @@ function scrubSecret(text,secret,product){
   }
   return out;
 }
-function hasIngredientHeading(text){return /(?:🥘|✅|▪|■)?\s*재료\s*[:：]?/i.test(String(text||''));}
-function hasMethodHeading(text){return /(?:🍳|✅|▪|■)?\s*(?:만드는\s*법|조리\s*방법|만들기)\s*[:：]?/i.test(String(text||''));}
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): both functions matched
+// "재료"/"만드는 법" etc. ANYWHERE in the text with no anchoring, so an ordinary casual sentence
+// merely mentioning the bare word ("이 재료 진짜 신선하고 만들기도 쉬움", with no actual heading
+// structure at all) made hasIngredientHeading()+hasMethodHeading() both return true. Worse,
+// normalizeRecipeHeadings() used the exact same unanchored pattern to REPLACE the first match -
+// on a perfectly well-formed "🥘 재료\n...\n\n🍳 만드는 법\n..." recipe, the unanchored \s* before
+// each label greedily ate the newline that followed it, turning "🥘 재료\n계란 2개" into "🥘
+// 재료계란 2개" (label glued onto the first line with no separator) EVERY SINGLE TIME this ran -
+// which is on every recipe-mode commentLead, since repairRecipeComment() below calls this first
+// unconditionally. That self-inflicted corruption then failed recipeQualityPatch.js's badRecipe()
+// format check (which correctly requires a literal newline), forcing an unnecessary extra AI
+// rewrite round-trip for every recipe post regardless of whether the original was already fine -
+// wasted Anthropic budget on every single recipe autopilot run. Anchored all three to only match
+// when the label stands ALONE on its own line (optionally with the emoji/bullet prefix and/or a
+// trailing colon), using horizontal-only whitespace so a run of "\n\n" between sections is never
+// consumed as part of the match.
+function hasIngredientHeading(text){return /^[ \t]*(?:🥘|✅|▪|■)?[ \t]*재료[ \t]*[:：]?[ \t]*$/im.test(String(text||''));}
+function hasMethodHeading(text){return /^[ \t]*(?:🍳|✅|▪|■)?[ \t]*(?:만드는[ \t]*법|조리[ \t]*방법|만들기)[ \t]*[:：]?[ \t]*$/im.test(String(text||''));}
 function normalizeRecipeHeadings(text){
   let out=String(text||'').trim();
-  out=out.replace(/(?:🥘\s*)?재료\s*[:：]?/i,'🥘 재료');
-  out=out.replace(/(?:🍳\s*)?(?:만드는\s*법|조리\s*방법|만들기)\s*[:：]?/i,'🍳 만드는 법');
+  out=out.replace(/^[ \t]*(?:🥘[ \t]*)?재료[ \t]*[:：]?[ \t]*$/im,'🥘 재료');
+  out=out.replace(/^[ \t]*(?:🍳[ \t]*)?(?:만드는[ \t]*법|조리[ \t]*방법|만들기)[ \t]*[:：]?[ \t]*$/im,'🍳 만드는 법');
   return out;
 }
 function normalizeThreadsLayout(text){return formatVoice(text);}
@@ -503,5 +519,5 @@ async function buildThreadsFirstAutopilot(accountId,{target}){
   }
   throw new Error(`쇼핑 소재 ${materials.length}개를 검사했지만 발행 가능한 상품 연결에 실패했습니다${lastError?`: ${lastError.message}`:''}`);
 }
-module.exports={buildThreadsFirstAutopilot,scrubSecret};
+module.exports={buildThreadsFirstAutopilot,scrubSecret,hasIngredientHeading,hasMethodHeading,normalizeRecipeHeadings};
 
