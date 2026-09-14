@@ -448,6 +448,20 @@ test('high-risk weight-loss claims are caught with 키로/킬로 units, not just
   assert.ok(policy.voiceProblems('한 달 만에 5킬로 감량했어').includes('고위험 효능 주장'));
 });
 
+test('high-risk body-change claims also cover cm/센치 units and 줄었/줄음, not just kg-weight loss', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the quantified body-
+  // change claim only ever recognized weight units (kg/키로/킬로) and a narrow verb set (빠졌/빠짐/
+  // 감량/뺐/감소) - "cm"/"센치" body-measurement reduction claims ("허리 5cm 줄었어") are exactly as
+  // common and exactly as unverifiable for this bot's shapewear/diet-product categories, and
+  // "줄었/줄음" is at least as common a reduction verb as the ones already listed.
+  assert.ok(policy.voiceProblems('이거 입고 허리 5cm 줄었어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('일주일 만에 허벅지 3센치 빠짐').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('뱃살 10cm 감소했어요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('체중이 3키로 줄었어').includes('고위험 효능 주장'));
+  assert.deepEqual(policy.voiceProblems('이 옷 사이즈 5cm 크게 나옴'), []);
+  assert.deepEqual(policy.voiceProblems('이 침대 폭 10cm 넉넉함'), []);
+});
+
 test('high-risk cure claims are caught in their natural casual conjugations, not just "낫음"', () => {
   // Regression: "낫다" is ㅅ-irregular - the ㅅ drops before a vowel-starting
   // ending, so the grammatically correct casual forms are 나아/나았/나음/나은
