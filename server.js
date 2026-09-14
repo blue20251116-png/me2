@@ -54,6 +54,20 @@ try { bootstrapAdmin(); } catch (e) { console.error('[Server][INIT] bootstrapAdm
 
 const app = express();
 if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) throw new Error('SESSION_SECRET is required in production');
+const CRAWLER_BOT_UA = /(facebookexternalhit|meta-externalagent|twitterbot)/i;
+app.use((req, res, next) => {
+  const ua = String(req.headers?.['user-agent'] || '');
+  const path = String(req.url || '').split('?')[0];
+  const mediaOrApi = path.startsWith('/uploads/') || path.startsWith('/api/');
+  if (CRAWLER_BOT_UA.test(ua) && !mediaOrApi) {
+    console.log(`[Crawler404] blocked ua=${ua.slice(0, 120)} path=${path}`);
+    res.statusCode = 404;
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.end('Not Found');
+  }
+  next();
+});
 app.use(express.json());
 app.set('trust proxy', 1); // Railway 등 프록시 뒤에서 세션 쿠키가 정상 동작하도록
 // Railway's platform-level healthcheck gates ALL traffic to this deployment: while this returns
