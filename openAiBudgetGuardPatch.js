@@ -11,6 +11,7 @@ const { budgetState, reserveRequest } = require('./automationState');
 // 설정돼 있을 수 있어 그대로 두었다 — 이제는 프로바이더 무관 "AI 요청 예산" 설정으로 읽는다.
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const originalPost = axios.post.bind(axios);
+const inFlight = new Map();
 let queue = Promise.resolve();
 let lastStartAt = 0;
 const MIN_GAP_MS = Math.max(1000, Number(process.env.OPENAI_MIN_GAP_MS || 3000));
@@ -249,13 +250,47 @@ async function runGuardedRequest(url, rawData, config) {
   return response;
 }
 
-axios.post = function budgetGuardedPost(url, data, config) {
+// REGRESSION (found during the OpenAI->Claude migration, 2026-09-13): OpenAI's auth header is
+// `Authorization: Bearer <key>`, but Anthropic uses `x-api-key: <key>` instead - this function only
+// ever read `Authorization`, so every Anthropic request hashed the SAME empty string as its
+// "credential scope" regardless of which account's key was actually used. That would have let two
+// different accounts' concurrent identical-content requests collapse into one shared in-flight
+// call, silently dropping the per-credential isolation this dedupe was designed to have.
+function requestKey(data, config) {
+  const credential = String(
+    config?.headers?.['x-api-key'] || config?.headers?.Authorization || config?.headers?.authorization || ''
+  );
+  const credentialScope = crypto.createHash('sha256').update(credential).digest('hex');
+  const stable = JSON.stringify({
+    credentialScope,
+    model: data?.model,
+    temperature: data?.temperature,
+    max_tokens: data?.max_tokens,
+    system: data?.system,
+    messages: data?.messages,
+  });
+  return crypto.createHash('sha256').update(stable).digest('hex');
+}
+
+axios.post = function dedupedBudgetGuardedPost(url, data, config) {
   if (!isAnthropic(url)) return originalPost(url, data, config);
-  const task = queue.then(() => runGuardedRequest(url, data, config));
+
+  const key = requestKey(data, config);
+  const existing = inFlight.get(key);
+  if (existing) {
+    console.log(`[AI][IN-FLIGHT DEDUPE] key=${key.slice(0,10)} reused=yes`);
+    return existing;
+  }
+
+  const task = queue.then(() => runGuardedRequest(url, data, config)).finally(() => {
+    if (inFlight.get(key) === task) inFlight.delete(key);
+  });
   queue = task.catch(() => {});
+  inFlight.set(key, task);
   return task;
 };
 
+console.log(`[AI][IN-FLIGHT DEDUPE] enabled target=${ANTHROPIC_URL}; identical concurrent requests share one credential-scoped budgeted call`);
 console.log(`[AI][BUDGET GUARD] target=${ANTHROPIC_URL} concurrency=1 minGap=${MIN_GAP_MS}ms hourlyCap=${MAX_REQUESTS_PER_HOUR} textCap=${MAX_TEXT_CHARS}chars cache<=0.2 ttl=${Math.round(ANALYSIS_CACHE_MS / 3600000)}h`);
 
 module.exports = { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS, retryAfterMs };
