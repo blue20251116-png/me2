@@ -55,6 +55,15 @@ const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두|여러�
 function normalizeVoice(text) {
   return String(text || '').replace(/\r/g, '').replace(/\\n/g, '\n').split('\n').map(line => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the loop below only ever
+// checks a line as CONNECTOR_ONLY when a FOLLOWING line exists to pair it with (i<lines.length-1),
+// so a post that trails off with a bare dependent connective as its very last line ("이거 완전
+// 신기함\n그런데", or even a single-line post that is only "그런데") went completely undetected -
+// the single clearest possible evidence of a cut-off/incomplete post, arguably worse than the
+// mid-post split this function otherwise catches. repairConnectorOnlyBreaks() can't mechanically
+// fix this (there is no next line to merge with), but reviewSourceVoice() already falls through to
+// a full AI rewrite whenever the mechanical repair fails to reduce the problem list, so flagging
+// this here does lead to a real fix path, not a dead end.
 function incompleteLineReasons(text) {
   const lines = normalizeVoice(text).split('\n'); const reasons = [];
   for (let i=0;i<lines.length-1;i++) {
@@ -63,6 +72,8 @@ function incompleteLineReasons(text) {
     if (CONNECTOR_ONLY.test(line)) reasons.push(`미완결 줄:${i+1}`);
     else if (DANGLING_PUNCTUATION_START.test(next) || DANGLING_BOUND_NOUN_START.test(next)) reasons.push(`문장 분리:${i+1}`);
   }
+  const lastLine = lines[lines.length-1]?.trim();
+  if (lastLine && CONNECTOR_ONLY.test(lastLine)) reasons.push(`미완결 줄:${lines.length}`);
   return reasons;
 }
 function voiceGuide(personaBlock) { return `[ME2 스레드 전용 바이럴 작가 — 최종 문체 정책]

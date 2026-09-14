@@ -70,6 +70,20 @@ test('incomplete-line guard rejects only obvious fragments, not normal Korean be
   assert.ok(policy.incompleteLineReasons('하지만\n결과는 완전 다름').length > 0);
 });
 
+test('incomplete-line guard also catches a bare dependent connective as the very last line, with no following line to pair it with', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the main loop only ever
+  // checks a line as CONNECTOR_ONLY when a FOLLOWING line exists, so a post trailing off with a
+  // bare connective as its literal last line ("이거 완전 신기함 / 그런데") - or a single-line post
+  // that is only "그런데" - went completely undetected, despite being the clearest possible
+  // evidence of a cut-off post.
+  assert.ok(policy.incompleteLineReasons('이거 완전 신기함\n그런데').length > 0);
+  assert.ok(policy.incompleteLineReasons('그런데').length > 0);
+  assert.ok(policy.incompleteLineReasons('가격도 착함\n그니까').length > 0);
+  // A normal complete post, or one that merely ends with a blank line, must not be flagged.
+  assert.deepEqual(policy.incompleteLineReasons('이거 완전 신기함\n진짜 좋음'), []);
+  assert.deepEqual(policy.incompleteLineReasons('이거 완전 신기함\n\n'), []);
+});
+
 test('connector-only guard also catches 그니까/그러니까, not just 그리고/근데/그래서', () => {
   // Regression: 그니까 (casual) / 그러니까 (formal) are grammatically dependent connectives in
   // the exact same family as 그래서/근데 - always require a following clause, never a complete
