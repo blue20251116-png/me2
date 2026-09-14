@@ -546,6 +546,23 @@ test('the finance-claim guard does not flag ordinary savings/budgeting content o
   assert.deepEqual(policy.voiceProblems('무조건 예쁜 디자인이라 삼'), []);
 });
 
+test('highRiskClaim also covers 아토피/습진/비염, everyday conditions missing from the disease-keyword list', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 아토피/습진/비염 (atopic
+  // dermatitis/eczema/rhinitis) are exactly as common in this bot's baby/skincare-adjacent product
+  // reviews as 암/통증/질환/염증/당뇨/고혈압 already are, and are unambiguous condition names with no
+  // unrelated everyday meaning - but were missing entirely, so an absolute cure claim about any of
+  // them sailed through completely unchecked.
+  assert.ok(policy.voiceProblems('이 크림 바르니까 아토피 완전 나음').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이거 바르고 습진 다 나았어요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('아이 비염 이거 쓰고 나서 싹 없어짐').includes('고위험 효능 주장'));
+});
+
+test('the 아토피/습진/비염 addition does not flag the softened "있는 편"/"괜찮은 편" phrasing the persona prefers', () => {
+  assert.deepEqual(policy.voiceProblems('이 옷 재질 완전 좋아서 아토피 있는 애도 편하게 입힘'), []);
+  assert.deepEqual(policy.voiceProblems('습진 있는 아이도 순한 편이라 안심하고 씀'), []);
+  assert.deepEqual(policy.voiceProblems('비염 있는 우리 애한테도 괜찮은 편이었음'), []);
+});
+
 test('source is a creative seed: invented low-risk connective copy is allowed', async () => {
   const text = '처음엔 별거 아닌데\n보다가 계속 보게 됨ㅋㅋ';
   const out = await policy.reviewSourceVoice(text, { sourceText: '금붕어가 먹이를 먹는 영상' }, async () => {

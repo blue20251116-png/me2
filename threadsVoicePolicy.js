@@ -141,7 +141,15 @@ function formatVoice(text){return normalizeVoice(text);}
 // the guard never implemented. Kept as narrow as the existing health-claim branches (원금/손실
 // paired with an absolute 없/보장, or a bare "무조건 <수익어>") to avoid flagging ordinary
 // savings/budgeting content ("가계부 쓰니까 돈이 좀 모임", "무조건 예쁜 디자인이라 삼").
-function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로)\s*(?:빠졌|빠짐|감량|뺐|감소)/i.test(t)||/(?:암|통증|질환|염증|당뇨|고혈압)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/삼켜도\s*(?:완전\s*|100\s*%\s*)?(?:안전|괜찮)|질식\s*위험(?:이|가)?\s*없(?!\s*는\s*(?:편|것|거|셈))|알레르기\s*(?:걱정|위험)(?:이|가)?\s*(?:전혀\s*)?없(?!\s*는\s*(?:편|것|거|셈))/.test(t)||/(?:원금|손실)[^\n.!?]{0,16}(?:없(?!\s*는\s*(?:편|것|거|셈))|보장)|무조건\s*(?:수익|돈|이득|오른다|오릅니다|번다|법니다)/.test(t);}
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 아토피/습진/비염 (atopic
+// dermatitis/eczema/rhinitis) are exactly as common in this bot's baby/skincare-adjacent product
+// reviews as 암/통증/질환/염증/당뇨/고혈압 already are, and are unambiguous condition names with no
+// unrelated everyday meaning (unlike the "병"=bottle collision already removed from this list) -
+// but were missing entirely, so "아토피 완전 나음"/"습진 다 나았어요"/"비염 싹 없어짐" sailed through
+// completely unchecked despite being the exact same unverified cure claim shape this branch exists
+// to catch. The softened "있는 편"/"괜찮은 편" phrasing the parenting-mom persona is instructed to
+// prefer still correctly stays unflagged, same as the existing keywords.
+function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로)\s*(?:빠졌|빠짐|감량|뺐|감소)/i.test(t)||/(?:암|통증|질환|염증|당뇨|고혈압|아토피|습진|비염)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/삼켜도\s*(?:완전\s*|100\s*%\s*)?(?:안전|괜찮)|질식\s*위험(?:이|가)?\s*없(?!\s*는\s*(?:편|것|거|셈))|알레르기\s*(?:걱정|위험)(?:이|가)?\s*(?:전혀\s*)?없(?!\s*는\s*(?:편|것|거|셈))/.test(t)||/(?:원금|손실)[^\n.!?]{0,16}(?:없(?!\s*는\s*(?:편|것|거|셈))|보장)|무조건\s*(?:수익|돈|이득|오른다|오릅니다|번다|법니다)/.test(t);}
 // REGRESSION (found live, 2026-09-13): voiceGuide() explicitly instructs grouping a 1~3-line
 // thought and inserting a blank line (two line breaks) before the next one - "이렇게 나눠야 보기
 // 좋다" - but until now nothing ever checked whether the model actually did this. Two real
