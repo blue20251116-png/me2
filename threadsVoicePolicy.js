@@ -172,7 +172,13 @@ function formatVoice(text){return normalizeVoice(text);}
 // the ones already listed - but both were missing, so these sailed through completely unchecked.
 // Ordinary size-tolerance statements ("이 옷 사이즈 5cm 크게 나옴") still stay unflagged since they
 // use no reduction verb from this list.
-function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로|cm|센치|센티)\s*(?:빠졌|빠짐|감량|뺐|감소|줄었|줄음)/i.test(t)||/(?:암|통증|질환|염증|당뇨|고혈압|아토피|습진|비염)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/삼켜도\s*(?:완전\s*|100\s*%\s*)?(?:안전|괜찮)|질식\s*위험(?:이|가)?\s*없(?!\s*는\s*(?:편|것|거|셈))|알레르기\s*(?:걱정|위험)(?:이|가)?\s*(?:전혀\s*)?없(?!\s*는\s*(?:편|것|거|셈))/.test(t)||/(?:원금|손실)[^\n.!?]{0,16}(?:없(?!\s*는\s*(?:편|것|거|셈))|보장)|무조건\s*(?:수익|돈|이득|오른다|오릅니다|번다|법니다)/.test(t);}
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 탈모(hair loss)/여드름(acne)
+// are exactly the condition this bot's haircare/skincare affiliate-product posts are most likely
+// to generate an unverified cure claim about ("이 샴푸 쓰고 탈모 완전 없어짐", "이 크림 바르니까 여드름
+// 싹 나았음") - both are unambiguous condition names with no unrelated everyday meaning, same shape
+// as the already-listed 아토피/습진/비염 - but were missing entirely, so both sailed through
+// completely unchecked. voiceProblems() confirmed neither triggered any other check either.
+function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로|cm|센치|센티)\s*(?:빠졌|빠짐|감량|뺐|감소|줄었|줄음)/i.test(t)||/(?:암|통증|질환|염증|당뇨|고혈압|아토피|습진|비염|탈모|여드름)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/삼켜도\s*(?:완전\s*|100\s*%\s*)?(?:안전|괜찮)|질식\s*위험(?:이|가)?\s*없(?!\s*는\s*(?:편|것|거|셈))|알레르기\s*(?:걱정|위험)(?:이|가)?\s*(?:전혀\s*)?없(?!\s*는\s*(?:편|것|거|셈))/.test(t)||/(?:원금|손실)[^\n.!?]{0,16}(?:없(?!\s*는\s*(?:편|것|거|셈))|보장)|무조건\s*(?:수익|돈|이득|오른다|오릅니다|번다|법니다)/.test(t);}
 // REGRESSION (found live, 2026-09-13): voiceGuide() explicitly instructs grouping a 1~3-line
 // thought and inserting a blank line (two line breaks) before the next one - "이렇게 나눠야 보기
 // 좋다" - but until now nothing ever checked whether the model actually did this. Two real

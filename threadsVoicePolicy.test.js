@@ -656,6 +656,19 @@ test('the 아토피/습진/비염 addition does not flag the softened "있는 �
   assert.deepEqual(policy.voiceProblems('비염 있는 우리 애한테도 괜찮은 편이었음'), []);
 });
 
+test('highRiskClaim also covers 탈모/여드름, the conditions this bot\'s haircare/skincare product posts are most likely to generate a cure claim about', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 탈모(hair loss)/
+  // 여드름(acne) are unambiguous condition names with no unrelated everyday meaning, same shape
+  // as the already-listed 아토피/습진/비염 - but were missing entirely, so "이 샴푸 쓰고 탈모 완전
+  // 없어짐"/"이 크림 바르니까 여드름 싹 나았음" sailed through completely unchecked despite being
+  // exactly the shady-marketing cure claim shape this bot's beauty-product affiliate posts are
+  // most at risk of generating.
+  assert.ok(policy.voiceProblems('이 샴푸 쓰고 탈모 완전 없어짐').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이 크림 바르니까 여드름 싹 나았음').includes('고위험 효능 주장'));
+  assert.deepEqual(policy.voiceProblems('탈모 있는 편이라 조심스럽게 씀'), []);
+  assert.deepEqual(policy.voiceProblems('여드름 있는 편이지만 자극 없이 순함'), []);
+});
+
 test('source is a creative seed: invented low-risk connective copy is allowed', async () => {
   const text = '처음엔 별거 아닌데\n보다가 계속 보게 됨ㅋㅋ';
   const out = await policy.reviewSourceVoice(text, { sourceText: '금붕어가 먹이를 먹는 영상' }, async () => {
