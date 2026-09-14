@@ -292,6 +292,11 @@ test('the bound nouns 덕분에/대신에/때문에 are caught as a dangling spl
     // same causal bound noun as "덕분에" (the contracted/casual form, not a different word) -
     // omitted when 덕분에/대신에/때문에 were added earlier this same hour.
     '이 앱 진짜 편함\n덕에 시간 엄청 절약됨',
+    // REGRESSION (found via synthetic testing, hourly review, 2026-09-15): "대로"("as/according
+    // to")/"와중에"("in the midst of") are exactly as dependent on a preceding modifier as the
+    // already-listed 터인데/참, but were missing entirely.
+    '말한\n대로 했더니 완전 좋아짐',
+    '진짜 바쁜\n와중에 겨우 시간내서 씀',
   ];
   for (const text of broken) {
     assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
