@@ -186,6 +186,20 @@ test('bound nouns with a trailing particle (만큼이나, 정도로) are still c
   for (const text of broken) assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
 });
 
+test('정도 also catches the 만/밖에 particles, not just 로/까지/는/도/의', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the 정도 particle group
+  // already covered 로/까지/는/도/의 but was still missing "만"/"밖에" - both at least as common as
+  // the particles already listed - so a split using either one went completely undetected.
+  const { repairConnectorOnlyBreaks } = require('./threadsVoiceLocalRepair');
+  const broken = ['생각보다 작은\n정도만 딱 나옴', '이 정도\n정도밖에 안 됨'];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
 test('three more everyday bound nouns (편, 만한, 듯이) are caught as a dangling split, and repaired', () => {
   // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): 편/만한/듯이 are at least
   // as common as 만큼/정도 in casual product reviews but were entirely missing from

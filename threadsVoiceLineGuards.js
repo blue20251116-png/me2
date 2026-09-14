@@ -46,6 +46,10 @@ const DANGLING_PUNCTUATION_START = /^[!?~.…]/;
 // bound expression in Korean - but none were in the list, so a split like "이 가격 / 때문에
 // 망설여짐" went completely undetected even though "때문에 망설여짐" alone is grammatically
 // dependent on the line before it.
-const DANGLING_BOUND_NOUN_START = /^(?:뻔|만큼(?:이나|만|도|은|는)?|만한|듯(?:이)?|채(?:로)?|김에|바람에|탓에|덕분에|대신에|때문에|터(?:라|인데|였는데)|뿐|데다|셈|법|리|참|겸|정도(?:로|까지|는|도|의)?|편(?:이[라야]|이다|이고|인데|이지만|임)?)(?=[!?~.…,\s]|$)/;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the 정도 particle group
+// already covered 로/까지/는/도/의 but was still missing "만"/"밖에" - both at least as common as
+// the particles already listed ("생각보다 작은 / 정도만 딱 나옴", "이 정도 / 정도밖에 안 됨") - so a
+// split using either one went completely undetected.
+const DANGLING_BOUND_NOUN_START = /^(?:뻔|만큼(?:이나|만|도|은|는)?|만한|듯(?:이)?|채(?:로)?|김에|바람에|탓에|덕분에|대신에|때문에|터(?:라|인데|였는데)|뿐|데다|셈|법|리|참|겸|정도(?:로|까지|는|도|의|만|밖에)?|편(?:이[라야]|이다|이고|인데|이지만|임)?)(?=[!?~.…,\s]|$)/;
 
 module.exports = { CONNECTOR_ONLY, DANGLING_PUNCTUATION_START, DANGLING_BOUND_NOUN_START };
