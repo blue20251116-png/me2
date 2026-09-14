@@ -288,6 +288,10 @@ test('the bound nouns 덕분에/대신에/때문에 are caught as a dangling spl
     '이 필터를 쓴\n덕분에 물이 깨끗해짐',
     '이거 산\n대신에 다른 걸 포기함',
     '이 가격\n때문에 망설여짐',
+    // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): "덕에" is the exact
+    // same causal bound noun as "덕분에" (the contracted/casual form, not a different word) -
+    // omitted when 덕분에/대신에/때문에 were added earlier this same hour.
+    '이 앱 진짜 편함\n덕에 시간 엄청 절약됨',
   ];
   for (const text of broken) {
     assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
