@@ -413,7 +413,7 @@ test('the generalized ad-CTA guard does not flag ordinary sentences that merely 
   }
 });
 
-test('the persona guide never recommends the exact CTA pattern it also bans', () => {
+test('the persona guide never recommends an example that trips any of its own safety checks', () => {
   // The closing-pattern example list once suggested "너도 꼭 써봐!" as a good ending while a
   // later rule banned "너도 해봐/도전해봐/써봐" ad-CTAs outright — a self-contradiction that could
   // lead the model straight into the exact ending GENERIC_CTA_ENDING rejects. Only check the
@@ -426,6 +426,11 @@ test('the persona guide never recommends the exact CTA pattern it also bans', ()
   // guard could just as easily start matching without this test ever noticing. Checking all 5
   // confirmed no current contradiction, but only checking the default going forward would leave
   // the other 4 blocks free to silently regress the next time either side changes.
+  // REGRESSION-PREVENTION (hourly review, 2026-09-14): this used to filter voiceProblems() down to
+  // just the CTA-ban reason, so a persona example that happened to trip a DIFFERENT check this
+  // session also broadened (highRiskClaim's 아토피/습진/비염/cm/줄었 additions, or any of the
+  // dangling-line-split additions) would have gone completely unnoticed. Checking the full,
+  // unfiltered result confirmed no current contradiction on any check, not just the CTA one.
   const { PERSONAS } = require('./threadsPersonas');
   for (const persona of PERSONAS) {
     const guide = policy.voiceGuide(persona.block);
@@ -434,8 +439,8 @@ test('the persona guide never recommends the exact CTA pattern it also bans', ()
     for (const line of exampleLines) {
       const quotedExamples = [...line.matchAll(/"([^"]+)"/g)].map(m => m[1]);
       for (const example of quotedExamples) {
-        assert.deepEqual(policy.voiceProblems(example).filter(r => r === '뻔한 CTA 마무리'), [],
-          `persona "${persona.id}"'s recommended example is a CTA it also bans: "${example}"`);
+        assert.deepEqual(policy.voiceProblems(example), [],
+          `persona "${persona.id}"'s recommended example trips a safety check it also enforces: "${example}"`);
       }
     }
   }
