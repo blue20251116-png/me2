@@ -14,10 +14,6 @@ process.once('message', async ({ moduleName, method, args, accountId }) => {
     };
     if (!allowed[moduleName]?.includes(method)) throw new Error('Unsupported browser task');
     global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID = accountId;
-    if (moduleName === 'benchmarkAccounts') {
-      require('./threadsVideoPatch');
-      require('./threadsTextFallbackPatch');
-    }
     const value = await require(`./${moduleName}`)[method](...args);
     process.send({ ok: true, value });
   } catch (err) {

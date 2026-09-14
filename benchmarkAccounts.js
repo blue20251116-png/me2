@@ -191,7 +191,7 @@ async function expandReplies(page) {
   }
 }
 
-async function collectPostDetails(url, username) {
+async function collectPostDetailsRaw(url, username) {
   let browser,context;
   try {
     ({browser,context}=await openBrowser());
@@ -344,6 +344,490 @@ async function collectPostDetails(url, username) {
   }
 }
 
+// ---------- collectPostDetails guard layers ----------
+// These used to be 3 separate files monkey-patching benchmark.collectPostDetails in sequence,
+// composed differently per process:
+//  - worker process (ME2_BROWSER_WORKER==='1'): withTextFallback(withVideoExtraction(raw))
+//  - main process: with429Guard(withVideoExtraction(isolatedDispatch)), where isolatedDispatch
+//    invokes the ENTIRE worker-side chain above in the isolated browser subprocess - so
+//    withVideoExtraction's retry runs twice on the round trip (once inside the worker, once again
+//    in the main process if the worker's own video extraction came back empty). That double layer
+//    is deliberate: it's the retry, not redundancy, so it's preserved exactly below.
+function canonicalPostUrl(raw) {
+  try {
+    const u = new URL(String(raw || '').trim());
+    u.pathname = u.pathname.replace(/\/media\/?$/i, '').replace(/\/+$/, '');
+    u.search = '';
+    u.hash = '';
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return String(raw || '').split(/[?#]/)[0].replace(/\/media\/?$/i, '');
+  }
+}
+function isHttpVideoUrl(value) {
+  const s = String(value || '').trim();
+  if (!/^https?:\/\//i.test(s)) return false;
+  if (/\.(?:mp4|m4v|mov)(?:[?#]|$)/i.test(s)) return true;
+  if (/fbcdn|cdninstagram|threads|instagram/i.test(s) && /video|mp4|bytestart|byteend|range=/i.test(s)) return true;
+  return false;
+}
+function mediaViewUrl(raw) { return `${canonicalPostUrl(raw).replace(/\/+$/, '')}/media`; }
+async function videoFallbackFromProfile(url, username) {
+  try {
+    const posts = await collectProfilePosts(username, { limit: 30 });
+    const target = canonicalPostUrl(url);
+    const hit = (posts || []).find(p => canonicalPostUrl(p?.url) === target);
+    if (!hit) return null;
+    const sourceText = String(hit.text || '').replace(/\s+/g, ' ').trim();
+    const images = Array.isArray(hit.images) ? hit.images.filter(Boolean) : [];
+    const hasVideo = !!hit.hasVideo || Number(hit.videoCount || 0) > 0;
+    console.log(`[Threads][EARLY TEXT FALLBACK] @${username || '-'} source=${sourceText.length} images=${images.length} hasVideo=${hasVideo ? 'yes' : 'no'}`);
+    return { sourceText, authorReplies: [], images, videos: [], hasVideo, exactUrl: true };
+  } catch (err) {
+    console.warn(`[Threads][EARLY TEXT FALLBACK] 실패 @${username || '-'} reason="${err.message}"`);
+    return null;
+  }
+}
+async function extractPlayableVideoUrls(postUrl) {
+  const playwright = require('playwright');
+  let browser;
+  const found = [];
+  const add = url => {
+    const s = String(url || '').trim();
+    if (!isHttpVideoUrl(s)) return;
+    if (!found.includes(s)) found.push(s);
+  };
+
+  try {
+    browser = await playwright.chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--autoplay-policy=no-user-gesture-required'],
+    });
+    const context = await browser.newContext({
+      locale: 'ko-KR',
+      viewport: { width: 1100, height: 1500 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
+    });
+
+    const scan = async (targetUrl, { allow429Fallback = false } = {}) => {
+      const page = await context.newPage();
+      page.setDefaultTimeout(16000);
+      page.on('request', request => add(request.url()));
+      page.on('response', async response => {
+        try {
+          const status = response.status();
+          const url = response.url();
+          const request = response.request();
+          const resourceType = request.resourceType();
+          const headers = await response.allHeaders().catch(() => ({}));
+          const type = String(headers['content-type'] || '').toLowerCase();
+
+          if (status === 429) {
+            console.warn(`[Threads][429 TRACE] stage=subresponse status=429 resource=${resourceType || '-'} url=${url} retryAfter=${headers['retry-after'] || '-'} contentType=${type || '-'}`);
+            return;
+          }
+
+          if (type.startsWith('video/') || type.includes('octet-stream') || isHttpVideoUrl(url)) add(url);
+        } catch (err) {
+          console.warn(`[Threads][429 TRACE ERROR] stage=subresponse reason="${err.message}"`);
+        }
+      });
+
+      try {
+        const response = await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 16000 });
+        const status=response?.status?.()??0;
+        const headers = response ? await response.allHeaders().catch(() => ({})) : {};
+        console.log(`[Threads][VIDEO PAGE] status=${status || '-'} url=${targetUrl} retryAfter=${headers['retry-after'] || '-'} server=${headers['server'] || '-'}`);
+
+        if(status===429){
+          console.warn(`[Threads][429 TRACE] stage=page-goto status=429 resource=document url=${targetUrl} retryAfter=${headers['retry-after'] || '-'} contentType=${headers['content-type'] || '-'}`);
+          if (allow429Fallback) {
+            console.warn(`[Threads][VIDEO EXTRACT SCAN] status=429 url=${targetUrl} → 이 게시물만 /media 1회 fallback 시도`);
+            return { ok:false, status:429 };
+          }
+          console.warn(`[Threads][VIDEO EXTRACT SCAN] status=429 url=${targetUrl} → 해당 소재만 실패 처리`);
+          return { ok:false, status:429 };
+        }
+
+        await page.waitForTimeout(2200);
+        for (let i = 0; i < 3; i++) {
+          await page.mouse.wheel(0, 650);
+          await page.waitForTimeout(250);
+        }
+        try {
+          const video = page.locator('video').first();
+          if (await video.count()) {
+            await video.scrollIntoViewIfNeeded().catch(() => {});
+            await video.click({ force: true, timeout: 1200 }).catch(() => {});
+          }
+        } catch {}
+        try {
+          await page.evaluate(() => {
+            for (const v of document.querySelectorAll('video')) {
+              try { v.muted = true; v.load?.(); v.play().catch(() => {}); } catch {}
+            }
+          });
+        } catch {}
+        try {
+          const playButtons = page.getByRole('button', { name: /play|재생/i });
+          const n = Math.min(await playButtons.count(), 3);
+          for (let i = 0; i < n; i++) await playButtons.nth(i).click({ force: true, timeout: 1000 }).catch(() => {});
+        } catch {}
+        await page.waitForTimeout(3500);
+
+        const domUrls = await page.evaluate(() => {
+          const out = [];
+          const add = v => { const s = String(v || '').trim(); if (/^https?:\/\//i.test(s) && !out.includes(s)) out.push(s); };
+          for (const v of document.querySelectorAll('video')) {
+            add(v.currentSrc); add(v.src); add(v.getAttribute('src'));
+            for (const s of v.querySelectorAll('source[src]')) add(s.src || s.getAttribute('src'));
+            for (const key of ['data-src','data-video-url','data-url','data-playable-url']) add(v.getAttribute(key));
+          }
+          for (const selector of [
+            'meta[property="og:video"]','meta[property="og:video:url"]','meta[property="og:video:secure_url"]','meta[name="twitter:player:stream"]'
+          ]) add(document.querySelector(selector)?.content);
+          try { for (const e of performance.getEntriesByType('resource')) add(e?.name); } catch {}
+          return out;
+        });
+        for (const u of domUrls) add(u);
+
+        try {
+          const html = await page.content();
+          const patterns = [
+            /"video_url"\s*:\s*"([^"]+)"/gi,
+            /"playable_url"\s*:\s*"([^"]+)"/gi,
+            /"playable_url_quality_hd"\s*:\s*"([^"]+)"/gi,
+            /"browser_native_hd_url"\s*:\s*"([^"]+)"/gi,
+            /"progressive_url"\s*:\s*"([^"]+)"/gi,
+            /(https?:\\?\/\\?\/[^"'<>\s]+?\.mp4[^"'<>\s]*)/gi,
+          ];
+          const decode = s => String(s || '').replace(/\\u0026/gi,'&').replace(/\\u003d/gi,'=').replace(/\\u002f/gi,'/').replace(/\\\//g,'/');
+          for (const re of patterns) { let m; while ((m = re.exec(html)) !== null) add(decode(m[1] || m[0])); }
+        } catch {}
+
+        const domVideoCount = await page.locator('video').count().catch(() => 0);
+        console.log(`[Threads][VIDEO EXTRACT SCAN] status=${status || '-'} url=${targetUrl} domVideos=${domVideoCount} playable=${found.length}`);
+        return { ok:true, status };
+      } finally {
+        try { await page.close(); } catch {}
+      }
+    };
+
+    const primary = await scan(canonicalPostUrl(postUrl), { allow429Fallback:true });
+    if (!found.length && (primary?.status === 429 || primary?.ok)) {
+      const mediaUrl = mediaViewUrl(postUrl);
+      console.log(`[Threads][VIDEO MEDIA FALLBACK] start url=${mediaUrl} reason=${primary?.status === 429 ? 'primary-429' : 'primary-no-playable'}`);
+      const media = await scan(mediaUrl, { allow429Fallback:false });
+      console.log(`[Threads][VIDEO MEDIA FALLBACK] done status=${media?.status || '-'} playable=${found.length} url=${mediaUrl}`);
+    }
+    await context.close();
+  } catch (err) {
+    console.warn(`[Threads][VIDEO EXTRACT] fallback 실패 url=${postUrl} reason="${err.message}"`);
+  } finally {
+    if (browser) try { await browser.close(); } catch {}
+  }
+
+  return found.slice(0, 5);
+}
+function withVideoExtraction(baseFn) {
+  return async function collectPostDetailsWithVideo(url, username) {
+    let details;
+    try {
+      details = await baseFn(url, username);
+    } catch (err) {
+      const msg = String(err?.message || '');
+      if (!/Threads 원문 텍스트를 읽지 못했습니다/i.test(msg)) throw err;
+      console.warn(`[Threads][EARLY TEXT FALLBACK] 원문 직접 추출 실패 → 프로필 fallback @${username || '-'} source=${url}`);
+      details = await videoFallbackFromProfile(url, username);
+      if (!details || !String(details.sourceText || '').trim()) throw err;
+    }
+
+    const existing = Array.isArray(details?.videos) ? details.videos.filter(isHttpVideoUrl) : [];
+    if (existing.length) return { ...details, videos: existing, hasVideo: true };
+    if (!details?.hasVideo) return details;
+
+    const videos = await extractPlayableVideoUrls(url);
+    console.log(`[Threads][VIDEO EXTRACT] @${username || '-'} detected=${details?.hasVideo ? 'yes' : 'no'} playable=${videos.length}`);
+    return { ...details, videos, hasVideo: details?.hasVideo || videos.length > 0 };
+  };
+}
+async function collectFallbackDetails(url, username) {
+  let sourceText = '';
+  let images = [];
+  let videos = [];
+  let hasVideo = false;
+  let authorReplies = [];
+
+  // 1) 프로필 목록에서 이미 읽었던 원문/미디어를 다시 활용한다.
+  try {
+    const posts = await collectProfilePosts(username, { limit: 20 });
+    const target = canonicalPostUrl(url);
+    const hit = (posts || []).find(p => canonicalPostUrl(p?.url) === target);
+    if (hit) {
+      sourceText = String(hit.text || '').replace(/\s+/g, ' ').trim();
+      images = Array.isArray(hit.images) ? hit.images.filter(Boolean) : [];
+      hasVideo = !!hit.hasVideo || Number(hit.videoCount || 0) > 0;
+    }
+  } catch (err) {
+    console.warn(`[Threads][TEXT FALLBACK] profile 재조회 실패 @${username}: ${err.message}`);
+  }
+
+  // 2) 상세 페이지를 새 브라우저로 열어 body/meta/작성자 댓글을 느슨하게 수집한다.
+  let browser;
+  try {
+    const playwright = require('playwright');
+    browser = await playwright.chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    });
+    const context = await browser.newContext({
+      locale: 'ko-KR',
+      viewport: { width: 1100, height: 1600 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(16000);
+    await page.goto(canonicalPostUrl(url), { waitUntil: 'domcontentloaded', timeout: 16000 });
+    await page.waitForTimeout(2500);
+    for (let i = 0; i < 3; i++) {
+      await page.mouse.wheel(0, 850);
+      await page.waitForTimeout(350);
+    }
+
+    const data = await page.evaluate(({ username }) => {
+      const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
+      const targetUser = String(username || '').toLowerCase();
+      const sameUser = href => {
+        try {
+          const u = new URL(href, location.origin);
+          return u.pathname.toLowerCase().replace(/\/$/, '') === `/@${targetUser}`;
+        } catch { return false; }
+      };
+      const addUnique = (arr, value) => {
+        const s = String(value || '').trim();
+        if (s && !arr.includes(s)) arr.push(s);
+      };
+      const externalFrom = root => {
+        const out = [];
+        if (!root) return out;
+        for (const a of root.querySelectorAll('a[href]')) {
+          try {
+            const u = new URL(a.href || a.getAttribute('href') || '', location.origin);
+            if (!/(^|\.)threads\.(com|net)$/i.test(u.hostname)) addUnique(out, u.href);
+            for (const key of ['u','url','target','redirect','redirect_url']) {
+              const v = u.searchParams.get(key);
+              if (!v) continue;
+              try { addUnique(out, decodeURIComponent(v)); } catch { addUnique(out, v); }
+            }
+          } catch {}
+        }
+        const matches = clean(root.innerText || '').match(/https?:\/\/[^\s)\]}>,]+/gi) || [];
+        for (const m of matches) addUnique(out, m);
+        return out;
+      };
+      const compactRoot = anchor => {
+        const article = anchor.closest('article,[role="article"]');
+        if (article) return article;
+        let node = anchor.parentElement, best = null;
+        for (let i = 0; i < 10 && node; i++, node = node.parentElement) {
+          const text = clean(node.innerText || '');
+          if (text.length >= 8 && text.length <= 6000) best = node;
+          if (text.length > 6000 && best) break;
+        }
+        return best;
+      };
+
+      const meta = clean(
+        document.querySelector('meta[property="og:description"]')?.content ||
+        document.querySelector('meta[name="description"]')?.content || ''
+      );
+      const body = clean(document.body?.innerText || '').slice(0, 8000);
+      const imgs = [];
+      for (const img of document.querySelectorAll('img')) {
+        const r = img.getBoundingClientRect();
+        const src = img.currentSrc || img.src || '';
+        const alt = String(img.alt || '').toLowerCase();
+        if (!src || r.width < 160 || r.height < 160) continue;
+        if (/profile|프로필|avatar|사용자/.test(alt)) continue;
+        addUnique(imgs, src);
+      }
+      const vids = [];
+      for (const v of document.querySelectorAll('video')) {
+        addUnique(vids, v.currentSrc || v.src || v.getAttribute('src'));
+      }
+
+      const replies = [];
+      const seen = new Set();
+      for (const a of document.querySelectorAll('a[href]')) {
+        if (!sameUser(a.href || a.getAttribute('href') || '')) continue;
+        const root = compactRoot(a);
+        if (!root) continue;
+        const text = clean(root.innerText || '').slice(0, 4000);
+        const links = externalFrom(root);
+        const merged = [text, ...links].filter(Boolean).join('\n').slice(0, 6000);
+        if (merged.length < 8 || seen.has(merged)) continue;
+        seen.add(merged);
+        replies.push(merged);
+      }
+
+      return {
+        meta,
+        body,
+        images: imgs.slice(0, 10),
+        videos: vids.slice(0, 5),
+        authorReplies: replies.slice(0, 15),
+        videoCount: document.querySelectorAll('video').length,
+      };
+    }, { username });
+
+    if (!sourceText) {
+      sourceText = String(data.meta || '').trim();
+      if (!sourceText) {
+        // body 전체를 원문으로 쓰지는 않고, 프로필 fallback도 실패한 경우에만 최소 텍스트를 보조로 남긴다.
+        sourceText = String(data.body || '').trim().slice(0, 1800);
+      }
+    }
+    if (!images.length && Array.isArray(data.images)) images = data.images.filter(Boolean);
+    videos = Array.isArray(data.videos) ? data.videos.filter(Boolean) : [];
+    hasVideo = hasVideo || videos.length > 0 || Number(data.videoCount || 0) > 0;
+    authorReplies = Array.isArray(data.authorReplies) ? data.authorReplies.filter(Boolean) : [];
+
+    await context.close();
+  } catch (err) {
+    console.warn(`[Threads][TEXT FALLBACK] browser 재조회 실패 @${username}: ${err.message}`);
+  } finally {
+    if (browser) try { await browser.close(); } catch {}
+  }
+
+  console.log(`[Threads][TEXT FALLBACK] @${username} source=${sourceText.length} replies=${authorReplies.length} images=${images.length} videos=${videos.length} hasVideo=${hasVideo ? 'yes' : 'no'}`);
+  return {
+    sourceText,
+    authorReplies,
+    images,
+    videos,
+    hasVideo,
+    exactUrl: true,
+  };
+}
+function withTextFallback(baseFn) {
+  return async function collectPostDetailsWithTextFallback(url, username) {
+    try {
+      return await baseFn(url, username);
+    } catch (err) {
+      const msg = String(err?.message || '');
+      if (!/Threads 원문 텍스트를 읽지 못했습니다/i.test(msg)) throw err;
+      console.warn(`[Threads][TEXT FALLBACK] 원문 직접 추출 실패 → fallback @${username} source=${url}`);
+      return collectFallbackDetails(url, username);
+    }
+  };
+}
+const THREADS_429_CACHE_TTL_MS = 20 * 60 * 1000;
+const THREADS_429_COOLDOWN_MS = 15 * 60 * 1000;
+const threads429DetailCache = new Map();
+const threads429Guard = global.__THREADS_WEB_GUARD__ || {
+  cooldowns: new Map(),
+  mark429(source = '') {
+    const key = canonicalPostUrl(source.replace(/^video(?:-page|-response)?:/, '').replace(/^profile:/, '')) || String(source || '');
+    if (!key) return;
+    const until = Date.now() + THREADS_429_COOLDOWN_MS;
+    this.cooldowns.set(key, until);
+    console.warn(`[Threads][429 GUARD] 429 감지 → 해당 URL만 15분 cooldown source=${source || '-'} key=${key}`);
+  },
+  isCooling(source = '') {
+    const key = canonicalPostUrl(source.replace(/^video(?:-page|-response)?:/, '').replace(/^profile:/, '')) || String(source || '');
+    if (!key) return false;
+    const until = Number(this.cooldowns.get(key) || 0);
+    if (until && until <= Date.now()) this.cooldowns.delete(key);
+    return Date.now() < until;
+  },
+  remainingMinutes(source = '') {
+    const key = canonicalPostUrl(source.replace(/^video(?:-page|-response)?:/, '').replace(/^profile:/, '')) || String(source || '');
+    const until = Number(this.cooldowns.get(key) || 0);
+    return Math.max(0, Math.ceil((until - Date.now()) / 60000));
+  },
+  clearExpired() {
+    const now = Date.now();
+    for (const [key, until] of this.cooldowns) if (!until || until <= now) this.cooldowns.delete(key);
+  },
+};
+if (!(threads429Guard.cooldowns instanceof Map)) threads429Guard.cooldowns = new Map();
+global.__THREADS_WEB_GUARD__ = threads429Guard;
+function threads429CloneDetail(value) {
+  if (!value) return value;
+  return {
+    ...value,
+    authorReplies: Array.isArray(value.authorReplies) ? [...value.authorReplies] : [],
+    images: Array.isArray(value.images) ? [...value.images] : [],
+    videos: Array.isArray(value.videos) ? [...value.videos] : [],
+  };
+}
+function is429Error(err) {
+  return Number(err?.response?.status || err?.status || 0) === 429 || /(?:status(?: code)?\s*429|\b429\b|too many requests)/i.test(String(err?.message || ''));
+}
+async function threads429ProfileFallback(url, username) {
+  if (!username) return null;
+  try {
+    const posts = await collectProfilePosts(username, { limit: 30 });
+    const target = canonicalPostUrl(url);
+    const hit = (posts || []).find(p => canonicalPostUrl(p?.url) === target);
+    if (!hit) return null;
+    return {
+      sourceText: String(hit.text || '').replace(/\s+/g, ' ').trim(),
+      authorReplies: [],
+      images: Array.isArray(hit.images) ? hit.images.filter(Boolean) : [],
+      videos: [],
+      hasVideo: !!hit.hasVideo || Number(hit.videoCount || 0) > 0,
+      exactUrl: true,
+      webCooldownFallback: true,
+    };
+  } catch (err) {
+    console.warn(`[Threads][429 GUARD] profile fallback 실패 @${username || '-'} reason="${err.message}"`);
+    return null;
+  }
+}
+function with429Guard(baseFn) {
+  return async function collectPostDetailsWith429Guard(url, username) {
+    const key = canonicalPostUrl(url);
+    const cached = threads429DetailCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      console.log(`[Threads][429 GUARD] detail cache hit @${username || '-'} url=${key}`);
+      return threads429CloneDetail(cached.value);
+    }
+    if (cached) threads429DetailCache.delete(key);
+
+    if (threads429Guard.isCooling(key)) {
+      const remain = threads429Guard.remainingMinutes(key);
+      console.warn(`[Threads][429 GUARD] 이 URL cooldown ${remain}분 남음 → 상세 직접접근 생략 @${username || '-'} url=${key}`);
+      const fallback = await threads429ProfileFallback(key, username);
+      if (fallback?.sourceText) {
+        threads429DetailCache.set(key, { expiresAt: Date.now() + THREADS_429_CACHE_TTL_MS, value: threads429CloneDetail(fallback) });
+        return fallback;
+      }
+      throw new Error(`Threads 웹 요청 제한 cooldown 중입니다 (${remain}분): ${key}`);
+    }
+
+    try {
+      const result = await baseFn(url, username);
+      if (result) threads429DetailCache.set(key, { expiresAt: Date.now() + THREADS_429_CACHE_TTL_MS, value: threads429CloneDetail(result) });
+      return result;
+    } catch (err) {
+      if (!is429Error(err)) throw err;
+      threads429Guard.mark429(key);
+      const fallback = await threads429ProfileFallback(key, username);
+      if (fallback?.sourceText) {
+        threads429DetailCache.set(key, { expiresAt: Date.now() + THREADS_429_CACHE_TTL_MS, value: threads429CloneDetail(fallback) });
+        return fallback;
+      }
+      throw err;
+    }
+  };
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, item] of threads429DetailCache) if (!item || item.expiresAt <= now) threads429DetailCache.delete(key);
+  threads429Guard.clearExpired?.();
+}, 10 * 60 * 1000).unref?.();
+
 async function mapWithConcurrency(items,concurrency,worker){
   const results=[];let cursor=0;
   async function run(){while(true){const i=cursor++;if(i>=items.length)return;try{results[i]=await worker(items[i],i);}catch(err){results[i]={error:err};}}}
@@ -424,10 +908,19 @@ if (process.env.THREADS_STARTUP_DIAGNOSTICS === '1' && process.env.ME2_BROWSER_W
   setImmediate(() => { runThreadsAccessDiag().catch(() => {}); });
 }
 
-module.exports={listBenchmarkAccounts,addBenchmarkAccount,addBenchmarkAccountsBulk,deleteBenchmarkAccount,markUsedPost,collectBenchmarkMaterials,collectPostDetails,collectProfilePosts};
+const collectPostDetailsForWorker = withTextFallback(withVideoExtraction(collectPostDetailsRaw));
+module.exports={listBenchmarkAccounts,addBenchmarkAccount,addBenchmarkAccountsBulk,deleteBenchmarkAccount,markUsedPost,collectBenchmarkMaterials,collectPostDetails:collectPostDetailsForWorker,collectProfilePosts};
+console.log('[Threads][VIDEO PATCH] 게시물 429 시 /media 1회 fallback + 게시물별 실패 격리 + 영상 직접 추출 활성화');
 if (process.env.ME2_BROWSER_WORKER !== '1') {
   const { isolatedBrowserTask } = require('./isolatedTask');
   for (const method of ['collectBenchmarkMaterials','collectPostDetails','collectProfilePosts']) {
     module.exports[method] = (...args) => isolatedBrowserTask('benchmarkAccounts', method, args);
   }
+  // Main process: 429-cache/cooldown guard wraps a second video-extraction retry around the
+  // isolated dispatch (which itself invokes the full worker-side chain above) - see the note
+  // above collectPostDetailsRaw for why the video-extraction layer legitimately runs twice.
+  module.exports.collectPostDetails = with429Guard(withVideoExtraction(module.exports.collectPostDetails));
+  console.log('[Threads][429 GUARD] 상세 20분 캐시 + 429 발생 시 게시물별 15분 cooldown 활성화');
+} else {
+  console.log('[Threads][TEXT FALLBACK PATCH] 원문 상세 추출 실패 시 프로필/브라우저 fallback 활성화');
 }
