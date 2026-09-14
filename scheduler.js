@@ -76,7 +76,7 @@ function localPathFromUploadUrl(url){if(!url)return null;const marker='/uploads/
 function mediaSourceFilesExist(media){const p=localPathFromUploadUrl(media.image_url);if(!p||!fs.existsSync(p))return false;if(media.extra_image_url){const e=localPathFromUploadUrl(media.extra_image_url);if(!e||!fs.existsSync(e))return false;}return true;}
 async function buildCommentText(account,post){if(hasCoupangKeys(account)&&post.recipe_comment_text&&!post.link)throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');if(!post.link)return compactRecipePrefix(sanitizeCommentPrefix(post.recipe_comment_text||''),450);return buildDoubleLinkComment(account,post.recipe_comment_text||'',post.link,450);}
 function startPublishJob(){return require("./publishQueue").startPublishJob({buildCommentText});}
-function startInsightsJob(){cron.schedule('*/10 * * * *',async()=>{const start=new Date();start.setHours(0,0,0,0);for(const s of listAllAccountsForSystem()){const posts=db.prepare(`SELECT * FROM posts WHERE account_id=? AND status='posted' AND posted_at>=? AND threads_media_id IS NOT NULL`).all(s.id,start.toISOString());for(const p of posts){try{const stats=await getMediaInsights(s.id,p.threads_media_id);db.prepare(`INSERT INTO insights (post_id,views,likes,replies,reposts,quotes,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(post_id) DO UPDATE SET views=excluded.views,likes=excluded.likes,replies=excluded.replies,reposts=excluded.reposts,quotes=excluded.quotes,updated_at=excluded.updated_at`).run(p.id,stats.views||0,stats.likes||0,stats.replies||0,stats.reposts||0,stats.quotes||0,new Date().toISOString());}catch(e){console.error(`[인사이트 갱신 실패] account #${s.id}:`,e.message);}}}});}
+function startInsightsJob(){cron.schedule('*/10 * * * *',async()=>{const start=new Date();start.setHours(0,0,0,0);for(const s of listAllAccountsForSystem()){const posts=db.prepare(`SELECT * FROM posts WHERE account_id=? AND status='posted' AND posted_at>=? AND threads_media_id IS NOT NULL`).all(s.id,start.toISOString());for(const p of posts){try{const stats=await getMediaInsights(s.id,p.threads_media_id);db.prepare(`INSERT INTO insights (post_id,views,likes,replies,reposts,quotes,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(post_id) DO UPDATE SET views=excluded.views,likes=excluded.likes,replies=excluded.replies,reposts=excluded.reposts,quotes=excluded.quotes,updated_at=excluded.updated_at`).run(p.id,stats.views||0,stats.likes||0,stats.replies||0,stats.reposts||0,stats.quotes||0,new Date().toISOString());}catch(e){console.error(`[인사이트 갱신 실패] account #${s.id}:`,e.message);}}}},{noOverlap:true});}
 function randomIntervalMinutes(){return 60+Math.random()*15;}const AUTOPILOT_TARGETS=['전체','20대 여자','20대 남자','30대 여자','30대 남자','40대 이상'];
 function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=null,recipeCommentText=null,scheduledAt=null}){const formattedText=formatThreadsBody(text);db.prepare(`INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL)`).run(formattedText,link||null,imageUrl||null,extraImageUrl||null,videoUrl||null,String(scheduledAt||new Date().toISOString()),accountId,recipeCommentText);}
 function recordAutopilotLast(accountId,keyword,target){db.prepare(`UPDATE accounts SET autopilot_last_keyword=?, autopilot_last_target=? WHERE id=?`).run(keyword,target,accountId);}
@@ -104,6 +104,48 @@ async function chooseSourceMedia(result){
 function classifyCoupangUrl(raw){try{const u=new URL(String(raw||'').trim());const host=u.hostname.toLowerCase();const alreadyAffiliate=host==='link.coupang.com'||host.endsWith('.link.coupang.com')||/lptag|subid|aff/i.test(u.search);const plainCoupang=host==='coupang.com'||host==='www.coupang.com'||host.endsWith('.coupang.com');return{valid:/^https?:$/i.test(u.protocol),alreadyAffiliate,plainCoupang,host};}catch{return{valid:false,alreadyAffiliate:false,plainCoupang:false,host:''};}}
 async function makeAffiliateLink(account,result){const raw=String(result?.product?.url||'').trim();if(!raw)throw new Error('쿠팡 상품 URL이 비어 있어 자동발행을 중단했습니다');const info=classifyCoupangUrl(raw);if(!info.valid||!info.plainCoupang)throw new Error(`쿠팡 상품 URL 형식이 올바르지 않습니다: ${raw.slice(0,120)}`);if(info.alreadyAffiliate){console.log(`[Coupang][LINK] 이미 파트너스 링크라 딥링크 변환 생략 host=${info.host}`);return raw;}try{const links=await coupangApi.createDeeplink(account.id,[raw]);const first=Array.isArray(links)?links[0]:null;const affiliate=String(first?.shortenUrl||first?.landingUrl||first?.originalUrl||'').trim();if(!affiliate)throw new Error('쿠팡 파트너스 링크 생성 결과가 비어 있습니다');console.log(`[Coupang][LINK] 일반 상품 URL → 딥링크 변환 성공`);return affiliate;}catch(err){const msg=String(err?.message||err?.response?.data?.rMessage||'');if(/url convert failed/i.test(msg)){console.warn(`[Coupang][LINK] 딥링크 재변환 거부 → 검색 API productUrl 그대로 사용`);return raw;}throw err;}}
 async function runAutopilotOnce(account,scheduledAt=null){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target,scheduledAt);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=await chooseSourceMedia(result);saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead,scheduledAt});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V15 MATERIAL-MIXED-MEDIA] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
-function startAutopilotJob(){const nextRunAt=new Map();cron.schedule('* * * * *',async()=>{const now=Date.now();for(const s of listAllAccountsForSystem()){const account=getAccount(s.id);if(!account.autopilot_enabled){nextRunAt.delete(account.id);continue;}if(hasCoupangKeys(account)){const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown)continue;}const due=nextRunAt.get(account.id)||0;if(now<due)continue;nextRunAt.set(account.id,now+randomIntervalMinutes()*60*1000);try{await runAutopilotOnce(account);}catch(err){if(coupangApi.isRateLimitError?.(err)){console.error(`[완전자동화 중단][Coupang rate limit] account #${account.id}: ${err.message}`);continue;}console.error(`[완전자동화 실패] account #${account.id}:`,err.response?.data||err.message);}}});}
-module.exports={startPublishJob,startInsightsJob,startAutopilotJob,runAutopilotOnce,buildDoubleLinkComment};
+function startAutopilotJob(){const nextRunAt=new Map();cron.schedule('* * * * *',async()=>{const now=Date.now();for(const s of listAllAccountsForSystem()){const account=getAccount(s.id);if(!account.autopilot_enabled){nextRunAt.delete(account.id);continue;}if(hasCoupangKeys(account)){const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown)continue;}const due=nextRunAt.get(account.id)||0;if(now<due)continue;nextRunAt.set(account.id,now+randomIntervalMinutes()*60*1000);try{await runAutopilotOnce(account);}catch(err){if(coupangApi.isRateLimitError?.(err)){console.error(`[완전자동화 중단][Coupang rate limit] account #${account.id}: ${err.message}`);continue;}console.error(`[완전자동화 실패] account #${account.id}:`,err.response?.data||err.message);}}},{noOverlap:true});}
+
+// 예정 시각을 조금 넘긴 새 글은 허용하되, 오래 밀린 최초 발행만 폐기한다.
+// publishQueue가 명시적으로 재시도를 예약한 pending 글은 publish_next_retry_at까지 보존한다.
+const STALE_MINUTES=Math.max(1,Number(process.env.STALE_PENDING_MINUTES||5));
+function expireStalePendingPosts(){
+  const nowMs=Date.now();const nowIso=new Date(nowMs).toISOString();
+  const columns=db.prepare('PRAGMA table_info(posts)').all();
+  const hasPublishRetry=columns.some(c=>c.name==='publish_next_retry_at');
+  const rows=hasPublishRetry
+    ?db.prepare(`SELECT id, account_id, scheduled_at, publish_next_retry_at FROM posts WHERE status='pending' ORDER BY scheduled_at ASC`).all()
+    :db.prepare(`SELECT id, account_id, scheduled_at, NULL AS publish_next_retry_at FROM posts WHERE status='pending' ORDER BY scheduled_at ASC`).all();
+  const affectedAccounts=new Set();let expired=0;
+  for(const post of rows){
+    if(post.publish_next_retry_at)continue;
+    const scheduledMs=new Date(post.scheduled_at).getTime();
+    if(!Number.isFinite(scheduledMs))continue;
+    const lateMs=nowMs-scheduledMs;
+    if(lateMs<STALE_MINUTES*60*1000)continue;
+    const lateMin=Math.floor(lateMs/60000);
+    db.prepare(`UPDATE posts SET status='failed', error_message=? WHERE id=? AND status='pending'`).run(
+      `STALE_EXPIRED: 예정시간보다 ${lateMin}분 지연되어 오래된 미발행 작업을 폐기했습니다. 밀린 글은 발행하지 않고 현재 시점부터 새 소재로 진행합니다.`,
+      post.id
+    );
+    affectedAccounts.add(Number(post.account_id));expired++;
+    console.log(`[Publish][STALE EXPIRE] account #${post.account_id} post #${post.id} late=${lateMin}m threshold=${STALE_MINUTES}m -> skip old post`);
+  }
+  for(const accountId of affectedAccounts){
+    const account=db.prepare(`SELECT id, autopilot_enabled, autopilot_next_at FROM accounts WHERE id=?`).get(accountId);
+    if(!account?.autopilot_enabled)continue;
+    const nextMs=account.autopilot_next_at?new Date(account.autopilot_next_at).getTime():NaN;
+    if(!Number.isFinite(nextMs)||nextMs>nowMs){
+      db.prepare(`UPDATE accounts SET autopilot_next_at=? WHERE id=?`).run(nowIso,accountId);
+      console.log(`[Autopilot][FRESH RESTART] account #${accountId} stale queue expired -> nextAt=${nowIso}`);
+    }
+  }
+  if(expired)console.log(`[Publish][STALE QUEUE] expired=${expired} threshold=${STALE_MINUTES}m retries=preserved comments=untouched`);
+}
+function startStaleQueueJob(){
+  try{expireStalePendingPosts();}catch(e){console.warn('[Publish][STALE QUEUE] startup cleanup failed:',e.message);}
+  cron.schedule('* * * * *',()=>{try{expireStalePendingPosts();}catch(e){console.warn('[Publish][STALE QUEUE] cleanup failed:',e.message);}},{noOverlap:true});
+  console.log(`[Publish][STALE QUEUE] 오래된 최초 미발행 ${STALE_MINUTES}분 초과 자동폐기 + 예약 재시도 보존 + 새소재 재시작 활성화`);
+}
+module.exports={startPublishJob,startInsightsJob,startAutopilotJob,startStaleQueueJob,runAutopilotOnce,buildDoubleLinkComment,expireStalePendingPosts};
 

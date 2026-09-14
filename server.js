@@ -42,7 +42,7 @@ const { scrapeProduct } = require('./scraper');
 const coupangApi = require('./coupangApi');
 const { generateCaption, suggestKeyword, suggestKeywordCandidates } = require('./aiCaption');
 const { rankKeywordsByTrend } = require('./naverTrends');
-const { startPublishJob, startInsightsJob, startAutopilotJob } = require('./scheduler');
+const { startPublishJob, startInsightsJob, startAutopilotJob, startStaleQueueJob } = require('./scheduler');
 const youtubeApi = require('./youtubeApi');
 const videoFrames = require('./videoFrames');
 const frameVision = require('./frameVision');
@@ -1016,4 +1016,5 @@ app.listen(PORT, () => {
   startPublishJob();
   startInsightsJob();
   startAutopilotJob();
+  startStaleQueueJob();
 });

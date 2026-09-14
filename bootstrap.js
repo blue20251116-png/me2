@@ -107,7 +107,7 @@ async function collectLiveInsights(){
     db.prepare(`DELETE FROM insight_history WHERE captured_at < ?`).run(new Date(nowMs-8*24*60*60*1000).toISOString());
   }finally{liveInsightRunning=false;}
 }
-cron.schedule('* * * * *',collectLiveInsights);
+cron.schedule('* * * * *',collectLiveInsights,{noOverlap:true});
 setTimeout(()=>collectLiveInsights().catch(()=>{}),15000);
 
 appInstance.get('/api/live-insights',requireOwnedAccount,(req,res)=>{
