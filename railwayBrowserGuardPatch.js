@@ -1,7 +1,6 @@
 'use strict';
 
 const Module = require('module');
-const path = require('path');
 
 // Keep Railway/container flags minimal. --single-process forces Chromium into
 // an atypical process model and was present on every observed SIGTRAP launch.
@@ -94,19 +93,6 @@ if (!global.__ME2_RAILWAY_BROWSER_GUARD__) {
     const exp = originalLoad.apply(this, arguments);
     if (request === 'playwright' || request === 'playwright-core') return patchPlaywright(exp);
     return exp;
-  };
-
-  const previousCompile = Module.prototype._compile;
-  Module.prototype._compile = function railwayBrowserGuardCompile(content, filename) {
-    let source = String(content || '');
-    if (path.basename(filename) === 'autopilotTimedPrefillPatch.js') {
-      const marker = 'async function ensureCoupangReady(accountId, account) {\n';
-      if (source.includes(marker) && !source.includes('ME2_ACCOUNT_15_QUARANTINED')) {
-        source = source.replace(marker, `${marker}  if (Number(accountId) === 15) {\n    console.warn('[Autopilot][COUPANG PREFLIGHT] account #15 quarantined: known invalid signature');\n    setState(accountId, 'blocked', 'ME2_ACCOUNT_15_QUARANTINED');\n    return false;\n  }\n`);
-        console.log('[Railway Browser Guard] account #15 Coupang quarantine ON');
-      }
-    }
-    return previousCompile.call(this, source, filename);
   };
 }
 

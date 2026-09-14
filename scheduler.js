@@ -238,6 +238,11 @@ function isCoupangAuthError(err) {
   return status === 401 || String(data?.rCode) === '401' || /invalid signature|unauthorized|invalid.*(?:access.?key|secret.?key)/i.test(msg);
 }
 async function ensureCoupangReady(accountId, account) {
+  if (Number(accountId) === 15) {
+    console.warn('[Autopilot][COUPANG PREFLIGHT] account #15 quarantined: known invalid signature');
+    setState(accountId, 'blocked', 'ME2_ACCOUNT_15_QUARANTINED');
+    return false;
+  }
   const fp = credentialFingerprint(account);
   if (!coupangApi.hasCredentials(account)) {
     coupangPreflightCache.set(accountId, { ok:false, reason:'missing_credentials', fp, until:Date.now()+COUPANG_INVALID_TTL_MS });

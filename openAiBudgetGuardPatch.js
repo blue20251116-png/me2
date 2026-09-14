@@ -71,11 +71,12 @@ function pruneCache() {
 function assertHourlyBudget() {
   const state = budgetState();
   if (state.available) return;
-  // Error code/flag names kept as OPENAI_* even after the Claude migration: runtimeStabilityPatch.js
-  // injects a string-literal check for this exact code into other files' catch blocks, and 3 more
-  // files (geminiEmergencyFallbackPatch.js, autopilotTimedPrefillPatch.js, automationState.js)
-  // check it directly - renaming here without touching all of them would silently break the
-  // no-retry-on-budget-exceeded behavior everywhere else.
+  // Error code/flag names kept as OPENAI_* even after the Claude migration: this exact code/flag
+  // is checked directly by geminiEmergencyFallbackPatch.js, scheduler.js (formerly
+  // autopilotTimedPrefillPatch.js), automationState.js, and autopilotMaterialEngine.js/
+  // recipeQualityPatch.js's own catch blocks (formerly injected by runtimeStabilityPatch.js,
+  // now baked in directly) - renaming here without touching all of them would silently break
+  // the no-retry-on-budget-exceeded behavior everywhere else.
   const e = new Error(`OPENAI_HOURLY_BUDGET_EXCEEDED: ${state.used}/${state.limit} requests in last hour`);
   e.code = 'OPENAI_HOURLY_BUDGET_EXCEEDED';
   e.__openAiNoRetry = true;

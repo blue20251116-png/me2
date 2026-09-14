@@ -19,7 +19,7 @@ async function callClaudeText(accountId,system,user,{maxTokens=1800,temperature=
 }
 async function prepareVisionImageUrls(imageUrls){
   const out=[];
-  for(const raw of (imageUrls||[]).filter(Boolean).slice(0,2)){
+  for(const raw of (imageUrls||[]).filter(Boolean).slice(0,3)){
     try{
       if(/^data:image\//i.test(String(raw))){out.push(raw);continue;}
       const r=await axios.get(String(raw),{responseType:'arraybuffer',timeout:15000,maxRedirects:5,maxContentLength:12*1024*1024,maxBodyLength:12*1024*1024,headers:{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',referer:'https://www.threads.com/',accept:'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'},validateStatus:s=>s>=200&&s<400});
@@ -179,16 +179,91 @@ function normalizeVisionResult(d){
 // Checking this once, up front, throws the real error before either catch block gets a chance to
 // bury it - it still reaches buildThreadsFirstAutopilot's own try/catch same as before, just with
 // the true message intact.
-// NOTE: the guard below is placed AFTER the original 3-line prologue (images/system/text), not
-// before it - videoFrameVisionPatch.js does an exact-string-marker replace of that exact prologue
-// (signature line through `const text=commerceTargetText(m);`) to splice in video-frame-extraction
-// vision support. Putting the guard before it broke that marker (confirmed via a MISS log on boot);
-// putting it after leaves the marker's literal text untouched while still checking the key before
-// any real API call happens, in both the unpatched and video-patched versions of this function.
+// NOTE: the guard below is placed AFTER the images/system/text prologue, which now also builds
+// video-frame-extraction vision support (formerly a separate videoFrameVisionPatch.js that
+// exact-string-marker-spliced this prologue at require time - folded directly in here since
+// there's no longer a marker to preserve). Placement doesn't matter for correctness either way;
+// it still checks the key before any real API call happens.
+const __videoFrameVisionCache=new Map();
+const __VIDEO_FRAME_CACHE_TTL=6*60*60*1000;
+const __VIDEO_FRAME_CACHE_MAX=80;
+function __videoFrameExec(cmd,args,timeout=15000){
+  return new Promise((resolve,reject)=>{
+    require('child_process').execFile(cmd,args,{timeout,maxBuffer:2*1024*1024},(err,stdout,stderr)=>{
+      if(err){err.stderr=stderr;reject(err);return;}
+      resolve(String(stdout||''));
+    });
+  });
+}
+function __videoFrameCachePrune(){
+  const now=Date.now();
+  for(const [k,v] of __videoFrameVisionCache){if(now-v.at>__VIDEO_FRAME_CACHE_TTL)__videoFrameVisionCache.delete(k);}
+  while(__videoFrameVisionCache.size>__VIDEO_FRAME_CACHE_MAX)__videoFrameVisionCache.delete(__videoFrameVisionCache.keys().next().value);
+}
+async function __extractVisionFrames(videoUrl,count){
+  const url=String(videoUrl||'').trim();
+  if(!/^https?:\/\//i.test(url)||count<1)return[];
+  __videoFrameCachePrune();
+  const key=url+'|'+count;
+  const cached=__videoFrameVisionCache.get(key);
+  if(cached&&Date.now()-cached.at<=__VIDEO_FRAME_CACHE_TTL){
+    console.log('[AutopilotV3][VIDEO VISION CACHE HIT] frames='+cached.frames.length);
+    return cached.frames;
+  }
+  const fs=require('fs');
+  const os=require('os');
+  const p=require('path');
+  const crypto=require('crypto');
+  const id=process.pid+'-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex');
+  const videoFile=p.join(os.tmpdir(),'threads-vision-'+id+'.mp4');
+  const frameFiles=[];
+  try{
+    const r=await axios.get(url,{responseType:'arraybuffer',timeout:20000,maxRedirects:5,maxContentLength:30*1024*1024,maxBodyLength:30*1024*1024,headers:{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',referer:'https://www.threads.com/',accept:'video/mp4,video/*,*/*;q=0.8'},validateStatus:s=>s>=200&&s<400});
+    const body=Buffer.from(r.data||[]);
+    if(body.length<4096)throw new Error('video body too small');
+    fs.writeFileSync(videoFile,body);
+    const durationRaw=await __videoFrameExec('ffprobe',['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',videoFile],10000);
+    const duration=Number.parseFloat(durationRaw);
+    if(!Number.isFinite(duration)||duration<=0)throw new Error('ffprobe duration unavailable');
+    const ratios=count>=3?[0.20,0.50,0.80]:[0.30,0.70];
+    const frames=[];
+    for(let i=0;i<Math.min(count,ratios.length);i++){
+      const at=Math.max(0.05,Math.min(Math.max(0.05,duration-0.05),duration*ratios[i]));
+      const out=p.join(os.tmpdir(),'threads-vision-'+id+'-'+i+'.jpg');
+      frameFiles.push(out);
+      await __videoFrameExec('ffmpeg',['-hide_banner','-loglevel','error','-ss',at.toFixed(3),'-i',videoFile,'-frames:v','1','-vf','scale=720:-2','-q:v','5','-y',out],15000);
+      const img=fs.readFileSync(out);
+      if(img.length>=1024)frames.push('data:image/jpeg;base64,'+img.toString('base64'));
+    }
+    if(frames.length){
+      __videoFrameVisionCache.set(key,{at:Date.now(),frames});
+      __videoFrameCachePrune();
+      console.log('[AutopilotV3][VIDEO VISION] source='+new URL(url).hostname+' duration='+duration.toFixed(1)+'s frames='+frames.length+' bytes='+body.length);
+    }
+    return frames;
+  }catch(e){
+    console.warn('[AutopilotV3][VIDEO VISION] 프레임 추출 실패 → 기존 이미지 Vision 유지: '+(e.response?.status||'-')+' '+e.message);
+    return[];
+  }finally{
+    for(const f of [videoFile,...frameFiles]){try{fs.unlinkSync(f);}catch{}}
+  }
+}
+async function __buildVideoVisionMedia(m){
+  const originals=(Array.isArray(m?.images)?m.images:[]).filter(Boolean);
+  const videos=(Array.isArray(m?.videos)?m.videos:[]).filter(v=>/^https?:\/\//i.test(String(v||'')));
+  if(!videos.length)return{images:originals.slice(0,3),frameCount:0};
+  const wanted=originals.length?2:3;
+  const frames=await __extractVisionFrames(videos[0],wanted);
+  if(!frames.length)return{images:originals.slice(0,3),frameCount:0};
+  const images=originals.length?[originals[0],...frames]:frames;
+  console.log('[AutopilotV3][VIDEO VISION MIX] originals='+(originals.length?1:0)+' frames='+frames.length+' total='+Math.min(3,images.length));
+  return{images:images.slice(0,3),frameCount:frames.length};
+}
 async function identifyCommerceTarget(accountId,m){
-  const images=(Array.isArray(m.images)?m.images:[]).filter(Boolean).slice(0,3);
+  const visionMedia=await __buildVideoVisionMedia(m);
+  const images=visionMedia.images;
   const system=commerceTargetPrompt();
-  const text=commerceTargetText(m);
+  const text=commerceTargetText(m)+(visionMedia.frameCount?'\n\n[영상 분석] 동일 원본 영상에서 시간차로 추출한 대표 프레임 '+visionMedia.frameCount+'장을 포함했다. 여러 프레임에서 반복되거나 실제 사용·시연되는 대상을 우선하고 배경 소품은 제외하라.':'');
   if(!getAnthropicKey(accountId)){
     throw new Error('Anthropic API 키가 설정되지 않았습니다');
   }
@@ -199,6 +274,7 @@ async function identifyCommerceTarget(accountId,m){
       console.log(`[AutopilotV3][VISION TARGET] kind=${result.kind} sold="${result.soldObject||'-'}" dish="${result.dish||'-'}" ingredient="${result.promotedIngredient||'-'}" confidence=${result.confidence} terms="${result.searchTerms.join(' / ')}"`);
       return result;
     }catch(e){
+      if(e?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED'||e?.__openAiNoRetry||/OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(String(e?.message||'')+' '+String(e?.response?.data?.error?.message||''))){throw e;}
       console.warn(`[AutopilotV3][VISION TARGET] 이미지 분석 실패 → 텍스트 재시도: ${e.response?.status||'-'} ${e.response?.data?.error?.message||e.message}`);
     }
   }
@@ -208,6 +284,7 @@ async function identifyCommerceTarget(accountId,m){
     console.log(`[AutopilotV3][TEXT TARGET] kind=${result.kind} sold="${result.soldObject||'-'}" dish="${result.dish||'-'}" ingredient="${result.promotedIngredient||'-'}" confidence=${result.confidence} terms="${result.searchTerms.join(' / ')}"`);
     return result;
   }catch(e){
+    if(e?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED'||e?.__openAiNoRetry||/OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(String(e?.message||'')+' '+String(e?.response?.data?.error?.message||''))){throw e;}
     console.warn(`[AutopilotV3][TEXT TARGET] 실패: ${e.response?.status||'-'} ${e.response?.data?.error?.message||e.message}`);
     return{kind:'product',soldObject:'',dish:'',promotedIngredient:'',searchTerms:[],confidence:0,evidence:''};
   }
@@ -512,6 +589,7 @@ async function buildThreadsFirstAutopilot(accountId,{target}){
       return{text:decodeEscapedNewlines(generated.text),commentLead:decodeEscapedNewlines(generated.commentLead),product:found.product,productSearchTerm:found.searchTerm,mode:analysis.mode,persona:generated.persona,topic:analysis.topic,secretTerm:analysis.secretTerm,specialStory:Boolean(specialStory),sourceUrl:material.url,sourceUsername:material.username||null,sourceText:material.sourceText,authorReplies:material.authorReplies,sourceImages:textOnly?[]:(Array.isArray(material.images)?material.images.filter(Boolean).slice(0,10):[]),sourceVideos:textOnly?[]:(Array.isArray(material.videos)?material.videos.filter(Boolean).slice(0,5):[]),referenceImage:textOnly?null:(material.images?.[0]||null),visionTarget:vision};
     }catch(e){
       lastError=e;
+      if(e?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED'||e?.__openAiNoRetry||/OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(String(e?.message||'')+' '+String(e?.response?.data?.error?.message||''))){throw e;}
       console.warn(`[AutopilotV3][TRY FAIL] @${material.username||'-'} ${e.response?.data?.error?.message||e.message} → 다음 소재`);
       if(coupangApi.isRateLimitError?.(e))throw e;
       markUsedPost(material.url);

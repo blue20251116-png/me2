@@ -84,6 +84,7 @@ function wrap(originalBuild) {
       }
       console.warn('[AutopilotV3][RECIPE SOURCE CHECK] 재작성 결과도 원본 일치 기준 미달 → 새 소재 재시도');
     } catch (e) {
+      if(e?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED'||e?.__openAiNoRetry||/OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(String(e?.message||'')+' '+String(e?.response?.data?.error?.message||''))){throw e;}
       console.warn(`[AutopilotV3][RECIPE SOURCE CHECK] 재작성 실패: ${e.response?.data?.error?.message || e.message}`);
     }
   }
