@@ -676,6 +676,27 @@ test('the finance-claim guard does not flag ordinary savings/budgeting content o
   assert.deepEqual(policy.voiceProblems('무조건 예쁜 디자인이라 삼'), []);
 });
 
+test('highRiskClaim also catches "무손실" guaranteed-profit phrasing, not just bare 원금/손실/무조건', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-15): the finance branch only
+  // recognized 원금/손실 paired with 없/보장, or a bare "무조건 <수익어>" - a claim phrased as
+  // "무손실로 확실하게 수익남" (no-loss, guaranteed profit) sailed through unchecked because it uses
+  // neither shape, despite being the exact same deceptive guaranteed-return claim this branch
+  // exists to catch.
+  assert.ok(policy.voiceProblems('무손실로 확실하게 수익남').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이 부업 무손실로 이득 보는 구조임').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('무손실 보장되는 재테크임').includes('고위험 효능 주장'));
+  // "손해"/"손실" alone, without "무손실", are extremely common harmless shopping-deal praise in
+  // this bot's core product-review content ("남는 장사" = a good bargain) and were deliberately
+  // NOT added, to avoid the false-positive class that sank the earlier GENERIC_CTA_ENDING
+  // optional-pronoun attempt.
+  assert.deepEqual(policy.voiceProblems('이거 하면 손해 볼 일 없음'), []);
+  assert.deepEqual(policy.voiceProblems('이 상품 절대 손해 안 봄'), []);
+  assert.deepEqual(policy.voiceProblems('이거 사면 100% 남는 장사임'), []);
+  // "무손실" alone is ambiguous (lossless compression/audio, a common harmless tech term) and must
+  // stay unflagged without a nearby profit/certainty word.
+  assert.deepEqual(policy.voiceProblems('무손실 압축 파일이라 화질 그대로임'), []);
+});
+
 test('highRiskClaim also covers 아토피/습진/비염, everyday conditions missing from the disease-keyword list', () => {
   // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 아토피/습진/비염 (atopic
   // dermatitis/eczema/rhinitis) are exactly as common in this bot's baby/skincare-adjacent product

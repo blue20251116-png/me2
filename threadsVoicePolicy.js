@@ -189,7 +189,18 @@ function formatVoice(text){return normalizeVoice(text);}
 // 싹 나았음") - both are unambiguous condition names with no unrelated everyday meaning, same shape
 // as the already-listed 아토피/습진/비염 - but were missing entirely, so both sailed through
 // completely unchecked. voiceProblems() confirmed neither triggered any other check either.
-function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로|cm|센치|센티)\s*(?:빠졌|빠짐|감량|뺐|감소|줄었|줄음)/i.test(t)||/(?:암|통증|질환|염증|당뇨|고혈압|아토피|습진|비염|탈모|여드름)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/삼켜도\s*(?:완전\s*|100\s*%\s*)?(?:안전|괜찮)|질식\s*위험(?:이|가)?\s*없(?!\s*는\s*(?:편|것|거|셈))|알레르기\s*(?:걱정|위험)(?:이|가)?\s*(?:전혀\s*)?없(?!\s*는\s*(?:편|것|거|셈))/.test(t)||/(?:원금|손실)[^\n.!?]{0,16}(?:없(?!\s*는\s*(?:편|것|거|셈))|보장)|무조건\s*(?:수익|돈|이득|오른다|오릅니다|번다|법니다)/.test(t);}
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-15): the finance branch only
+// ever recognized the bare words 원금/손실 (paired with 없/보장) or a bare "무조건 <수익어>" - a claim
+// phrased as "무손실로 확실하게 수익남" (no-loss, guaranteed profit) sailed through unchecked because
+// it uses neither shape, despite being exactly the same deceptive guaranteed-return claim this
+// branch exists to catch. Deliberately scoped to "무손실" (no-loss) followed shortly by a
+// profit/certainty word rather than widening 원금/손실 themselves: "손해"/"손실" alone (e.g. "손해
+// 볼 일 없음", "남는 장사") are extremely common, harmless shopping-deal praise in this bot's core
+// product-review content and were verified via synthetic testing NOT to be added, to avoid the
+// same false-positive class that sank the earlier GENERIC_CTA_ENDING optional-pronoun attempt.
+// "무손실" itself is ambiguous (무손실 압축/오디오 = lossless compression/audio, a common harmless
+// tech term) so it only trips this when a profit/certainty word appears nearby, never bare.
+function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?:kg|키로|킬로|cm|센치|센티)\s*(?:빠졌|빠짐|감량|뺐|감소|줄었|줄음)/i.test(t)||/(?:암|통증|질환|염증|당뇨|고혈압|아토피|습진|비염|탈모|여드름)[^\n.!?]{0,24}(?:치료|완치|낫는다|낫는|나(?:아|았|음|은)|없어(?:짐|졌|져)|사라(?:짐|졌|져)|가라앉(?:음|았|아))/i.test(t)||/(?:치료|완치)[^\n.!?]{0,24}(?:된다|됨|가능)/i.test(t)||/삼켜도\s*(?:완전\s*|100\s*%\s*)?(?:안전|괜찮)|질식\s*위험(?:이|가)?\s*없(?!\s*는\s*(?:편|것|거|셈))|알레르기\s*(?:걱정|위험)(?:이|가)?\s*(?:전혀\s*)?없(?!\s*는\s*(?:편|것|거|셈))/.test(t)||/(?:원금|손실)[^\n.!?]{0,16}(?:없(?!\s*는\s*(?:편|것|거|셈))|보장)|무조건\s*(?:수익|돈|이득|오른다|오릅니다|번다|법니다)|무손실[^\n.!?]{0,16}(?:확실|보장|수익|이득|번다|법니다|오른다|오릅니다)/.test(t);}
 // REGRESSION (found live, 2026-09-13): voiceGuide() explicitly instructs grouping a 1~3-line
 // thought and inserting a blank line (two line breaks) before the next one - "이렇게 나눠야 보기
 // 좋다" - but until now nothing ever checked whether the model actually did this. Two real
