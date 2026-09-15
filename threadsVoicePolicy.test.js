@@ -18,6 +18,19 @@ test('persona is a Threads viral writer, not a source-faithful summarizer', () =
   assert.doesNotMatch(guide, /원문 90%|새 사건을 덧붙였는지|지어내지 않는다/);
 });
 
+test('every persona carries a shared baseline curiosity-gap hook, not just the dedicated curiosity persona', () => {
+  // Content-style change requested by the user (2026-09-15): exposure/reach improved after
+  // leaning into curiosity-driven SNS Threads viral hooks, so the shared voiceGuide() section
+  // (which comes after EVERY persona's own character block) now also tells the model to hold at
+  // least one thing back and plant a curiosity-maintaining device, regardless of which of the 5
+  // personas gets picked - not only CURIOSITY_BLOCK's own dedicated identity-hiding mechanic.
+  const { PERSONAS } = require('./threadsPersonas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    assert.match(guide, /궁금증을 유지하는 장치/, `${persona.id} is missing the shared curiosity-gap directive`);
+  }
+});
+
 test('hard format is a line-count ceiling - there is no per-line character limit at all', () => {
   const valid = '이거 처음 봤는데\n생각보다 훨씬 신기함\n마지막이 진짜 포인트';
   assertThreadsShape(policy.assertVoice(valid));
