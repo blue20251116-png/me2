@@ -23,6 +23,12 @@ test('stripAffiliateNoise does not strip these words when used as ordinary Korea
   assert.equal(stripAffiliateNoise('이 상품 안 좋아요 별로임'), '이 상품 안 좋아요 별로임');
   assert.equal(stripAffiliateNoise('공유해주세요 여러분'), '공유해주세요 여러분');
   assert.equal(stripAffiliateNoise('답글 남겨주세요'), '답글 남겨주세요');
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-15): the cluster match had no
+  // boundary check on either end, so two of these words sitting next to each other in an ordinary
+  // sentence - with a real verb suffix directly attached to the second one, not just whitespace/
+  // counts after it - still matched as a false-positive cluster and got torn out, leaving a
+  // mangled remainder ("이거 진짜 좋아서 답글 공유해주세요" -> "이거 진짜 좋아서 해주세요").
+  assert.equal(stripAffiliateNoise('이거 진짜 좋아서 답글 공유해주세요'), '이거 진짜 좋아서 답글 공유해주세요');
 });
 
 // REGRESSION (found via synthetic testing, hourly review): "썰" (to cut/slice) alone with a food

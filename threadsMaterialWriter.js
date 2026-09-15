@@ -32,7 +32,17 @@ function stripAffiliateNoise(value, { preserveLines = true } = {}) {
     // Only strip when 2+ of these labels appear back-to-back with nothing but whitespace/·/counts
     // between them - the actual shape of a scraped Threads action-button row - which a real
     // sentence using any one of these words on its own never matches.
-    .replace(/(?:(?:좋아요|답글|리포스트|공유)[\s,·|0-9]*){2,}/g, ' ');
+    // REGRESSION (found via synthetic testing, hourly review, 2026-09-15): the cluster match had
+    // no boundary check on either end, so it also fired inside an ordinary sentence whenever two
+    // of these words happened to sit next to each other with a real verb suffix directly attached
+    // to the second one - "답글" immediately followed by " 공유해주세요" (a genuine request to
+    // reply-and-share, not scraped UI chrome) matched "답글 공유" as a false-positive 2-word
+    // cluster and tore it out, leaving the mangled, nonsensical "해주세요" behind. The real UI
+    // cluster's labels always stand alone (bare words with nothing but whitespace/counts around
+    // them); a Hangul lookaround on the cluster's own start/end - not on each internal word here,
+    // which was already tried and rejected for breaking single bare-word usage - distinguishes the
+    // two without reopening that rejected approach.
+    .replace(/(?<![가-힣])(?:(?:좋아요|답글|리포스트|공유)[\s,·|0-9]*){2,}(?![가-힣])/g, ' ');
   if (preserveLines) return s.split(/\r?\n/).map(x => x.replace(/[ \t]{2,}/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
   return s.replace(/\s+/g, ' ').trim();
 }
