@@ -132,3 +132,18 @@ test('voiceGuide() with no argument is unchanged - existing callers keep the rea
   const guide = policy.voiceGuide();
   assert.match(guide, /이 작가는 리액션이 크고 감정 기복이 확실한 사람이다/);
 });
+
+test('curiosity persona no longer instructs the model to end posts with "검색각" clickbait phrasing', () => {
+  // REGRESSION (found live, 2026-09-15): a real published post ("home_tempick_") ended with
+  // "이거 뭔지 알면 바로 검색각" - a phrase CURIOSITY_BLOCK's own closing-example list explicitly
+  // told the model to use/vary. The user flagged it directly as unnatural, not how a real Threads
+  // voice talks - telling the reader to go search something themselves reads as a generic
+  // clickbait tagline, not the first-person conversational tone this persona is meant to have.
+  // The phrase itself is kept in the block as a named "don't do this" callout, so the block still
+  // contains the substring - what must be true is that it no longer appears inside the "그대로
+  // 변형해서 쓴다" copy-and-vary example list, only in a standalone "쓰지 않는다" prohibition.
+  const curiosity = PERSONAS.find(p => p.id === 'curiosity');
+  const exampleList = curiosity.block.match(/\[마무리 패턴 예시[^\]]*\][^`]*?끝맺는다\./)[0];
+  assert.doesNotMatch(exampleList, /검색각/, `closing-example list still tells the model to use it: ${exampleList}`);
+  assert.match(curiosity.block, /검색각.*쓰지 않는다/);
+});
