@@ -31,6 +31,20 @@ test('every persona carries a shared baseline curiosity-gap hook, not just the d
   }
 });
 
+test('every persona carries the shared "always pick the stronger version" intensity directive', () => {
+  // Content-style change requested by the user (2026-09-15): "sns 스레드바이럴 작가로 너무 밋밋해"
+  // (the persona reads too flat/bland for an SNS Threads viral writer) - "페르소나를 최대로
+  // 강화하자" (let's maximize the persona). Added a shared bullet (after every persona's own
+  // character block, same placement as the curiosity-gap directive above) that forces choosing
+  // the stronger/more intense version of any line over a safe, hedging one, regardless of which
+  // of the 5 personas gets picked.
+  const { PERSONAS } = require('./threadsPersonas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    assert.match(guide, /무조건 더 센 쪽을 고른다/, `${persona.id} is missing the shared intensity directive`);
+  }
+});
+
 test('hard format is a line-count ceiling - there is no per-line character limit at all', () => {
   const valid = '이거 처음 봤는데\n생각보다 훨씬 신기함\n마지막이 진짜 포인트';
   assertThreadsShape(policy.assertVoice(valid));
