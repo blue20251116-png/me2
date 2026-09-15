@@ -45,6 +45,26 @@ test('every persona carries the shared "always pick the stronger version" intens
   }
 });
 
+test('every persona carries the shared real-viral-post technique list (numbers/third-party reaction/comic self-blame/open question/ongoing tease)', () => {
+  // Content-style change requested by the user (2026-09-15): the user sent 7 screenshots of real
+  // high-performing Threads posts ("이런글이 스레드 바이럴글이야") as the actual benchmark, after
+  // saying the bot's own output still reads too flat. The examples share concrete techniques the
+  // persona blocks didn't have: a precise quantified number ("2주 먹고 7키로"), a third party's own
+  // reaction as social proof (딸/시어머니/조카/병원 쌤), comic self-blame/deflection as a hook
+  // ("바지가 이상한거야.. 바람이 잘못된거야.."), ending on a genuine unresolved question instead of
+  // a neatly wrapped conclusion (계란 껍데기밥 post: 110 comments off "~해도 괜찮은 걸까?"), and an
+  // ongoing-story tease implying the post isn't the end ("더 빡세게 굴리는 중...").
+  const { PERSONAS } = require('./threadsPersonas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    assert.match(guide, /숫자로 찍히는 구체적 디테일/, `${persona.id} is missing the quantified-detail technique`);
+    assert.match(guide, /나 아닌 다른 사람의 반응으로 검증한다/, `${persona.id} is missing the third-party-reaction technique`);
+    assert.match(guide, /코믹한 자기 비하나 엉뚱한 남 탓/, `${persona.id} is missing the comic self-blame technique`);
+    assert.match(guide, /실제 질문으로 남긴다/, `${persona.id} is missing the genuine open-question ending`);
+    assert.match(guide, /지금도 계속되고 있다는 인상/, `${persona.id} is missing the ongoing-story tease`);
+  }
+});
+
 test('hard format is a line-count ceiling - there is no per-line character limit at all', () => {
   const valid = '이거 처음 봤는데\n생각보다 훨씬 신기함\n마지막이 진짜 포인트';
   assertThreadsShape(policy.assertVoice(valid));
