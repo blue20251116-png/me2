@@ -54,7 +54,14 @@ const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 // paired 보시길 (a contraction of 보시기를) with the 바랍니다/바래요/바람 trailing group, but the
 // uncontracted "보시기"/"보시기를" form - at least as common a formal invitation ending as 보시길,
 // e.g. "너도 꼭 사용해보시기 바랍니다" - was missing entirely, so it sailed through unflagged.
-const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두|여러분도)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보십시오|보시길|보시기(?:를)?|보세요|봐요|보길|봐)(?:\s*바랍니다|\s*바래(?:요)?|\s*바람)?[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
+// REGRESSION (found via synthetic testing, hourly review, 2026-09-15): "다 같이"/"우리 다 같이"
+// address a group exactly like the already-covered 다들/모두 ("다 같이 써봐요", "우리 다 같이
+// 써봐" reproduce the identical formulaic CTA), but were missing entirely. Deliberately did NOT
+// make the whole pronoun group optional to also catch pronoun-less endings ("한번쯤 써보세요") -
+// tried and reverted in the same review pass, since 보다/봐/보세요 is also the ordinary literal
+// verb "to look" ("저기 좀 보세요", "이 사진 좀 봐"), and without a pronoun there is no way to tell
+// the two apart - that would have turned an ordinary "look at this" sentence into a false CTA flag.
+const GENERIC_CTA_ENDING = /(?:너도|너희도|당신도|다들|모두|여러분도|다\s*같이|우리\s*다\s*같이)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보십시오|보시길|보시기(?:를)?|보세요|봐요|보길|봐)(?:\s*바랍니다|\s*바래(?:요)?|\s*바람)?[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
 
 function normalizeVoice(text) {
   return String(text || '').replace(/\r/g, '').replace(/\\n/g, '\n').split('\n').map(line => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();

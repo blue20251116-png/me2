@@ -447,6 +447,27 @@ test('the generalized ad-CTA guard does not flag ordinary sentences that merely 
   }
 });
 
+test('the ad-CTA guard catches "다 같이"/"우리 다 같이", group-address forms missing from the pronoun list', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-15): "다 같이"/"우리 다 같이"
+  // address a group exactly like the already-covered 다들/모두 ("다 같이 써봐요", "우리 다 같이
+  // 써봐" reproduce the identical formulaic CTA), but were missing entirely.
+  for (const variant of ['다 같이 써봐요', '우리 다 같이 써봐', '다같이 써보세요']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
+test('the ad-CTA guard still does not flag ordinary "보다"(to look) sentences with no address pronoun', () => {
+  // A fully pronoun-optional version of this guard was tried and reverted in the same review pass
+  // that added "다 같이"/"우리 다 같이" above: 보다/봐/보세요 is also the ordinary literal verb "to
+  // look", and without some address/group signal there is no way to tell a genuine CTA ("한번쯤
+  // 써보세요") apart from someone just saying "look at this" ("저기 좀 보세요", "이 사진 좀 봐").
+  for (const safe of ['저기 좀 보세요', '이 사진 좀 봐', '와 대박 저것 좀 봐봐']) {
+    const post = '완전 신기했음\n' + safe;
+    assert.deepEqual(policy.voiceProblems(post).filter(r => r === '뻔한 CTA 마무리'), [], `should not catch: "${safe}"`);
+  }
+});
+
 test('the persona guide never recommends an example that trips any of its own safety checks', () => {
   // The closing-pattern example list once suggested "너도 꼭 써봐!" as a good ending while a
   // later rule banned "너도 해봐/도전해봐/써봐" ad-CTAs outright — a self-contradiction that could
