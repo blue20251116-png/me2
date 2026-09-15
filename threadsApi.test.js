@@ -12,6 +12,25 @@ test('sanitizePublishedThreadsText preserves decimal points', () => {
   assert.equal(sanitizePublishedThreadsText('가격 1.5만원인데'), '가격 1.5만원인데');
 });
 
+test('sanitizePublishedThreadsText strips a stray "ㅡ"/"—"/"–" used as a standalone dash separator', () => {
+  // REGRESSION (found live, 2026-09-15): a real published post included a bare "ㅡ" used as a
+  // dash/separator ("이거 완전 신기함 ㅡ 진짜 대박임") - voiceGuide() only ever sanctions
+  // "ㅋㅋ, ㄷㄷ, ㅠㅠ, ;;" as casual reaction markers, never a bare dash. The likely source is
+  // voiceGuide()'s own prompt text, which is full of em dashes ("—") as a meta-formatting device
+  // the model can imitate back into its actual output - surfacing as "—"/"–"/the Hangul "ㅡ" (the
+  // same keystroke Korean users reach for as a quick dash substitute).
+  assert.equal(sanitizePublishedThreadsText('이거 완전 신기함 ㅡ 진짜 대박임'), '이거 완전 신기함 진짜 대박임');
+  assert.equal(sanitizePublishedThreadsText('이거 — 진짜 대박'), '이거 진짜 대박');
+  assert.equal(sanitizePublishedThreadsText('이거 – 진짜 대박'), '이거 진짜 대박');
+  assert.equal(sanitizePublishedThreadsText('완전 신기함\nㅡ\n진짜 대박임'), '완전 신기함\n\n진짜 대박임');
+  assert.equal(sanitizePublishedThreadsText('ㅡ 시작부터 이러네'), '시작부터 이러네');
+  assert.equal(sanitizePublishedThreadsText('이러다 끝나네 ㅡ'), '이러다 끝나네');
+  // A dash directly attached to a word with no surrounding space is the genuine "-_-"
+  // unimpressed-face emoticon shape (same attach pattern as ㅋㅋ/ㄷㄷ) and must stay untouched.
+  assert.equal(sanitizePublishedThreadsText('이거ㅡㅡ완전웃김'), '이거ㅡㅡ완전웃김');
+  assert.equal(sanitizePublishedThreadsText('음ㅡㅡ 그건 좀'), '음ㅡㅡ 그건 좀');
+});
+
 test('sanitizePublishedThreadsText preserves ellipses fully, trailing or mid-text', () => {
   // Regression: the previous regex consumed a period from the preceding
   // capture group on each global-flag advance, so a run of 2+ dots always

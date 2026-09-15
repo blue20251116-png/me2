@@ -146,8 +146,25 @@ async function __me2NormalizeCarouselVideoUrl(rawUrl){
 // "shocked" reaction in this bot's persona voice) and ";" (;;) were both missing, so "실화냐.ㄷㄷ"
 // and "대박.;;" kept the exact formal-period artifact this function exists to strip while the
 // otherwise-identical "실화냐.ㅋㅋ" was already handled correctly.
+// REGRESSION (found live, 2026-09-15): a real published post included a bare "ㅡ" used as a
+// stray dash/separator ("이거 완전 신기함 ㅡ 진짜 대박임"), which voiceGuide() never sanctions as a
+// reaction marker (only "ㅋㅋ, ㄷㄷ, ㅠㅠ, ;;" are) and which never appears anywhere in real casual
+// Threads writing this bot is meant to imitate. The likely source is voiceGuide() itself: the
+// prompt's own instructional text is full of em dashes ("—") as a meta-formatting device (see the
+// REGRESSION comments throughout this file's neighbor threadsVoicePolicy.js), and a model can
+// imitate that punctuation style back into its actual output, surfacing as "—"/"–"/the Hangul
+// "ㅡ" (the same keystroke Korean users reach for as a quick dash substitute). Only strips a dash
+// run used as a standalone token (bounded by whitespace or line start/end) - "이거ㅡㅡ웃김" with the
+// dash directly attached to a word (the genuine "-_-" unimpressed-face emoticon shape) is left
+// untouched, same principle as how ㅋㅋ/ㄷㄷ attach directly with no space.
+function stripStrayDashArtifacts(text){
+  return String(text||'').split('\n').map(line => {
+    if (/[—–ㅡ]/.test(line) && /^[\s—–ㅡ]+$/.test(line)) return '';
+    return line.replace(/\s+[—–ㅡ]+\s+/g,' ').replace(/^[—–ㅡ]+\s+/,'').replace(/\s+[—–ㅡ]+$/,'');
+  }).join('\n');
+}
 function sanitizePublishedThreadsText(value){
-  return String(value||'')
+  return stripStrayDashArtifacts(String(value||''))
     .replace(/https?:\/\/\S+/gi,m=>m.replace(/[.,;]+$/,''))
     .replace(/(^|[^.\d])\.(?!\.)(?=\s|$|\p{Extended_Pictographic}|[ㅋㅎㅜㅠㄷ~!?;])/gu,'$1')
     .replace(/[ \t]+\n/g,'\n')
