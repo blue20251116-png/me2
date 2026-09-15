@@ -407,14 +407,26 @@ async function findProduct(accountId,terms,identityTerm){
 // particle is remapped rather than copied verbatim.
 const SCRUB_PARTICLE_ALT='이랑|은|는|이|가|을|를|과|와|도|만|의|에|로|나|랑|야';
 const SCRUB_PARTICLE_REMAP={'을':'를','이':'가','은':'는','과':'와','이랑':'랑'};
-function scrubSecret(text,secret,product){
+// REGRESSION (found live, 2026-09-15): a real published post still read "비밀 재료 별로라던
+// 남편이..." / "...비밀 재료 맨날 혼자 먹었는데" in the BODY, despite the prompt above (line ~478)
+// explicitly telling the model never to label the ingredient "비밀 재료" in the body. The model
+// itself didn't write that literal phrase - this scrubber did: whenever the model named the real
+// secret ingredient in the body (which happens often, since it has to describe using it), this
+// safety net swapped it back to the hardcoded literal "비밀 재료", silently re-introducing the
+// exact labeling the user asked to remove. The comment's ingredient list still legitimately needs
+// a fixed placeholder label (it's a structured "🥘 재료" list, not prose), so `replacement`
+// defaults to '비밀 재료' there - but the body call sites below now pass '이거', matching the same
+// identity-hiding demonstrative pronoun style ("이거"/"이게"/"그거") threadsPersonas.js's
+// CURIOSITY_BLOCK already uses, so a leaked term reads as natural hidden-identity prose instead of
+// a label.
+function scrubSecret(text,secret,product,replacement='비밀 재료'){
   let out=String(text||'').trim();
   for(const v of[secret,product]){
     const t=clean(v);
     if(t.length<2)continue;
     const escaped=t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
     const re=new RegExp(`(?<![가-힣])${escaped}(${SCRUB_PARTICLE_ALT})?(?=[^가-힣]|$)`,'g');
-    out=out.replace(re,(m,particle)=>'비밀 재료'+(particle?(SCRUB_PARTICLE_REMAP[particle]||particle):''));
+    out=out.replace(re,(m,particle)=>replacement+(particle?(SCRUB_PARTICLE_REMAP[particle]||particle):''));
   }
   return out;
 }
@@ -493,7 +505,7 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
   let text=normalizeThreadsLayout(d.text||''),commentLead=String(d.commentLead||'').trim();
   if(!text)throw new Error('Threads 소재 기반 본문 생성 결과가 비었습니다');
   if(analysis.mode==='recipe'){
-    text=scrubSecret(text,analysis.secretTerm,productName);
+    text=scrubSecret(text,analysis.secretTerm,productName,'이거');
     commentLead=scrubSecret(commentLead,analysis.secretTerm,productName);
     if(/🥘\s*재료|🍳\s*만드는 법/.test(text))text=text.replace(/\n?(?:🥘\s*재료|🍳\s*만드는 법)[\s\S]*$/,'').trim();
     commentLead=await repairRecipeComment(accountId,{commentLead,material,analysis,productName});
@@ -507,7 +519,7 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     try{commentLead=await rewriteThreadsTone(accountId,commentLead,{mode:analysis.mode,topic:analysis.topic,material,comment:true,visualEvidence:analysis.vision?.evidence});}
     catch(e){if(e.code!=='CONTENT_STYLE_REJECTED')throw e;commentLead='';}
   }
-  if(analysis.mode==='recipe')text=scrubSecret(text,analysis.secretTerm,productName);
+  if(analysis.mode==='recipe')text=scrubSecret(text,analysis.secretTerm,productName,'이거');
   text=assertVoice(text,{mode:analysis.mode});
   console.log(`[AutopilotV3][SOURCE VOICE v2] text="${text.replace(/\n/g,' / ')}"`);
   return{text,commentLead,persona:persona.id};

@@ -33,6 +33,20 @@ test('scrubSecret scrubs both the secret term and the product name independently
   assert.ok(!out.includes('마늘'));
 });
 
+test('scrubSecret takes a custom replacement word, defaulting to "비밀 재료" for backward compatibility', () => {
+  // REGRESSION (found live, 2026-09-15): a real published post's BODY still read "비밀 재료
+  // 별로라던 남편이..." despite the generation prompt explicitly telling the model never to label
+  // the ingredient "비밀 재료" in the body - the model didn't write that literal phrase, this
+  // scrubber did, by hardcoding "비밀 재료" as the replacement whenever it caught a leaked secret
+  // term. generatePost() now passes a custom replacement ('이거') for the body specifically, while
+  // the comment's structured "🥘 재료" ingredient list keeps the default label - a fixed
+  // placeholder is correct there since it's a list item, not prose.
+  assert.equal(scrubSecret('소금을 넣어주세요', '소금', ''), '비밀 재료를 넣어주세요');
+  assert.equal(scrubSecret('소금을 넣어주세요', '소금', '', '이거'), '이거를 넣어주세요');
+  assert.equal(scrubSecret('소금이 부족해', '소금', '', '이거'), '이거가 부족해');
+  assert.equal(scrubSecret('소금', '소금', '', '이거'), '이거');
+});
+
 test('scrubSecret leaves text unchanged when secret/product are empty or too short', () => {
   assert.equal(scrubSecret('그냥 평범한 문장', '', ''), '그냥 평범한 문장');
   assert.equal(scrubSecret('가 붙은 문장', '가', ''), '가 붙은 문장');
