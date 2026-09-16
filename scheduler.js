@@ -84,6 +84,21 @@ const AUTOPILOT_TARGETS=['전체','20대 여자','20대 남자','30대 여자','
 function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=null,recipeCommentText=null,scheduledAt=null}){const formattedText=formatThreadsBody(text);db.prepare(`INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL)`).run(formattedText,link||null,imageUrl||null,extraImageUrl||null,videoUrl||null,String(scheduledAt||new Date().toISOString()),accountId,recipeCommentText);}
 function recordAutopilotLast(accountId,keyword,target){db.prepare(`UPDATE accounts SET autopilot_last_keyword=?, autopilot_last_target=? WHERE id=?`).run(keyword,target,accountId);}
 async function runContentOnlyAutopilot(account,target,scheduledAt=null){const r=await generateContentOnlyRecipe(account.id,target);saveAutopilotPost({accountId:account.id,text:r.text,link:null,imageUrl:r.imageUrl,extraImageUrl:r.extraImageUrl,videoUrl:null,recipeCommentText:r.recipeCommentText,scheduledAt});recordAutopilotLast(account.id,r.keyword,target);}
+// 2026-09-16 (user request, viral-formula screenshot: "사진과 영상은 꼭 넣으세요"): media is
+// reached as missing only when chooseSourceMedia()'s whole fallback chain runs out - no Threads
+// source images/video AND no Coupang product image (chooseImageFallback()'s own label calls
+// this exact case '미디어 없음'). Same posture as geminiEmergencyFallbackPatch.js's QUALITY HOLD:
+// don't publish a worse post than the format calls for. CONTENT_QUALITY_HOLD is caught by
+// refillAccount's error handler, which stops this account's batch without poisoning any cache -
+// the material itself is never marked used, so a later refill tick retries it with a fresh
+// media search instead of a permanently lost/skipped topic.
+function assertHasMedia(media,{accountId,target,mode,topic}={}){
+  if(media?.imageUrl||media?.videoUrl)return;
+  console.warn(`[Autopilot][MEDIA HOLD] account #${accountId} target="${target}" mode="${mode}" topic="${topic}" 미디어 없음 → 발행 보류`);
+  const err=new Error('소스 이미지/영상이 없어 텍스트 전용 발행을 중단했습니다');
+  err.code='CONTENT_QUALITY_HOLD';err.isContentQualityHold=true;
+  throw err;
+}
 function chooseImageFallback(result){const images=Array.isArray(result?.sourceImages)?result.sourceImages.filter(Boolean):[];if(images.length>=2)return{videoUrl:null,imageUrl:images[0],extraImageUrl:images[1],imageSourceLabel:'Threads 소재 원본 이미지 2장'};if(images.length===1)return{videoUrl:null,imageUrl:images[0],extraImageUrl:null,imageSourceLabel:'Threads 소재 원본 이미지 1장'};return{videoUrl:null,imageUrl:result?.product?.image||null,extraImageUrl:null,imageSourceLabel:result?.product?.image?'Threads 미디어 없음 → 쿠팡 상품 이미지 1장':'미디어 없음'};}
 async function chooseSourceMedia(result){
   const videos=Array.isArray(result?.sourceVideos)?result.sourceVideos.filter(Boolean):[];
@@ -273,7 +288,9 @@ async function ensureCoupangReady(accountId, account) {
     return true;
   }
 }
-async function runAutopilotOnceInner(account,scheduledAt=null){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target,scheduledAt);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=await chooseSourceMedia(result);saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead,scheduledAt});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V15 MATERIAL-MIXED-MEDIA] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
+async function runAutopilotOnceInner(account,scheduledAt=null){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target,scheduledAt);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=await chooseSourceMedia(result);
+assertHasMedia(media,{accountId:account.id,target,mode:result.mode,topic:result.topic});
+saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead,scheduledAt});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V15 MATERIAL-MIXED-MEDIA] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
 // Prevents one Chromium resource failure from being multiplied across every account in the same
 // refill tick - a distinct fatal-for-this-tick error lets the timed-prefill controller stop
 // account traversal instead of retrying every remaining account against a browser that's already down.
@@ -424,5 +441,5 @@ function startStaleQueueJob(){
   cron.schedule('* * * * *',()=>{try{expireStalePendingPosts();}catch(e){console.warn('[Publish][STALE QUEUE] cleanup failed:',e.message);}},{noOverlap:true});
   console.log(`[Publish][STALE QUEUE] 오래된 최초 미발행 ${STALE_MINUTES}분 초과 자동폐기 + 예약 재시도 보존 + 새소재 재시작 활성화`);
 }
-module.exports={startPublishJob,startInsightsJob,startAutopilotJob,startStaleQueueJob,runAutopilotOnce,buildDoubleLinkComment,expireStalePendingPosts};
+module.exports={startPublishJob,startInsightsJob,startAutopilotJob,startStaleQueueJob,runAutopilotOnce,buildDoubleLinkComment,expireStalePendingPosts,chooseImageFallback,assertHasMedia};
 
