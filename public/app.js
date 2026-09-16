@@ -1218,7 +1218,7 @@ const commentStatusLabel = { none: '해당없음', pending: '대기', posted: '�
 // plain SELECT *), but until now nothing in this page ever rendered it - a failed post showed
 // only "실패" with zero indication of why, and this app's users have no access to server logs to
 // find out themselves. Most stored messages are already plain Korean sentences (e.g. autopilot's
-// "Anthropic API 키가 설정되지 않았습니다"), but a few are internal codes with no Korean at all -
+// "OpenAI API 키가 설정되지 않았습니다"), but a few are internal codes with no Korean at all -
 // translate just those known codes and fall back to showing the raw message otherwise.
 function friendlyPostError(message) {
   const raw = String(message || '');
@@ -1226,7 +1226,7 @@ function friendlyPostError(message) {
   if (raw === 'PUBLISH_LIMIT_OR_SUBSCRIPTION') return '일일 발행 한도 또는 구독 상태를 확인해주세요.';
   if (raw === 'ACCOUNTING_REVIEW_REQUIRED') return 'Threads에는 올라갔지만 처리 확인이 필요합니다. 관리자에게 문의해주세요.';
   if (/^PUBLISH_OUTCOME_UNKNOWN/.test(raw)) return '발행 결과를 확인하지 못했습니다. Threads 앱에서 직접 확인해주세요.';
-  if (/^OPENAI_HOURLY_BUDGET_EXCEEDED/.test(raw) || /credit balance is too low|insufficient_quota/i.test(raw)) return 'AI 요청 한도 또는 크레딧 부족일 수 있습니다. Anthropic API 키/크레딧을 확인해주세요.';
+  if (/^OPENAI_HOURLY_BUDGET_EXCEEDED/.test(raw) || /credit balance is too low|insufficient_quota/i.test(raw)) return 'AI 요청 한도 또는 크레딧 부족일 수 있습니다. OpenAI API 키/크레딧을 확인해주세요.';
   return raw;
 }
 
@@ -1282,7 +1282,7 @@ async function loadSettings() {
   cForm.COUPANG_SECRET_KEY.placeholder = data.hasCoupangSecret ? '저장됨 (변경 시에만 입력)' : '';
 
   const aForm = document.getElementById('anthropicForm');
-  aForm.ANTHROPIC_API_KEY.placeholder = data.hasAnthropicKey ? '저장됨 (변경 시에만 입력)' : 'sk-ant-... (변경 시에만 입력)';
+  aForm.ANTHROPIC_API_KEY.placeholder = data.hasAnthropicKey ? '저장됨 (변경 시에만 입력)' : 'sk-... (변경 시에만 입력)';
 
   const nForm = document.getElementById('naverForm');
   nForm.NAVER_CLIENT_ID.value = data.NAVER_CLIENT_ID || '';
