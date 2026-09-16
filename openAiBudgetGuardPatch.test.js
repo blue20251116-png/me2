@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS, retryAfterMs } = require('./openAiBudgetGuardPatch');
 
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_URL = 'https://api.openai.com/v1/chat/completions'; // matches openAiBudgetGuardPatch.js's watched URL (reverted 2026-09-16)
 
 function freshPatchWith(fakePost) {
   const axios = require('axios');
