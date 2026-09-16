@@ -9,7 +9,10 @@ const { budgetState, reserveRequest } = require('./automationState');
 // 바뀌어도 여전히 필요하므로, 감시 대상 URL만 Anthropic 엔드포인트로 옮기고 나머지 로직은
 // 그대로 유지한다. 환경변수 이름(OPENAI_*)은 실제 배포 환경(Railway)에 이미 이 이름으로
 // 설정돼 있을 수 있어 그대로 두었다 — 이제는 프로바이더 무관 "AI 요청 예산" 설정으로 읽는다.
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+// REVERTED 2026-09-16 (user request): watches OpenAI's endpoint again, since
+// anthropicClient.js was switched back to calling OpenAI. Kept the ANTHROPIC_URL
+// identifier name to minimize diff - see anthropicClient.js's own top-of-file note.
+const ANTHROPIC_URL = 'https://api.openai.com/v1/chat/completions';
 const originalPost = axios.post.bind(axios);
 const inFlight = new Map();
 let queue = Promise.resolve();
@@ -161,7 +164,7 @@ function countImages(data) {
   let count = 0;
   for (const message of data.messages) {
     if (!Array.isArray(message?.content)) continue;
-    for (const part of message.content) if (part?.type === 'image') count++;
+    for (const part of message.content) if (part?.type === 'image' || part?.type === 'image_url') count++;
   }
   return count;
 }

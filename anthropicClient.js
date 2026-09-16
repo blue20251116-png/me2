@@ -1,42 +1,35 @@
 'use strict';
 const axios = require('axios');
 
-// Shared by every module that used to call OpenAI's chat/completions endpoint
-// (aiCaption.js, frameVision.js, autopilotMaterialEngine.js, threadsMaterialWriter.js,
-// contentOnlyAutomation.js, recipeQualityPatch.js) - centralizing this avoids the
-// stale-copy drift this session has already found and fixed multiple times elsewhere
-// (e.g. DANGLING_BOUND_NOUN_START used to be copy-pasted between two files).
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-const ANTHROPIC_VERSION = '2023-06-01';
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
+// REVERTED 2026-09-16 (user request, after Claude API cost became unaffordable):
+// this file used to call Anthropic's Messages API. It now calls OpenAI's chat/completions
+// endpoint again, but keeps the file name and every exported function name unchanged
+// (callAnthropic/callAnthropicJson/imageBlock/imageBlockFromDataUri) so none of its 6
+// callers (aiCaption.js, contentOnlyAutomation.js, autopilotMaterialEngine.js,
+// threadsMaterialWriter.js, recipeQualityPatch.js, frameVision.js) or their tests need to
+// change - the same "keep the established name, swap the target" precedent this codebase
+// already used in openAiBudgetGuardPatch.js when it moved the other direction on 2026-09-13.
+// openAiBudgetGuardPatch.js's own ANTHROPIC_URL constant was updated to match this file's URL.
+const ANTHROPIC_URL = 'https://api.openai.com/v1/chat/completions';
+const DEFAULT_MODEL = process.env.OPENAI_TEXT_MODEL || 'gpt-4o-mini';
 
 function extractText(res) {
-  const textBlock = res.data?.content?.find((block) => block.type === 'text');
-  return textBlock?.text || '';
+  return res.data?.choices?.[0]?.message?.content || '';
 }
 
-// Anthropic has no OpenAI-style response_format:{type:'json_object'} that guarantees
-// valid JSON at the API level - callers instead instruct the model (in the system/user
-// prompt) to output JSON only, and this strips common wrapping (```json fences, stray
-// prose) before parsing, with a bracket-extraction fallback for when the model still
-// adds a sentence before/after the JSON itself.
+// OpenAI has a response_format:{type:'json_object'} that guarantees valid JSON at the API
+// level, but callers here build the same {system, userContent} shape either provider could
+// use, so this still instructs the model via prompt text and cleans up the response the
+// same way regardless. Kept identical to the pre-2026-09-16 Anthropic version, including its
+// object-before-array match order (see the regression note in the test file): nearly every
+// JSON schema this app asks for is a top-level OBJECT that itself contains an array value
+// ({"items":[...]}), so trying the array pattern first would greedily match just the inner
+// array and silently discard the object it belongs to whenever the model adds surrounding text.
 function extractJson(text) {
   const cleaned = String(text || '').replace(/```json|```/gi, '').trim();
   try {
     return JSON.parse(cleaned);
   } catch {}
-  // REGRESSION (found via review, hourly review, 2026-09-13): this used to try the array pattern
-  // FIRST. Nearly every JSON schema this app asks Claude for is a top-level OBJECT that itself
-  // contains an array value ({"items":[...]}, {"searchTerms":[...]}, {"queries":[...]}, etc.) -
-  // whenever the model wraps its answer in any surrounding text (breaking the direct parse
-  // above), the array-first regex greedily matched just the INNER array substring and parsed it
-  // successfully on its own, returning early with only the array and silently discarding the
-  // object it actually belonged to (e.g. {"items":[{"text":"a"}]} -> [{"text":"a"}], losing the
-  // "items" key entirely). Callers reading parsed.items off that then saw undefined and treated
-  // the whole response as empty. Trying the object pattern first fixes this without breaking the
-  // one real bare-top-level-array schema in this app (frameVision.js's frame list): an object
-  // match spanning multiple comma-separated array elements isn't valid JSON on its own, so it
-  // fails to parse and correctly falls through to the array check below.
   const objectMatch = cleaned.match(/\{[\s\S]*\}/);
   if (objectMatch) {
     try {
@@ -52,22 +45,32 @@ function extractJson(text) {
   throw new Error('AI 응답을 JSON으로 해석할 수 없습니다');
 }
 
-// userContent may be a plain string or an array of Anthropic content blocks (for vision).
+// `apiKey` is whatever the caller resolved via its own `shared.anthropic_api_key ||
+// process.env.ANTHROPIC_API_KEY || account?.anthropic_api_key` chain - those DB/env names
+// are stale leftovers from the 2026-09-13 OpenAI->Claude migration (left alone here to avoid
+// a wider DB/dashboard rename) and may still hold an actual `sk-ant-...` Claude key from
+// that period, or nothing, or (if an admin/member already worked around the stale label) a
+// real OpenAI key. Only override with the shared OPENAI_API_KEY when the resolved key is
+// missing or is shaped like an Anthropic key - preserves legitimate per-account/shared-key
+// override behavior for anyone who already pasted a working OpenAI key into that field,
+// while not sending a Claude-shaped key to OpenAI (which would just 401).
+function looksLikeAnthropicKey(k) {
+  return typeof k === 'string' && k.startsWith('sk-ant-');
+}
+
+// userContent may be a plain string or an array of OpenAI content parts (for vision).
 async function callAnthropic(apiKey, { system, userContent, model = DEFAULT_MODEL, maxTokens = 1200, temperature = 0.7, timeout = 30000 } = {}) {
-  if (!apiKey) throw new Error('Anthropic API 키가 설정되지 않았습니다');
+  const key = (!apiKey || looksLikeAnthropicKey(apiKey)) ? (process.env.OPENAI_API_KEY || apiKey) : apiKey;
+  if (!key) throw new Error('OpenAI API 키가 설정되지 않았습니다');
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push({ role: 'user', content: userContent });
   const res = await axios.post(
     ANTHROPIC_URL,
-    {
-      model,
-      max_tokens: maxTokens,
-      temperature,
-      ...(system ? { system } : {}),
-      messages: [{ role: 'user', content: userContent }],
-    },
+    { model, max_tokens: maxTokens, temperature, messages },
     {
       headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
+        Authorization: `Bearer ${key}`,
         'content-type': 'application/json',
       },
       timeout,
@@ -84,22 +87,18 @@ async function callAnthropicJson(apiKey, options) {
 }
 
 function imageBlock(url) {
-  return { type: 'image', source: { type: 'url', url } };
+  return { type: 'image_url', image_url: { url } };
 }
 
-// Some callers pre-download+base64 an image themselves (bypassing hotlink protection, caching
-// the bytes, etc. - see autopilotMaterialEngine.js's prepareVisionImageUrls) and end up with a
-// "data:image/...;base64,..." string instead of a fetchable URL. Anthropic's "url" source type
-// expects an actual http(s) URL, not a data URI, so those need the "base64" source type instead.
+// OpenAI accepts a data: URI directly in image_url.url (unlike Anthropic, which needed a
+// separate base64 source type) - this just validates the shape and passes it through.
 function imageBlockFromDataUri(dataUri) {
-  const m = /^data:([^;]+);base64,(.+)$/s.exec(String(dataUri || ''));
-  if (!m) throw new Error('유효한 data URI 이미지가 아닙니다');
-  return { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } };
+  if (!/^data:[^;]+;base64,.+/s.test(String(dataUri || ''))) throw new Error('유효한 data URI 이미지가 아닙니다');
+  return { type: 'image_url', image_url: { url: dataUri } };
 }
 
 module.exports = {
   ANTHROPIC_URL,
-  ANTHROPIC_VERSION,
   DEFAULT_MODEL,
   callAnthropic,
   callAnthropicJson,
@@ -107,4 +106,5 @@ module.exports = {
   extractJson,
   imageBlock,
   imageBlockFromDataUri,
+  looksLikeAnthropicKey,
 };

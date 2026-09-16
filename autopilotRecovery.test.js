@@ -75,7 +75,7 @@ const authError = (host, service) => Object.assign(new Error('Unauthorized'), {
   response: { status: 401 }, config: { url: `https://${host}/endpoint` }, ...(service ? { service } : {}),
 });
 
-for (const host of ['api.anthropic.com', 'graph.threads.net', 'media.example.com']) {
+for (const host of ['api.openai.com', 'graph.threads.net', 'media.example.com']) {
   test(`${host} 401 does not block later generation as Coupang-invalid`, async () => {
     const h = harness({ generationError: authError(host) });
     await h.tick();
