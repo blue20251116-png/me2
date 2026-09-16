@@ -13,6 +13,16 @@ const MAX_LINES = 14;
 // MAX_LINE_CHARS itself is kept only as repairConnectorOnlyBreaks()'s merge threshold, so
 // stitching two dangling half-lines back together doesn't force them onto one absurd line.
 const MAX_LINE_CHARS = 40;
+// 2026-09-16 (user request, referencing a Threads growth-tips post): short posts read better
+// and this account's own results back that up, so voiceGuide() now targets ~120 chars for the
+// whole body. Same principle as MAX_LINE_CHARS above applies here - an exact byte cutoff would
+// force-cut a real, complete sentence mid-word, which is exactly the failure mode this file's
+// history (see the MAX_LINE_CHARS comment) already fixed once for per-line length. So this is
+// a generous ceiling (1.5x the ~120 target), not the target itself: voiceProblems() only flags
+// a post as too long once it's clearly padded past "finished the sentence a bit over target,"
+// and a flagged post goes through the same AI repair loop as every other check here (too many
+// lines, incomplete line breaks, etc.) rather than an instant hard reject.
+const MAX_BODY_CHARS = 180;
 const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 // CONNECTOR_ONLY / DANGLING_PUNCTUATION_START / DANGLING_BOUND_NOUN_START live in
 // threadsVoiceLineGuards.js, shared with threadsVoiceLocalRepair.js's repair pass — see that
@@ -119,6 +129,7 @@ ${personaBlock || DEFAULT_PERSONA_BLOCK}
 - 줄을 끊기 전에 그 줄 끝 어절이 지금 문장에 속하는지 다음 문장에 속하는지 먼저 판단한다. 애매하면 문장/절 경계에서 끊는다.
 - 모든 줄은 그 줄만 읽어도 의미 단위가 자연스럽게 완결되어야 한다. 조사·접속사·수식어만 남기거나 다음 줄에 이어 붙여야 이해되는 줄바꿈은 금지한다.
 - 하나의 생각·장면이 1~3줄로 끝나면 그 덩어리 뒤에 빈 줄(줄바꿈 두 번)을 넣어 다음 생각과 구분한다. 특히 오프닝 훅(보통 1~3줄)이 끝나는 지점에는 거의 항상 빈 줄을 넣어 본문과 시각적으로 분리한다 — 이렇게 나눠야 보기 좋다. 실제 Threads 글 특유의 리듬은 이렇게 빈 줄로 문단을 나누는 데서 나온다. 한 생각 안에서는 억지로 빈 줄을 넣지 않는다.
+- 본문은 짧을수록 좋다. 전체 글자수(줄바꿈 제외)는 120자 안팎을 목표로 한다 — 다만 글자수를 맞추려고 완결된 문장을 자르지 않는다. 한 문장이 끝나는 지점에서 목표치를 살짝 넘기는 건 괜찮지만, 글자수를 채우려고 불필요한 문장을 덧붙이지 않는다.
 - 본문은 빈 줄을 포함해 최대 14줄이다. 짧게 끝나면 억지로 채우지 않는다.
 - 줄바꿈과 문단 사이 빈 줄은 모바일 읽기 리듬과 후킹의 일부다.
 - 마지막 줄은 정형화된 판매 CTA 대신 가벼운 참여 유도(공감 요청, 같이 해보자는 제안, 아는 사람 태그 유도 등)로 자연스럽게 끝낼 수 있다. 모든 글의 마무리를 동일한 문구로 반복하지 않는다.
@@ -228,10 +239,13 @@ function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?
 // paragraph break anywhere, are treated as a real formatting problem worth sending back through
 // the existing repair loop below.
 function missingParagraphBreak(t,lines){return lines.length>=6&&!t.includes('\n\n');}
-function voiceProblems(text,{comment=false}={}){const t=normalizeVoice(text),reasons=[];if(!t&&!comment)reasons.push('empty');if(!comment){const lines=t?t.split('\n'):[];if(lines.length>MAX_LINES)reasons.push(`${MAX_LINES}줄 초과`);if(incompleteLineReasons(t).length)reasons.push('미완결 줄바꿈');if(lines.length&&GENERIC_CTA_ENDING.test(lines.slice(-2).join(' ')))reasons.push('뻔한 CTA 마무리');if(missingParagraphBreak(t,lines))reasons.push('문단 구분 없음');}if(highRiskClaim(t))reasons.push('고위험 효능 주장');return [...new Set(reasons)];}
+// Counts only visible characters - line breaks are formatting, not content length, so a
+// well-paragraphed post isn't penalized for the blank lines voiceGuide() itself asks for.
+function bodyTooLong(t){return t.replace(/\n/g,'').length>MAX_BODY_CHARS;}
+function voiceProblems(text,{comment=false}={}){const t=normalizeVoice(text),reasons=[];if(!t&&!comment)reasons.push('empty');if(!comment){const lines=t?t.split('\n'):[];if(lines.length>MAX_LINES)reasons.push(`${MAX_LINES}줄 초과`);if(incompleteLineReasons(t).length)reasons.push('미완결 줄바꿈');if(lines.length&&GENERIC_CTA_ENDING.test(lines.slice(-2).join(' ')))reasons.push('뻔한 CTA 마무리');if(missingParagraphBreak(t,lines))reasons.push('문단 구분 없음');if(bodyTooLong(t))reasons.push('본문 길이 초과');}if(highRiskClaim(t))reasons.push('고위험 효능 주장');return [...new Set(reasons)];}
 function reject(reasons){const error=new Error(`최종 문체 검증 실패: ${reasons.join(',')}`);error.code='CONTENT_STYLE_REJECTED';throw error;}
 function assertVoice(text,options={}){const out=formatVoice(text),reasons=voiceProblems(out,options);if(reasons.length)reject(reasons);return out;}
 async function reviewSourceVoice(text,context={},request){let out=formatVoice(text);let problems=voiceProblems(out,context);const risky=problems.includes('고위험 효능 주장');if(risky){if(typeof request!=='function')reject(problems);const evidence=[context.sourceText,context.authorReplies,context.visualEvidence].filter(Boolean).map(String).join('\n').slice(0,12000);const audit=await request('고위험 효능 주장만 사실성/안전성 관점에서 검증한다. 문체 취향은 평가하지 않는다. JSON만 출력: {"issues":[],"sourceAnchors":[]}',`[근거 자료]\n${evidence}\n[게시글]\n${out}`);if(Array.isArray(audit?.issues)&&audit.issues.length)reject(['고위험 효능 주장']);problems=problems.filter(p=>p!=='고위험 효능 주장');}
 if(problems.includes('미완결 줄바꿈')){const repaired=formatVoice(repairConnectorOnlyBreaks(out,MAX_LINE_CHARS));const repairedProblems=voiceProblems(repaired,context);if(repairedProblems.length<problems.length){out=repaired;problems=repairedProblems;}}
 if(!problems.length)return out;if(typeof request!=='function')reject(problems);const evidence=[context.sourceText,context.authorReplies,context.visualEvidence].filter(Boolean).map(String).join('\n').slice(0,12000);for(let attempt=1;attempt<=MAX_FORMAT_REPAIR_ATTEMPTS&&problems.length;attempt++){const corrected=await request(`${voiceGuide()}\n형식 교정 전용이다. 핵심 의미와 후킹은 보존하되, 글자수를 맞추려고 완결된 문장을 자르지 마라 — 한 줄이 길어도 그 자체로 완결된 문장/절이면 그대로 둔다. 한 줄에 여러 문장이 억지로 욱여넣어져 있을 때만 자연스러운 문장/절 경계에서 나눠라. 각 물리적 줄은 그 줄만 읽어도 자연스럽게 완결돼야 한다. 최대 ${MAX_LINES}줄(빈 줄 포함)이다. "문단 구분 없음"이 수정 대상에 있으면 매 줄마다 그냥 줄바꿈만 하지 말고, 1~3줄 단위의 생각 덩어리가 끝나는 지점마다 반드시 빈 줄(줄바꿈 두 번)을 넣어 다음 덩어리와 시각적으로 구분해라 — 한 줄씩 뚝뚝 끊어지는 형태로 만들지 마라. 새 고위험 사실을 만들지 마라. JSON만 출력: {"text":""}`,`[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}\n[교정 시도]\n${attempt}/${MAX_FORMAT_REPAIR_ATTEMPTS}`);const candidate=formatVoice(corrected?.text||'');if(candidate)out=candidate;problems=voiceProblems(out,context);}if(problems.length)reject(problems);return out;}
-module.exports={MAX_LINES,MAX_LINE_CHARS,MAX_FORMAT_REPAIR_ATTEMPTS,normalizeVoice,voiceGuide,formatVoice,voiceProblems,assertVoice,reviewSourceVoice,incompleteLineReasons};
+module.exports={MAX_LINES,MAX_LINE_CHARS,MAX_BODY_CHARS,MAX_FORMAT_REPAIR_ATTEMPTS,normalizeVoice,voiceGuide,formatVoice,voiceProblems,assertVoice,reviewSourceVoice,incompleteLineReasons,bodyTooLong};
