@@ -87,6 +87,35 @@ test('hard format is a line-count ceiling - there is no per-line character limit
   assert.ok(policy.voiceProblems(tooManyLines).includes(`${policy.MAX_LINES}줄 초과`));
   assert.throws(() => policy.assertVoice(tooManyLines), { code: 'CONTENT_STYLE_REJECTED' });
 
+  // 2026-09-16: voiceGuide() now targets ~120 chars for the whole body (a Threads
+  // growth-tips post the account owner shared). MAX_BODY_CHARS (180) is a generous ceiling
+  // past that target, not the target itself - a post that finishes a sentence a bit over
+  // 120 must NOT be flagged, matching this file's own "don't cut a complete sentence to hit
+  // a count" principle for MAX_LINE_CHARS above.
+  const finishesJustOverTarget = '이 정리함 진짜 미쳤다 방 어질러놓는 게 습관이었는데 이거 하나로 다 정리되니까 너무 신기함 진짜 인정 이건 무조건 사야됨 없어서 못 살 뻔했잖아 진짜 이거 알려준 친구한테 감사인사 백만번 하고 싶은 심정임 진짜로 완전 강추';
+  assert.ok(
+    Array.from(finishesJustOverTarget).length > 120 && Array.from(finishesJustOverTarget).length <= policy.MAX_BODY_CHARS,
+    `fixture must land between the 120-char target and MAX_BODY_CHARS: ${Array.from(finishesJustOverTarget).length}`
+  );
+  assert.deepEqual(policy.voiceProblems(finishesJustOverTarget), []);
+  assert.equal(policy.bodyTooLong(finishesJustOverTarget), false);
+
+  const paddedPastTheCeiling = Array.from({length: policy.MAX_BODY_CHARS + 20}, () => '가').join('');
+  assert.ok(policy.bodyTooLong(paddedPastTheCeiling));
+  assert.ok(policy.voiceProblems(paddedPastTheCeiling).includes('본문 길이 초과'));
+  assert.throws(() => policy.assertVoice(paddedPastTheCeiling), { code: 'CONTENT_STYLE_REJECTED' });
+
+  // Blank lines (voiceGuide()'s own paragraph-break rhythm) must not count toward the body
+  // length - only visible characters do. MAX_LINES caps a post at 13 newlines, so this packs
+  // content just under the 180-char ceiling across all 14 lines: content alone must stay under
+  // the ceiling, but content + newlines (13 extra chars) must not - the exact case bodyTooLong()
+  // exists to get right.
+  const contentOnly175 = '짧은문장'.repeat(50).slice(0, 175);
+  const linesOf175 = Array.from({length: policy.MAX_LINES}, (_, i) => contentOnly175.slice(i * 13, (i + 1) * 13)).join('\n');
+  assert.equal(Array.from(linesOf175.replace(/\n/g, '')).length, 175, 'fixture content must stay under MAX_BODY_CHARS on its own');
+  assert.ok(linesOf175.length > policy.MAX_BODY_CHARS, 'fixture must exceed MAX_BODY_CHARS only when newlines are counted');
+  assert.equal(policy.bodyTooLong(linesOf175), false, 'newlines must not count toward body length');
+
   assert.equal(count('가나다😀'), 4, 'emoji must count as one Unicode code point');
 });
 
