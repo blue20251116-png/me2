@@ -65,6 +65,22 @@ test('every persona carries the shared real-viral-post technique list (numbers/t
   }
 });
 
+test('every persona carries the shared "reach depends on early replies" directive elevating the open-question ending', () => {
+  // Content-style change requested by the user (2026-09-20): "노출이 잘 안돼" (exposure/reach has
+  // been chronically low overall, not a single new bad post) - asked to patch the persona again.
+  // Threads' own reach mechanic rewards early reply velocity, and technique #4 above (a genuine
+  // open question instead of a neatly wrapped conclusion) is the one device most directly aimed at
+  // provoking a reply - so this promotes it from "one of five options" to "use nearly every time,
+  // absent a specific reason not to," with the reach rationale spelled out so the model has a
+  // concrete reason to actually prioritize it over the other four techniques.
+  const { PERSONAS } = require('./threadsPersonas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    assert.match(guide, /노출이 안 되는 가장 큰 원인은 발행 직후 댓글이 안 달리는 것이다/, `${persona.id} is missing the reach-via-replies directive`);
+    assert.match(guide, /거의 매번 쓴다/, `${persona.id} is missing the "use almost every time" elevation of the open-question ending`);
+  }
+});
+
 test('hard format is a line-count ceiling - there is no per-line character limit at all', () => {
   const valid = '이거 처음 봤는데\n생각보다 훨씬 신기함\n마지막이 진짜 포인트';
   assertThreadsShape(policy.assertVoice(valid));
