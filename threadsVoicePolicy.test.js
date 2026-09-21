@@ -81,6 +81,18 @@ test('every persona carries the shared "reach depends on early replies" directiv
   }
 });
 
+test('every persona is told not to use emoji, keeping text-only reactions (ㅋㅋ/ㄷㄷ/ㅠㅠ/;;)', () => {
+  // Content-style change requested by the user (2026-09-21): "스레드는 이모티콘쓰면 노출잘안돼"
+  // (Threads posts using emoji get less reach). Added a shared bullet banning pictograph emoji
+  // (🙂😊👍✨ etc.) everywhere in body and comment, while keeping the already-sanctioned text-only
+  // reaction markers (ㅋㅋ/ㄷㄷ/ㅠㅠ/;;) and punctuation (??, !!, ...) as the only emotion markers.
+  const { PERSONAS } = require('./threadsPersonas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    assert.match(guide, /이모지\)는 본문·댓글 어디에도 쓰지 않는다/, `${persona.id} is missing the no-emoji directive`);
+  }
+});
+
 test('hard format is a line-count ceiling - there is no per-line character limit at all', () => {
   const valid = '이거 처음 봤는데\n생각보다 훨씬 신기함\n마지막이 진짜 포인트';
   assertThreadsShape(policy.assertVoice(valid));
