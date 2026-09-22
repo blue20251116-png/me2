@@ -19,6 +19,26 @@ const Module = require('module');
 // Playwright's own default feature disables the way appending another
 // --disable-features=... value would. Deliberately not revisiting
 // --single-process — that was already tried and reverted per the note above.
+//
+// REGRESSION (found live, 2026-09-22): the exact same SIGTRAP/pthread_create
+// class of crash reappeared - now hitting essentially every account on every
+// 10-minute prefill tick, cascading through the isolatedTask circuit breaker
+// and blocking ALL new material generation account-wide (browser logs came
+// back completely empty, meaning Chromium died before it could log anything -
+// the same instant-death signature as the Sep 10 ulimit/PID-ceiling issue).
+// The account count has grown substantially since Sep 10 (a dozen-plus
+// distinct accounts now ticking in the same single Node process), so the same
+// container-wide process/thread ceiling is plausibly being hit again even
+// though concurrent Chromium launches were already serialized to 1 at a time
+// by both this guard and isolatedTask.js's own MAX_BROWSER_WORKERS. Added
+// --no-zygote: Chromium normally keeps one long-lived "zygote" helper process
+// alive purely to fork() new renderer/GPU processes faster - a whole extra
+// process plus its own thread pool that this app's use case (short-lived,
+// serialized, single-page scraping tasks) gets no benefit from. --no-zygote
+// makes Chromium fork+exec each child directly instead, trading a little
+// per-launch speed for one fewer persistent process and its threads - a
+// smaller, additive step below --single-process (already tried and reverted
+// above) rather than a repeat of it.
 const SAFE_ARGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
@@ -26,6 +46,7 @@ const SAFE_ARGS = [
   '--disable-gpu',
   '--in-process-gpu',
   '--renderer-process-limit=1',
+  '--no-zygote',
 ];
 const MAX_BROWSER_CONCURRENCY = Math.max(1, Number(process.env.PLAYWRIGHT_MAX_CONCURRENCY || 1));
 const FAILURE_COOLDOWN_MS = Math.max(5000, Number(process.env.PLAYWRIGHT_FAILURE_COOLDOWN_MS || 30000));
