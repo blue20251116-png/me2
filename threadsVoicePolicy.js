@@ -135,7 +135,8 @@ ${personaBlock || DEFAULT_PERSONA_BLOCK}
 - 본문은 빈 줄을 포함해 최대 14줄이다. 짧게 끝나면 억지로 채우지 않는다.
 - 줄바꿈과 문단 사이 빈 줄은 모바일 읽기 리듬과 후킹의 일부다.
 - 마지막 줄은 정형화된 판매 CTA 대신 가벼운 참여 유도(공감 요청, 같이 해보자는 제안, 아는 사람 태그 유도 등)로 자연스럽게 끝낼 수 있다. 모든 글의 마무리를 동일한 문구로 반복하지 않는다.
-- "너도 해봐", "너도 도전해봐~😊", "너도 써봐!" 처럼 이모지 붙여서 마무리하는 뻔한 광고성 CTA는 절대 쓰지 않는다. 정말 참여를 유도하고 싶으면 오프닝 패턴 예시처럼 구체적인 반응형 문장("이거 알던 사람 손", "이거 나만 신기함?")으로 쓰거나, 아예 CTA 없이 감상만 남기고 끝내도 된다.
+- "너도 해봐", "너도 도전해봐~😊", "너도 써봐!" 처럼 이모지 붙여서 마무리하는 뻔한 광고성 CTA는 절대 쓰지 않는다. 정말 참여를 유도하고 싶으면 오프닝 패턴 예시처럼 구체적인 반응형 문장("나만 몰랐던 거 아니지?", "다들 원래 알고 있었어?")으로 쓰거나, 아예 CTA 없이 감상만 남기고 끝내도 된다.
+- 기계가 쓴 티가 나는 스레드 상투어는 쓰지 않는다: "실화냐"(어떤 형태든), "이거 뭔데 이렇게", "이게 대체 뭐길래", "이거 뭐야", "이거 왜 이렇게", "미쳤다", "레전드", "이거 알던 사람 손". 이 표현들은 이미 너무 많은 글에서 반복돼서 읽는 순간 광고·자동생성 글로 보인다. 특히 첫 줄을 "이거"/"이게"로 시작하지 않는다 — 실제로 잘 터지는 글은 "우리 딸 굽은 등 보고 식겁했잖아", "시어머니가 밥할 때마다 계란을 같이 넣으시는데", "식빵 그냥 주면 거들떠도 안 봄" 처럼 누가·언제·무슨 상황인지부터 시작한다. 같은 계정에서 매번 비슷한 첫마디로 시작하지 않도록, 소재마다 첫 줄의 형태(상황 먼저 / 사람 반응 먼저 / 결과 먼저 / 자기 비하 개그 / 질문)를 바꿔 쓴다.
 - 기존의 금지어 목록, 카테고리별 고정 문구, 후기형 템플릿, 획일적인 질문 CTA를 따르지 않는다.
 - 레시피/방법/제품명 등 댓글 공개가 자연스러운 소재만 핵심 일부를 본문에서 숨길 수 있다. 모든 글에 댓글 유도를 넣지 않는다.
 - 레시피 댓글은 실제 소재에 재료/조리 근거가 있을 때만 상세 레시피로 확장한다. 근거가 부족하면 없는 수치·재료·조리법을 만들어 형식을 채우지 않는다.
@@ -275,6 +276,22 @@ function missingParagraphBreak(t,lines){
 // unambiguous "every single line is its own paragraph" shape, not "nearly all" - so a normal post
 // mixing a short 1-line hook/closer with 2-3-line body groups (the wellFormatted fixture below,
 // and the encouraged "오프닝 훅 다음엔 항상 빈 줄" pattern) never trips it.
+// User feedback (2026-09-24): "이거실화냐? 이말투 너무 반복적으로 사용하고 스레드 바이럴 sns
+// 페르소나가 아닌거같아". Real published posts on the same account opened "이거 실화냐?",
+// "이거 뭔데 이렇게 난리냐;;", "이거 실화냐?!", "이거 뭐야,", "이거 왜 이렇게 맛있냐고??" back to
+// back - the persona prompts themselves seeded these (실화냐/미쳤다 listed as model reactions in 4
+// places, and the curiosity persona was explicitly told to open with "이거 뭔데/이게 대체 뭐길래").
+// Those seeds are removed from threadsPersonas.js; this is the code-side net, same pattern as
+// stripEmoji/missingParagraphBreak: flags the specific worn-out opener shapes and "실화" in any
+// sentence-final form. Deliberately narrow - a first line that merely starts with "이거" followed
+// by something concrete ("이거 사주고 나서 조용한 시간 생김") is left to the prompt, since "이거"
+// alone is ordinary Korean and a blanket ban would reject a lot of otherwise fine posts.
+const CLICHE_OPENER = /^(?:이거|이게)\s*(?:진짜\s*|대체\s*|도대체\s*)?(?:실화|뭔데|뭐야|뭐지|뭐길래|왜\s*이렇게)/;
+const CLICHE_ANYWHERE = /실화(?:냐|임|야|인가|냐고|냐구|라니)/;
+function clichePhrasing(t){
+  const firstLine = (t.split('\n').find(l => l.trim()) || '').trim();
+  return CLICHE_OPENER.test(firstLine) || CLICHE_ANYWHERE.test(t);
+}
 function overFragmentedParagraphs(t){
   if (!t.includes('\n\n')) return false;
   const groups=t.split(/\n\s*\n/).map(g=>g.split('\n').filter(Boolean)).filter(g=>g.length);
@@ -283,10 +300,10 @@ function overFragmentedParagraphs(t){
 // Counts only visible characters - line breaks are formatting, not content length, so a
 // well-paragraphed post isn't penalized for the blank lines voiceGuide() itself asks for.
 function bodyTooLong(t){return t.replace(/\n/g,'').length>MAX_BODY_CHARS;}
-function voiceProblems(text,{comment=false}={}){const t=normalizeVoice(text),reasons=[];if(!t&&!comment)reasons.push('empty');if(!comment){const lines=t?t.split('\n'):[];if(lines.length>MAX_LINES)reasons.push(`${MAX_LINES}줄 초과`);if(incompleteLineReasons(t).length)reasons.push('미완결 줄바꿈');if(lines.length&&GENERIC_CTA_ENDING.test(lines.slice(-2).join(' ')))reasons.push('뻔한 CTA 마무리');if(missingParagraphBreak(t,lines))reasons.push('문단 구분 없음');if(overFragmentedParagraphs(t))reasons.push('문단 과다 분절');if(bodyTooLong(t))reasons.push('본문 길이 초과');}if(highRiskClaim(t))reasons.push('고위험 효능 주장');return [...new Set(reasons)];}
+function voiceProblems(text,{comment=false}={}){const t=normalizeVoice(text),reasons=[];if(!t&&!comment)reasons.push('empty');if(!comment){const lines=t?t.split('\n'):[];if(lines.length>MAX_LINES)reasons.push(`${MAX_LINES}줄 초과`);if(incompleteLineReasons(t).length)reasons.push('미완결 줄바꿈');if(lines.length&&GENERIC_CTA_ENDING.test(lines.slice(-2).join(' ')))reasons.push('뻔한 CTA 마무리');if(missingParagraphBreak(t,lines))reasons.push('문단 구분 없음');if(overFragmentedParagraphs(t))reasons.push('문단 과다 분절');if(clichePhrasing(t))reasons.push('상투적 표현');if(bodyTooLong(t))reasons.push('본문 길이 초과');}if(highRiskClaim(t))reasons.push('고위험 효능 주장');return [...new Set(reasons)];}
 function reject(reasons){const error=new Error(`최종 문체 검증 실패: ${reasons.join(',')}`);error.code='CONTENT_STYLE_REJECTED';throw error;}
 function assertVoice(text,options={}){const out=formatVoice(text),reasons=voiceProblems(out,options);if(reasons.length)reject(reasons);return out;}
 async function reviewSourceVoice(text,context={},request){let out=formatVoice(text);let problems=voiceProblems(out,context);const risky=problems.includes('고위험 효능 주장');if(risky){if(typeof request!=='function')reject(problems);const evidence=[context.sourceText,context.authorReplies,context.visualEvidence].filter(Boolean).map(String).join('\n').slice(0,12000);const audit=await request('고위험 효능 주장만 사실성/안전성 관점에서 검증한다. 문체 취향은 평가하지 않는다. JSON만 출력: {"issues":[],"sourceAnchors":[]}',`[근거 자료]\n${evidence}\n[게시글]\n${out}`);if(Array.isArray(audit?.issues)&&audit.issues.length)reject(['고위험 효능 주장']);problems=problems.filter(p=>p!=='고위험 효능 주장');}
 if(problems.includes('미완결 줄바꿈')){const repaired=formatVoice(repairConnectorOnlyBreaks(out,MAX_LINE_CHARS));const repairedProblems=voiceProblems(repaired,context);if(repairedProblems.length<problems.length){out=repaired;problems=repairedProblems;}}
-if(!problems.length)return out;if(typeof request!=='function')reject(problems);const evidence=[context.sourceText,context.authorReplies,context.visualEvidence].filter(Boolean).map(String).join('\n').slice(0,12000);for(let attempt=1;attempt<=MAX_FORMAT_REPAIR_ATTEMPTS&&problems.length;attempt++){const corrected=await request(`${voiceGuide()}\n형식 교정 전용이다. 핵심 의미와 후킹은 보존하되, 글자수를 맞추려고 완결된 문장을 자르지 마라 — 한 줄이 길어도 그 자체로 완결된 문장/절이면 그대로 둔다. 한 줄에 여러 문장이 억지로 욱여넣어져 있을 때만 자연스러운 문장/절 경계에서 나눠라. 각 물리적 줄은 그 줄만 읽어도 자연스럽게 완결돼야 한다. 최대 ${MAX_LINES}줄(빈 줄 포함)이다. "문단 구분 없음"이 수정 대상에 있으면 매 줄마다 그냥 줄바꿈만 하지 말고, 1~3줄 단위의 생각 덩어리가 끝나는 지점마다 반드시 빈 줄(줄바꿈 두 번)을 넣어 다음 덩어리와 시각적으로 구분해라 — 한 줄씩 뚝뚝 끊어지는 형태로 만들지 마라. 단, 문장마다 전부 빈 줄을 넣으라는 뜻은 아니다 — 같은 생각을 이야기하는 문장 2~3개는 빈 줄 없이 줄바꿈만으로 묶어서 한 덩어리로 만들고, 그 덩어리가 끝나는 지점에서만 빈 줄을 넣어라. "문단 과다 분절"이 수정 대상에 있으면 바로 이 반대 실수다 — 지금 모든 줄이 각각 빈 줄로 따로 떨어져 있어서 목록처럼 보인다는 뜻이니, 서로 이어지는 문장들을 최소 2~3개씩 빈 줄 없이 한 덩어리로 합쳐서 덩어리 개수 자체를 줄여라. 새 고위험 사실을 만들지 마라. JSON만 출력: {"text":""}`,`[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}\n[교정 시도]\n${attempt}/${MAX_FORMAT_REPAIR_ATTEMPTS}`);const candidate=formatVoice(corrected?.text||'');if(candidate)out=candidate;problems=voiceProblems(out,context);}if(problems.length)reject(problems);return out;}
+if(!problems.length)return out;if(typeof request!=='function')reject(problems);const evidence=[context.sourceText,context.authorReplies,context.visualEvidence].filter(Boolean).map(String).join('\n').slice(0,12000);for(let attempt=1;attempt<=MAX_FORMAT_REPAIR_ATTEMPTS&&problems.length;attempt++){const corrected=await request(`${voiceGuide()}\n형식 교정 전용이다. 핵심 의미와 후킹은 보존하되, 글자수를 맞추려고 완결된 문장을 자르지 마라 — 한 줄이 길어도 그 자체로 완결된 문장/절이면 그대로 둔다. 한 줄에 여러 문장이 억지로 욱여넣어져 있을 때만 자연스러운 문장/절 경계에서 나눠라. 각 물리적 줄은 그 줄만 읽어도 자연스럽게 완결돼야 한다. 최대 ${MAX_LINES}줄(빈 줄 포함)이다. "문단 구분 없음"이 수정 대상에 있으면 매 줄마다 그냥 줄바꿈만 하지 말고, 1~3줄 단위의 생각 덩어리가 끝나는 지점마다 반드시 빈 줄(줄바꿈 두 번)을 넣어 다음 덩어리와 시각적으로 구분해라 — 한 줄씩 뚝뚝 끊어지는 형태로 만들지 마라. 단, 문장마다 전부 빈 줄을 넣으라는 뜻은 아니다 — 같은 생각을 이야기하는 문장 2~3개는 빈 줄 없이 줄바꿈만으로 묶어서 한 덩어리로 만들고, 그 덩어리가 끝나는 지점에서만 빈 줄을 넣어라. "문단 과다 분절"이 수정 대상에 있으면 바로 이 반대 실수다 — 지금 모든 줄이 각각 빈 줄로 따로 떨어져 있어서 목록처럼 보인다는 뜻이니, 서로 이어지는 문장들을 최소 2~3개씩 빈 줄 없이 한 덩어리로 합쳐서 덩어리 개수 자체를 줄여라. "상투적 표현"이 수정 대상에 있으면 "실화냐"류 표현을 전부 없애고, 첫 줄을 "이거/이게 ~냐"식 감탄 대신 소재 속 구체적인 사람·상황·결과로 시작하게 다시 써라 — 내용과 후킹 포인트는 그대로 두고 말투만 바꾼다. 새 고위험 사실을 만들지 마라. JSON만 출력: {"text":""}`,`[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}\n[교정 시도]\n${attempt}/${MAX_FORMAT_REPAIR_ATTEMPTS}`);const candidate=formatVoice(corrected?.text||'');if(candidate)out=candidate;problems=voiceProblems(out,context);}if(problems.length)reject(problems);return out;}
 module.exports={MAX_LINES,MAX_LINE_CHARS,MAX_BODY_CHARS,MAX_FORMAT_REPAIR_ATTEMPTS,normalizeVoice,voiceGuide,formatVoice,voiceProblems,assertVoice,reviewSourceVoice,incompleteLineReasons,bodyTooLong};

@@ -976,3 +976,29 @@ test('the paragraph-break guard does not flag a single long line that is genuine
   const oneDramaticEnding = '이거 진짜 실화냐?? 이렇게까지 좋아질 줄은 진짜 상상도 못했는데 완전 인생템 등극함??';
   assert.deepEqual(policy.voiceProblems(oneDramaticEnding).filter(r => r === '문단 구분 없음'), []);
 });
+
+test('voiceProblems flags the worn-out "이거 실화냐 / 이거 뭔데" opener clichés seen on real posts', () => {
+  // User feedback (2026-09-24): "이거실화냐? 이말투 너무 반복적으로 사용하고 스레드 바이럴 sns
+  // 페르소나가 아닌거같아". Five real posts on one account opened with these back to back.
+  for (const t of ['이거 실화냐? HOKA 처음 신어봤는데', '이거 뭔데 이렇게 난리냐;;', '이거 실화냐?! 김신영템이라는', '이거 뭐야, 남편이 아이방에서', '이거 왜 이렇게 맛있냐고??']) {
+    assert.ok(policy.voiceProblems(t).includes('상투적 표현'), `should flag: ${t}`);
+  }
+  assert.ok(policy.voiceProblems('우리 딸 굽은 등 보고\n진짜 실화임').includes('상투적 표현'));
+});
+
+test('the cliché guard does not flag concrete situation-first openers, including a plain "이거" start', () => {
+  for (const t of ['우리 딸램 굽은 등 보고 식겁했잖아;;', '시어머니가 밥할 때마다 계란을 같이 넣으시는데', '이거 사주고 나서 조용한 시간 생김ㅋㅋ', '식빵 그냥 주면 거들떠도 안 봄;;']) {
+    assert.deepEqual(policy.voiceProblems(t).filter(r => r === '상투적 표현'), [], `false positive: ${t}`);
+  }
+});
+
+test('persona prompts no longer seed 실화냐/미쳤다 or tell the model to open with "이거 뭔데"', () => {
+  const { PERSONAS } = require('./threadsPersonas');
+  for (const persona of PERSONAS) {
+    assert.doesNotMatch(persona.block, /"[^"]*실화냐[^"]*"/, `${persona.id} still seeds 실화냐 as an example`);
+    assert.doesNotMatch(persona.block, /대신 "미쳤다"/, `${persona.id} still lists 미쳤다 as a model reaction`);
+  }
+  const curiosity = PERSONAS.find(p => p.id === 'curiosity');
+  const openingExamples = curiosity.block.split('\n').find(l => /\[오프닝 패턴 예시/.test(l));
+  assert.doesNotMatch(openingExamples, /"이거 뭔데|"이게 대체/);
+});

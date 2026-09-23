@@ -100,10 +100,15 @@ test('unknown outcomes after restart never automatically republish', () => {
 });
 
 test('observed inline style defects are repaired and checked at final boundary', () => {
-  const result=node(`const q=require('./finalTextHardGuardPatch');const text=q.fallbackRewrite('고수들은 이거 쓰더라\\n진짜 편함\\n진짜 실화냐?','product');console.log('RESULT:'+JSON.stringify({text,reasons:q.badStyleReasons(text,'product')}));process.exit();`);
+  // 2026-09-24: this fixture used to end on "진짜 실화냐?" as its example of a natural question
+  // worth keeping. The user has since flagged "실화냐" as an overused, machine-sounding cliché, and
+  // voiceProblems() now rejects it ("상투적 표현"), so the example question is swapped for a
+  // non-cliché one - what this test protects (conversational endings and questions survive the
+  // rewrite untouched) is unchanged.
+  const result=node(`const q=require('./finalTextHardGuardPatch');const text=q.fallbackRewrite('고수들은 이거 쓰더라\\n진짜 편함\\n다들 원래 알고 있었어?','product');console.log('RESULT:'+JSON.stringify({text,reasons:q.badStyleReasons(text,'product')}));process.exit();`);
   assert.deepEqual(result.reasons,[]);
   assert.match(result.text,/쓰더라/); // Valid conversational ending is preserved; 음슴체/냐체 are still repaired.
-  assert.match(result.text,/실화냐/); // Natural situational questions are retained.
+  assert.match(result.text,/알고 있었어\?/); // Natural situational questions are retained.
 });
 
 test('real HTTP startup, admin authentication and health endpoint work', async () => {
