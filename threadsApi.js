@@ -163,10 +163,29 @@ function stripStrayDashArtifacts(text){
     return line.replace(/\s+[—–ㅡ]+\s+/g,' ').replace(/^[—–ㅡ]+\s+/,'').replace(/\s+[—–ㅡ]+$/,'');
   }).join('\n');
 }
+// REGRESSION (found live, 2026-09-23): a real published post still included a pictograph emoji
+// ("쿠션감이 장난 아님...\n😭 구름 위를...") despite voiceGuide() explicitly banning emoji everywhere
+// (2026-09-21) - that ban was only ever a prompt instruction with no code-side enforcement, the
+// same gap the "ㅡ" dash fix above already closed for a different unwanted character. Stripped
+// here unconditionally (unlike the dash, no legitimate attached-emoticon exception applies to
+// real pictograph emoji - ㅋㅋ/ㄷㄷ/ㅠㅠ/;; text reactions are untouched since they aren't
+// Extended_Pictographic). Runs AFTER the period-before-emoji cleanup above, which still needs the
+// emoji present to match its lookahead ("대박.😊" -> "대박😊" -> "대박" here) - stripping emoji
+// first would leave that stray period behind uncaught.
+function stripEmoji(text){
+  // ️ (emoji variation selector) and ‍ (ZWJ, glues multi-part emoji like 🌤️/👨‍👩‍👧
+  // together) are not themselves Extended_Pictographic - stripping only the base pictograph and
+  // leaving these behind left an orphaned invisible-ish artifact character.
+  return String(text||'').split('\n').map(line =>
+    line.replace(/[\p{Extended_Pictographic}️‍]/gu,'').replace(/[ \t]{2,}/g,' ').trim()
+  ).join('\n');
+}
 function sanitizePublishedThreadsText(value){
-  return stripStrayDashArtifacts(String(value||''))
-    .replace(/https?:\/\/\S+/gi,m=>m.replace(/[.,;]+$/,''))
-    .replace(/(^|[^.\d])\.(?!\.)(?=\s|$|\p{Extended_Pictographic}|[ㅋㅎㅜㅠㄷ~!?;])/gu,'$1')
+  return stripEmoji(
+    stripStrayDashArtifacts(String(value||''))
+      .replace(/https?:\/\/\S+/gi,m=>m.replace(/[.,;]+$/,''))
+      .replace(/(^|[^.\d])\.(?!\.)(?=\s|$|\p{Extended_Pictographic}|[ㅋㅎㅜㅠㄷ~!?;])/gu,'$1')
+  )
     .replace(/[ \t]+\n/g,'\n')
     .trim();
 }

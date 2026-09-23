@@ -52,17 +52,32 @@ test('sanitizePublishedThreadsText strips a sentence period stuck directly to a 
   // reaction straight onto it with no space at all ("실화냐.ㅋㅋ", "대박.😂") - exactly the formal
   // sentence-final period this function exists to remove, left untouched purely because of what
   // followed it.
-  assert.equal(sanitizePublishedThreadsText('이거 완전 대박.😂'), '이거 완전 대박😂');
-  assert.equal(sanitizePublishedThreadsText('진짜 신기함.🤯'), '진짜 신기함🤯');
+  // 2026-09-23: the no-emoji policy (see stripEmoji below) now also removes the pictograph
+  // reaction itself, not just the period before it - only the text-only reactions (ㅋㅋ/ㅎㅎ) survive.
+  assert.equal(sanitizePublishedThreadsText('이거 완전 대박.😂'), '이거 완전 대박');
+  assert.equal(sanitizePublishedThreadsText('진짜 신기함.🤯'), '진짜 신기함');
   assert.equal(sanitizePublishedThreadsText('이 조합 실화냐.ㅋㅋ'), '이 조합 실화냐ㅋㅋ');
-  assert.equal(sanitizePublishedThreadsText('가성비 최고.👍'), '가성비 최고👍');
+  assert.equal(sanitizePublishedThreadsText('가성비 최고.👍'), '가성비 최고');
   assert.equal(sanitizePublishedThreadsText('완전 웃김.ㅎㅎ'), '완전 웃김ㅎㅎ');
   assert.equal(sanitizePublishedThreadsText('이거 실화냐.!'), '이거 실화냐!');
 });
 
 test('the emoji/reaction lookahead extension still preserves decimal points and ellipses right before a reaction', () => {
   assert.equal(sanitizePublishedThreadsText('가격 1.5만원인데.ㅋㅋ'), '가격 1.5만원인데ㅋㅋ');
-  assert.equal(sanitizePublishedThreadsText('완전 신기함...😂'), '완전 신기함...😂');
+  assert.equal(sanitizePublishedThreadsText('완전 신기함...😂'), '완전 신기함...');
+});
+
+test('sanitizePublishedThreadsText strips pictograph emoji anywhere, keeping text-only reactions', () => {
+  // REGRESSION (found live, 2026-09-23): a real published post still included an emoji
+  // ("쿠션감이 장난 아님...\n😭 구름 위를...") despite voiceGuide() explicitly banning emoji
+  // everywhere (2026-09-21) - that ban was only a prompt instruction with no code-side
+  // enforcement, so a model that ignored it published unchanged. This is the same gap class the
+  // "ㅡ" dash fix already closed for a different unwanted character.
+  assert.equal(sanitizePublishedThreadsText('쿠션감이 장난 아님\n😭 구름 위를 걷는 기분이랄까'), '쿠션감이 장난 아님\n구름 위를 걷는 기분이랄까');
+  assert.equal(sanitizePublishedThreadsText('이거 완전 좋음🥰 진짜 만족'), '이거 완전 좋음 진짜 만족');
+  assert.equal(sanitizePublishedThreadsText('오늘 날씨 맑음🌤️✨'), '오늘 날씨 맑음');
+  // Text-only reactions (ㅋㅋ/ㄷㄷ/ㅠㅠ/;;) are not pictograph emoji and must survive untouched.
+  assert.equal(sanitizePublishedThreadsText('이거 완전 웃김ㅋㅋㅋ'), '이거 완전 웃김ㅋㅋㅋ');
 });
 
 test('sanitizePublishedThreadsText also strips the period before ㄷㄷ/;; - voiceGuide()\'s own other two sanctioned reaction markers', () => {
