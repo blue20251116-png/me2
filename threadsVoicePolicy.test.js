@@ -18,6 +18,20 @@ test('persona is a Threads viral writer, not a source-faithful summarizer', () =
   assert.doesNotMatch(guide, /원문 90%|새 사건을 덧붙였는지|지어내지 않는다/);
 });
 
+test('voiceGuide() tells the model to always break the line when a sentence ends, not just when a line gets long', () => {
+  // User request (2026-09-23, direct follow-up to the missingParagraphBreak fix): "문장 끝나면
+  // 줄바꿈" (break the line when a sentence ends). The old wording ("한 호흡에 다 읽히는 문장은
+  // 길어도 한 줄에 그대로 둔다... 한 줄이 여러 문장을 억지로 욱여넣을 만큼 길어질 때만 문장
+  // 경계에서 나눈다") gave the model an explicit "keep multiple sentences on one line if they read
+  // in one breath" loophole - exactly what produced the real posts that missingParagraphBreak()
+  // just had to be taught to catch after the fact. Rewritten so a completed sentence always
+  // starts a new line unconditionally, while still allowing one single long sentence to stay on
+  // its own line without being chopped mid-word.
+  const guide = policy.voiceGuide();
+  assert.match(guide, /문장 하나가 끝나면 무조건 줄을 바꾼다/);
+  assert.doesNotMatch(guide, /한 호흡에 다 읽히는 문장은 길어도 한 줄에 그대로 둔다/);
+});
+
 test('every persona carries a shared baseline curiosity-gap hook, not just the dedicated curiosity persona', () => {
   // Content-style change requested by the user (2026-09-15): exposure/reach improved after
   // leaning into curiosity-driven SNS Threads viral hooks, so the shared voiceGuide() section
