@@ -32,6 +32,19 @@ test('voiceGuide() tells the model to always break the line when a sentence ends
   assert.doesNotMatch(guide, /한 호흡에 다 읽히는 문장은 길어도 한 줄에 그대로 둔다/);
 });
 
+test('voiceGuide() clarifies that "새 문장 = 새 줄" does not mean "새 줄 = 빈 줄"', () => {
+  // REGRESSION (found live, 2026-09-23, same day as the sentence-per-line fix above): a real
+  // published post over-applied that fix - EVERY single one-sentence line got its own blank-line
+  // separation, turning a 4-sentence post into 7 isolated one-line "paragraphs" that read like a
+  // mechanically generated list, not natural texting. The two rules ("문장이 끝나면 줄을 바꾼다"
+  // and "생각 덩어리가 끝나면 빈 줄을 넣는다") are independent - a "덩어리" can and should still
+  // span 2-3 consecutive one-sentence lines with no blank line between them, only getting a blank
+  // line once the whole group of related sentences ends.
+  const guide = policy.voiceGuide();
+  assert.match(guide, /문장 하나마다 매번 빈 줄까지 넣어서 문장을 전부 따로따로 떼어놓지 않는다/);
+  assert.match(guide, /빈 줄 없이 줄바꿈만으로 붙여서 한 덩어리로 묶고/);
+});
+
 test('every persona carries a shared baseline curiosity-gap hook, not just the dedicated curiosity persona', () => {
   // Content-style change requested by the user (2026-09-15): exposure/reach improved after
   // leaning into curiosity-driven SNS Threads viral hooks, so the shared voiceGuide() section
