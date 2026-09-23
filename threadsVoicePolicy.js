@@ -237,10 +237,33 @@ function highRiskClaim(text){const t=String(text||'');return /\d+(?:\.\d+)?\s*(?
 // intended paragraph rhythm - and voiceProblems() passed both, because this rule had zero code
 // enforcement, unlike MAX_LINES/CTA/dangling-line checks which are all actually checked. A short,
 // genuinely single-thought post (voiceGuide: "한 생각 안에서는 억지로 빈 줄을 넣지 않는다") is not
-// flagged - only posts long enough (6+ lines) to plausibly span more than one thought, with zero
+// flagged - only posts long enough to plausibly span more than one thought, with zero
 // paragraph break anywhere, are treated as a real formatting problem worth sending back through
 // the existing repair loop below.
-function missingParagraphBreak(t,lines){return lines.length>=6&&!t.includes('\n\n');}
+// REGRESSION (found live, 2026-09-23): two more real published posts slipped past this check
+// entirely. (1) A 5-line post (situation -> product feature -> comparison -> question ->
+// reaction, each already its own line, zero blank line anywhere) stayed under the old
+// lines.length>=6 threshold - it clearly spans 5 distinct thoughts, not the "짧은, 진짜
+// 한생각짜리 포스트" the threshold exists to protect (already covered separately by the 2-line/
+// 4-line fixtures below). Lowered the threshold to 5; verified this doesn't affect either
+// existing short-thought fixture. (2) Two other real posts were written as ONE unbroken line
+// with no \n at all (lines.length===1), which the line-count check can never see no matter how
+// low the threshold goes - the same "reads as an undifferentiated wall of text" problem, just
+// expressed as one long line instead of many short ones. Added a second, independent trigger for
+// that shape: 2 or fewer lines, already past a plausibly-single-thought length (reusing
+// bodyTooLong()'s visible-char convention), AND containing 2+ separate strong sentence-ending
+// marks (?/!/;;/..  runs, not counting doubled marks like "??" as two) - a signal that multiple
+// complete thoughts were run together with no separation at all, not that one sentence is simply
+// long (voiceGuide() explicitly allows a single complete sentence to stay long on one line, and a
+// long sentence with zero or one such marks stays correctly unflagged either way).
+function missingParagraphBreak(t,lines){
+  if (t.includes('\n\n')) return false;
+  if (lines.length>=5) return true;
+  if (lines.length>2) return false;
+  const visible=t.replace(/\n/g,'');
+  const sentenceBoundaries=(visible.match(/[?!]+|;;|\.\.+/g)||[]).length;
+  return visible.length>=100 && sentenceBoundaries>=2;
+}
 // Counts only visible characters - line breaks are formatting, not content length, so a
 // well-paragraphed post isn't penalized for the blank lines voiceGuide() itself asks for.
 function bodyTooLong(t){return t.replace(/\n/g,'').length>MAX_BODY_CHARS;}

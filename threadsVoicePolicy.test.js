@@ -896,3 +896,37 @@ test('the paragraph-break guard passes a post that already groups thoughts with 
   const wellFormatted = '옷은 많은데\n막상 나가려면 입을 게 없음ㅋㅋ\n\n이런 코트 하나 보고 있는데\n가을 오면 바로 입을 듯\n\n색감 진짜 예쁘더라\n이번 주에 주문할 듯';
   assert.deepEqual(policy.voiceProblems(wellFormatted).filter(r => r === '문단 구분 없음'), []);
 });
+
+test('the paragraph-break guard catches a real 5-line post with no blank line, below the old 6-line threshold', () => {
+  // REGRESSION (found live, 2026-09-23): a real published post (오목판 game) had 5 lines, each
+  // already its own distinct thought (situation -> product feature -> comparison -> question ->
+  // reaction), with zero blank line anywhere - it stayed under the old lines.length>=6 threshold
+  // and sailed through unflagged, even though it clearly spans multiple thoughts, not a genuine
+  // short single-thought post.
+  const post = '이거 뭐야, 남편이 아이방에서 2시간째 안 나오고 있어ㅋㅋ\n바둑알 1도 필요 없고, 손만 대면 불이 들어오는 오목판이야\n스마트폰 쥐어주는 것보다 100배 나을 듯...\n이거 집중력 향상에도 진짜 좋대??\n이렇게 재밌는 걸 이제야 알다니 미쳤다...';
+  assert.ok(policy.voiceProblems(post).includes('문단 구분 없음'));
+});
+
+test('the paragraph-break guard catches a real post written as one unbroken line with no \\n at all', () => {
+  // REGRESSION (found live, 2026-09-23): two real published posts were written as ONE physical
+  // line with zero \n anywhere - a line-count check can never catch this no matter how low the
+  // threshold goes, since lines.length is always 1. This is the same "wall of undifferentiated
+  // text" problem the line-count check exists to catch, just expressed as one long line instead
+  // of many short ones. Both real examples ran multiple complete thoughts together with several
+  // strong sentence-ending marks (?/!/;;/..) and no separation at all.
+  const post2 = '이거 뭔데 이렇게 난리냐;; 진짜 바삭함이 미쳤다는데? 춘천 조선전집에서 모둠전 먹어봤어? 1번 손님으로 들어갔는데, 이건 진짜 완전 정답이었음 양도 많고, 뭐 하나 빠지는 게 없더라 여기가 이제 내 최애 전집이 됐어 춘천 가면 무조건 오픈런으로 가야 하는 집이야 ㅋㅋ';
+  const post3 = '이거 실화냐?! 김신영템이라는 거품 변기 클리너 써봤는데, 비주얼이 미쳤음ㅋㅋ 거품이 완전 쫀쫀해서 묵은 때가 그냥 녹아내림 변기 청소가 이렇게 한방에 끝나다니, 진짜 속이 다 시원해.. 거품 멍 때리는 것도 은근 꿀잼이라 시간 가는 줄 모르겠음 이거 하나면 변기 청소 끝! 품절되기 전에 꼭 써봐야겠다!';
+  assert.ok(policy.voiceProblems(post2).includes('문단 구분 없음'));
+  assert.ok(policy.voiceProblems(post3).includes('문단 구분 없음'));
+});
+
+test('the paragraph-break guard does not flag a single long line that is genuinely one complete sentence', () => {
+  // A long single sentence with zero or one strong sentence-ending mark must stay unflagged -
+  // voiceGuide() explicitly allows one complete sentence to run long on one line, and the new
+  // one-line trigger requires 2+ separate strong endings to distinguish "one long thought" from
+  // "several thoughts crammed together with no breaks."
+  const oneLongSentence = '이 세제 하나 사고 나서부터는 진짜 매번 손빨래하던 얼룩진 옷들이 거짓말처럼 깨끗해져서 완전 신세계임';
+  assert.deepEqual(policy.voiceProblems(oneLongSentence).filter(r => r === '문단 구분 없음'), []);
+  const oneDramaticEnding = '이거 진짜 실화냐?? 이렇게까지 좋아질 줄은 진짜 상상도 못했는데 완전 인생템 등극함??';
+  assert.deepEqual(policy.voiceProblems(oneDramaticEnding).filter(r => r === '문단 구분 없음'), []);
+});
