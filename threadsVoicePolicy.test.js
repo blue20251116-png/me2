@@ -45,6 +45,25 @@ test('voiceGuide() clarifies that "새 문장 = 새 줄" does not mean "새 줄 
   assert.match(guide, /빈 줄 없이 줄바꿈만으로 붙여서 한 덩어리로 묶고/);
 });
 
+test('voiceProblems catches a real post where every single line is its own blank-line-separated paragraph', () => {
+  // REGRESSION (found live, 2026-09-23): the voiceGuide() wording fix above is prompt-only - a
+  // dry-run simulation confirmed voiceProblems() had zero code-side check for "blank lines
+  // everywhere, fragmenting every sentence into its own paragraph" (missingParagraphBreak() only
+  // ever catches the OPPOSITE failure: an absence of blank lines). Added overFragmentedParagraphs()
+  // as a matching safety net, mirroring how missingParagraphBreak/bodyTooLong/highRiskClaim are
+  // all code-enforced, not prompt-only. Requires 4+ paragraph groups where EVERY group is exactly
+  // 1 line - a strict, unambiguous shape that a normal post mixing a 1-line hook/closer with
+  // 2-3-line body groups (the wellFormatted fixture below) never trips.
+  const realPost = '이거 왜 이렇게 맛있냐고??\n\n말차의 진한 향이 빵과 크림을 감싸고,\n\n한 입 베어물면 식감이 사라지는 게 실화냐고...\n\n완전 미쳤다 진짜 이런 케이크 처음 먹어봤는데,\n\n주말 간식으로 완전 강추!\n\n품절되기 전에 꼭 먹어봐야겠다\n\n이거 알던 사람 손??';
+  assert.ok(policy.voiceProblems(realPost).includes('문단 과다 분절'));
+  // A post with only a few groups, or one that mixes 1-line and multi-line groups, must stay
+  // unflagged - the opening-hook-then-blank-line pattern is explicitly encouraged, not a bug.
+  const wellFormatted = '옷은 많은데\n막상 나가려면 입을 게 없음ㅋㅋ\n\n이런 코트 하나 보고 있는데\n가을 오면 바로 입을 듯\n\n색감 진짜 예쁘더라\n이번 주에 주문할 듯';
+  assert.deepEqual(policy.voiceProblems(wellFormatted).filter(r => r === '문단 과다 분절'), []);
+  const shortHookThenBody = '이거 실화냐??\n\n말차 향이 진하고 크림이 부드러워서 계속 손이 감\n\n주말 간식으로 강추';
+  assert.deepEqual(policy.voiceProblems(shortHookThenBody).filter(r => r === '문단 과다 분절'), []);
+});
+
 test('every persona carries a shared baseline curiosity-gap hook, not just the dedicated curiosity persona', () => {
   // Content-style change requested by the user (2026-09-15): exposure/reach improved after
   // leaning into curiosity-driven SNS Threads viral hooks, so the shared voiceGuide() section
