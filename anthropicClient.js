@@ -86,15 +86,23 @@ async function callAnthropicJson(apiKey, options) {
   return extractJson(text);
 }
 
+// Cost (2026-09-24, user: "오픈api 비용이 너무많이들어"): with no `detail`, OpenAI uses "auto",
+// which bills a typical 1080px Threads photo as high-detail - on gpt-4o-mini that is ~25,000 input
+// tokens per image vs a flat 2,833 at "low". Every image this app sends (autopilot post analysis,
+// up to 3 images per post; the content-only path; the manual frame analyzer, 8-15 frames per
+// call) is for identifying what a product/dish/scene is, which low detail (512px) handles fine.
+// Set OPENAI_IMAGE_DETAIL=high (or auto) to opt back in if small on-image text ever needs reading.
+const IMAGE_DETAIL = ['low', 'high', 'auto'].includes(process.env.OPENAI_IMAGE_DETAIL) ? process.env.OPENAI_IMAGE_DETAIL : 'low';
+
 function imageBlock(url) {
-  return { type: 'image_url', image_url: { url } };
+  return { type: 'image_url', image_url: { url, detail: IMAGE_DETAIL } };
 }
 
 // OpenAI accepts a data: URI directly in image_url.url (unlike Anthropic, which needed a
 // separate base64 source type) - this just validates the shape and passes it through.
 function imageBlockFromDataUri(dataUri) {
   if (!/^data:[^;]+;base64,.+/s.test(String(dataUri || ''))) throw new Error('유효한 data URI 이미지가 아닙니다');
-  return { type: 'image_url', image_url: { url: dataUri } };
+  return { type: 'image_url', image_url: { url: dataUri, detail: IMAGE_DETAIL } };
 }
 
 module.exports = {

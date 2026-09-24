@@ -36,16 +36,18 @@ test('extractJson throws a clear error when no JSON can be found at all', () => 
   assert.throws(() => extractJson('no json here at all'));
 });
 
-test('imageBlock builds an OpenAI image_url content part', () => {
+test('imageBlock builds an OpenAI image_url content part, at low detail by default', () => {
+  // Cost: without an explicit detail, OpenAI's "auto" bills a normal photo as high-detail
+  // (~25k tokens on gpt-4o-mini vs 2,833 at low). Low is the default unless OPENAI_IMAGE_DETAIL says otherwise.
   assert.deepEqual(imageBlock('https://example.com/a.jpg'), {
     type: 'image_url',
-    image_url: { url: 'https://example.com/a.jpg' },
+    image_url: { url: 'https://example.com/a.jpg', detail: 'low' },
   });
 });
 
-test('imageBlockFromDataUri passes a data URI straight through in image_url.url', () => {
+test('imageBlockFromDataUri passes a data URI straight through in image_url.url, at low detail', () => {
   const block = imageBlockFromDataUri('data:image/jpeg;base64,QQ==');
-  assert.deepEqual(block, { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,QQ==' } });
+  assert.deepEqual(block, { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,QQ==', detail: 'low' } });
 });
 
 test('imageBlockFromDataUri rejects a non-data-URI input', () => {
