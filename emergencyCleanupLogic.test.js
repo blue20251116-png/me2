@@ -69,3 +69,19 @@ test('wipeAll=true deletes every file regardless of age', () => {
   assert.equal(r.deleted, 3);
   assert.ok(!fs.existsSync(path.join(tmp, 'new.jpg')));
 });
+
+// REGRESSION (found live, 2026-09-27): with a Korean CLEANUP_KEY the preview page opened fine but
+// the red delete button always answered "key가 올바르지 않습니다" - the hidden form field held
+// encodeURIComponent(key), which the browser form-encoded a second time, so the POST received
+// "%EC%82%AD..." instead of the key itself.
+test('delete-button form carries the raw (HTML-escaped) key, not a URL-encoded copy', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
+  const route = src.slice(src.indexOf("app.get('/admin/emergency-cleanup'"), src.indexOf("app.post('/admin/emergency-cleanup'"));
+  assert.doesNotMatch(route, /encodeURIComponent\(String\(req\.query\.key\)\)/);
+  const key = '삭제해도조아1234';
+  const escapeHtml = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // A browser un-escapes the attribute, then form-encodes it; the server's urlencoded parser decodes it.
+  const submitted = new URLSearchParams(new URLSearchParams({ key: escapeHtml(key).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&') }).toString()).get('key');
+  assert.equal(submitted, key);
+  assert.match(route, /const key = String\(req\.query\.key\)\.replace\(\/&\/g, '&amp;'\)/);
+});

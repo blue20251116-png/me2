@@ -90,8 +90,9 @@ app.get('/healthz', (req,res)=>{
 // 버튼을 눌러 POST를 보낼 때만 실행된다 (GET은 URL만 열어도 항상 미리보기만 보여줌 - 링크
 // 미리보기 봇 등이 실수로 눌러도 안전).
 function emergencyCleanupKeyValid(req) {
-  const provided = String(req.query.key || req.body?.key || '');
-  const expected = String(process.env.CLEANUP_KEY || '');
+  // trim: a stray space/newline pasted into the Railway variable or the URL must not lock the owner out.
+  const provided = String(req.query.key || req.body?.key || '').trim();
+  const expected = String(process.env.CLEANUP_KEY || '').trim();
   if (!expected || !provided) return false;
   const a = Buffer.from(provided);
   const b = Buffer.from(expected);
@@ -130,7 +131,11 @@ app.get('/admin/emergency-cleanup', (req, res) => {
   const olderThanDays = Number(req.query.olderThanDays) || 3;
   const wipeAll = req.query.wipe === '1';
   const r = emergencyCleanupScan({ olderThanDays, wipeAll, confirm: false });
-  const key = encodeURIComponent(String(req.query.key));
+  // The hidden field must carry the key as-is (HTML-escaped only). It used to be encodeURIComponent'd,
+  // so the browser form-encoded it a second time and the POST received "%EC%82%AD..." instead of
+  // the key - any non-ASCII (e.g. Korean) CLEANUP_KEY previewed fine but the delete button always
+  // answered "key가 올바르지 않습니다".
+  const key = String(req.query.key).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   res.type('html').send(`<!doctype html><meta charset="utf-8">
 <body style="font-family:sans-serif;padding:16px;font-size:16px;line-height:1.6">
 <h3>업로드 파일 정리 (미리보기)</h3>
@@ -138,7 +143,7 @@ app.get('/admin/emergency-cleanup', (req, res) => {
 <p>스캔한 파일: ${r.scanned}개<br>지울 대상: ${r.matched}개<br>확보 예상 용량: ${(r.freedBytes / 1024 / 1024).toFixed(1)}MB</p>
 <p style="color:#a00">DB와 .env의 API 키는 이 기능이 절대 건드리지 않습니다. 아래 버튼을 눌러야만 실제로 삭제됩니다.</p>
 <form method="POST" action="/admin/emergency-cleanup">
-<input type="hidden" name="key" value="${key.replace(/"/g, '&quot;')}">
+<input type="hidden" name="key" value="${key}">
 <input type="hidden" name="olderThanDays" value="${olderThanDays}">
 <input type="hidden" name="wipe" value="${wipeAll ? '1' : '0'}">
 <button type="submit" style="font-size:18px;padding:12px 20px;background:#c00;color:#fff;border:none;border-radius:8px">${r.matched}개 실제로 삭제하기</button>
