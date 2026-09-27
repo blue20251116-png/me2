@@ -78,9 +78,70 @@ function deleteOldFailedPosts(db) {
   return { deleted };
 }
 
-function runRetentionCleanup(db, logger = console) {
+// Disk-full incident #2 (2026-09-27): only SQLite rows were ever pruned here, but db/uploads/ sits
+// on the same Railway volume and nothing ever deleted from it automatically - the autopilot
+// downloads the full source mp4 for every video post (scheduler.js chooseSourceMedia ->
+// importThreadsVideo) and caches every post image (threadsApi.js cacheImage), and with a dozen-plus
+// accounts that is the dominant growth. server.js's /admin/emergency-cleanup only runs when a human
+// presses its button. A file is only needed until Threads fetches it at publish time, so anything
+// older than the window that no pending/publishing post still points at is safe to remove.
+const UPLOADS_RETENTION_MS = Math.max(60 * 60 * 1000, Number(process.env.UPLOADS_RETENTION_HOURS || 24) * 60 * 60 * 1000);
+
+function safeDecode(value) {
+  let out = String(value || '');
+  for (let i = 0; i < 2; i++) { try { const next = decodeURIComponent(out); if (next === out) break; out = next; } catch { break; } }
+  return out;
+}
+
+// Returns every pending/publishing post's media URLs (including JSON media bundles) as one decoded
+// string, or null when the posts table/columns can't be read - null means "unknown", so the caller
+// deletes nothing rather than risk removing a file a queued post still needs.
+function referencedUploadsBlob(db) {
+  if (!tableExists(db, 'posts')) return null;
+  const columns = tableColumns(db, 'posts');
+  const mediaColumns = ['image_url', 'extra_image_url', 'video_url'].filter((c) => columns.includes(c));
+  if (!columns.includes('status') || !mediaColumns.length) return null;
+  const rows = db.prepare(`SELECT ${mediaColumns.map(quoteIdentifier).join(',')} FROM posts WHERE status IN ('pending','publishing')`).all();
+  return rows.flatMap((row) => mediaColumns.map((c) => row[c])).filter(Boolean).map(safeDecode).join('\n');
+}
+
+function cleanupUploads(db, uploadsDir, { maxAgeMs = UPLOADS_RETENTION_MS, now = Date.now(), fs = require('fs'), path = require('path') } = {}) {
+  const result = { deleted: 0, freedBytes: 0, keptReferenced: 0, errors: 0 };
+  if (!uploadsDir || !fs.existsSync(uploadsDir)) return { ...result, skipped: 'uploads_missing' };
+  const referenced = referencedUploadsBlob(db);
+  if (referenced === null) return { ...result, skipped: 'posts_unreadable' };
+  const cutoff = now - maxAgeMs;
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { result.errors++; return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      let stat;
+      try { stat = fs.statSync(full); } catch { result.errors++; continue; }
+      if (stat.mtimeMs >= cutoff) continue;
+      if (referenced.includes(entry.name)) { result.keptReferenced++; continue; }
+      try { fs.unlinkSync(full); result.deleted++; result.freedBytes += stat.size; } catch { result.errors++; }
+    }
+  };
+  walk(uploadsDir);
+  return result;
+}
+
+function runRetentionCleanup(db, logger = console, options = {}) {
   const result = { deleted: {}, vacuumed: false, skipped: [] };
   let totalDeleted = 0;
+
+  // Files first: unlinking needs no free space, while the SQLite DELETE/VACUUM below both need
+  // some - on an already-full volume they throw, and anything after them would never run.
+  if (options.uploadsDir) {
+    try {
+      result.uploads = cleanupUploads(db, options.uploadsDir, options.uploads || {});
+      logger.log?.(`[DB][RETENTION] uploads deleted=${result.uploads.deleted} freedMB=${(result.uploads.freedBytes / 1048576).toFixed(1)} keptReferenced=${result.uploads.keptReferenced}${result.uploads.skipped ? ` skipped=${result.uploads.skipped}` : ''}`);
+    } catch (error) {
+      logger.error?.('[DB][RETENTION] uploads cleanup failed:', error);
+    }
+  }
 
   for (const [table, retentionSeconds] of Object.entries(SIMPLE_RETENTION)) {
     if (!tableExists(db, table)) {
@@ -125,7 +186,7 @@ function startRetentionCleanup(db, options = {}) {
     if (running) return null;
     running = true;
     try {
-      return runRetentionCleanup(db, logger);
+      return runRetentionCleanup(db, logger, { uploadsDir: options.uploadsDir });
     } catch (error) {
       logger.error?.('[DB][RETENTION] cleanup failed:', error);
       return null;
@@ -144,6 +205,8 @@ function startRetentionCleanup(db, options = {}) {
 module.exports = {
   RETENTION_TABLES: Object.freeze(Object.keys(SIMPLE_RETENTION)),
   RETENTION_SECONDS,
+  UPLOADS_RETENTION_MS,
+  cleanupUploads,
   runRetentionCleanup,
   startRetentionCleanup,
 };

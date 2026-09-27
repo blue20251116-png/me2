@@ -13,7 +13,7 @@ if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 const maintenanceDb = new DatabaseSync(path.join(dbDir, 'scheduler.db'));
 maintenanceDb.exec('PRAGMA busy_timeout=5000;');
 
-const controller = startRetentionCleanup(maintenanceDb);
+const controller = startRetentionCleanup(maintenanceDb, { uploadsDir: path.join(dbDir, 'uploads') });
 
 function shutdown() {
   controller.stop();
