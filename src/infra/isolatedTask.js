@@ -271,11 +271,7 @@ async function runWorker(workerFile, payload, timeoutMs) {
   });
 }
 function isolatedBrowserTask(moduleName, method, args, timeoutMs = 120000) {
-  return runWorker(
-    path.join(__dirname, 'isolatedBrowserWorker.js'),
-    { moduleName, method, args, accountId: Number(global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID || 0) },
-    timeoutMs
-  );
+  return runWorker(path.join(__dirname, 'isolatedBrowserWorker.js'), { moduleName, method, args }, timeoutMs);
 }
 // Runs a browser task from the registry in isolatedBrowserWorker.js. Inside the worker process
 // itself the task is called directly (a worker never forks another worker).

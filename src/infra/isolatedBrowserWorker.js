@@ -4,9 +4,8 @@
 require('./httpDeadline').installHttpDeadline();
 const { runTask } = require('./browserTasks');
 
-process.once('message', async ({ moduleName, method, args, accountId }) => {
+process.once('message', async ({ moduleName, method, args }) => {
   try {
-    global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID = accountId;
     const value = await runTask(moduleName, method, args);
     process.send({ ok: true, value });
   } catch (err) {

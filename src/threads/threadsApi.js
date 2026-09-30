@@ -2,14 +2,15 @@ const { UPLOADS_DIR } = require('../config/paths');
 const axios = require('axios');
 const crypto = require('crypto');
 const { db, getAccount, getSystemApiSettings } = require('../infra/db');
-const __me2Fs = require('fs');
-const __me2Path = require('path');
-const { editVideo: __me2EditVideo } = require('../content/videoEditor');
+const fs = require('fs');
+const path = require('path');
+const { editVideo } = require('../content/videoEditor');
 const { pickTopicTag, isTopicTagRejection } = require('./topicTag');
+const { normalizeMediaItems, decodeMediaBundle } = require('./mediaBundle');
 
 const uploadsDir = UPLOADS_DIR;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-if (!__me2Fs.existsSync(uploadsDir)) __me2Fs.mkdirSync(uploadsDir, { recursive: true });
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 function getPublicBaseUrl() {
   const explicit = String(process.env.PUBLIC_BASE_URL || process.env.APP_URL || '')
@@ -49,7 +50,7 @@ function extFromContentType(type, rawUrl) {
   };
   if (byType[t]) return byType[t];
   try {
-    const ext = __me2Path.extname(new URL(rawUrl).pathname).toLowerCase();
+    const ext = path.extname(new URL(rawUrl).pathname).toLowerCase();
     if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.avif'].includes(ext))
       return ext === '.jpeg' ? '.jpg' : ext;
   } catch {}
@@ -64,7 +65,7 @@ function cacheFilePrefix(url) {
 }
 function findCachedFile(prefix) {
   try {
-    return __me2Fs.readdirSync(uploadsDir).find(f => f.startsWith(prefix)) || null;
+    return fs.readdirSync(uploadsDir).find(f => f.startsWith(prefix)) || null;
   } catch {
     return null;
   }
@@ -104,9 +105,9 @@ async function cacheImage(rawUrl) {
 
   const ext = extFromContentType(type, url);
   const filename = `${prefix}${ext}`;
-  const filepath = __me2Path.join(uploadsDir, filename);
+  const filepath = path.join(uploadsDir, filename);
   try {
-    __me2Fs.writeFileSync(filepath, body, { flag: 'wx' });
+    fs.writeFileSync(filepath, body, { flag: 'wx' });
   } catch (e) {
     if (e.code !== 'EEXIST') throw e;
     console.log(`[Autopilot][IMAGE CACHE] 동시 캐시 경합 → 기존 파일 재사용 file=${filename}`);
@@ -129,22 +130,21 @@ function resolveThreadsAppCreds(account) {
 }
 
 const GRAPH_BASE = 'https://graph.threads.net/v1.0';
-const MEDIA_BUNDLE_PREFIX = '__THREADS_MEDIA_BUNDLE__';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function __me2NormalizeCarouselVideoUrl(rawUrl) {
+async function normalizeCarouselVideoUrl(rawUrl) {
   try {
     const u = new URL(String(rawUrl || ''));
     const marker = '/uploads/';
     const idx = u.pathname.indexOf(marker);
     if (idx < 0) throw new Error('로컬 uploads URL이 아닙니다');
     const relative = decodeURIComponent(u.pathname.slice(idx + marker.length));
-    const uploadsRoot = __me2Path.resolve(UPLOADS_DIR);
-    const inputPath = __me2Path.resolve(uploadsRoot, relative);
-    if (!inputPath.startsWith(uploadsRoot + __me2Path.sep) && inputPath !== uploadsRoot)
+    const uploadsRoot = path.resolve(UPLOADS_DIR);
+    const inputPath = path.resolve(uploadsRoot, relative);
+    if (!inputPath.startsWith(uploadsRoot + path.sep) && inputPath !== uploadsRoot)
       throw new Error('잘못된 uploads 경로입니다');
-    if (!__me2Fs.existsSync(inputPath)) throw new Error('원본 영상 파일이 영속 저장소에 없습니다');
-    const normalized = await __me2EditVideo({ inputPath, outputDir: uploadsRoot, start: 0, end: null, mute: false });
+    if (!fs.existsSync(inputPath)) throw new Error('원본 영상 파일이 영속 저장소에 없습니다');
+    const normalized = await editVideo({ inputPath, outputDir: uploadsRoot, start: 0, end: null, mute: false });
     const nextUrl = `${u.protocol}//${u.host}/uploads/${encodeURIComponent(normalized.filename)}`;
     console.log(
       `[Threads][CAROUSEL_VIDEO_NORMALIZE] success old=${rawUrl} new=${nextUrl} size=${normalized.size} duration=${Number(normalized.duration || 0).toFixed(2)}s`
@@ -500,27 +500,6 @@ async function publishContainer(creationId, accessToken, maxTries = 5, baseWaitM
   throw lastError;
 }
 
-function normalizeMediaItems(items) {
-  const out = [];
-  for (const x of items || []) {
-    const type = String(x?.type || '').toUpperCase(),
-      url = String(x?.url || '').trim();
-    if (!url || !['IMAGE', 'VIDEO'].includes(type)) continue;
-    if (!out.some(v => v.type === type && v.url === url)) out.push({ type, url });
-    if (out.length >= 10) break;
-  }
-  return out;
-}
-function decodeMediaBundle(value) {
-  const s = String(value || '');
-  if (!s.startsWith(MEDIA_BUNDLE_PREFIX)) return null;
-  try {
-    return normalizeMediaItems(JSON.parse(decodeURIComponent(s.slice(MEDIA_BUNDLE_PREFIX.length))));
-  } catch {
-    return null;
-  }
-}
-
 // Creates a top-level post container. topic_tag (topicTag.js) is best-effort: if Threads
 // rejects it, retry once without it so a tag can never be the reason a post fails to publish.
 async function postThreadsContainer(params, timeout) {
@@ -719,7 +698,7 @@ async function publishMediaItemsPost(accountId, { text, mediaItems }) {
         );
         let retryUrl = child.url;
         try {
-          retryUrl = await __me2NormalizeCarouselVideoUrl(child.url);
+          retryUrl = await normalizeCarouselVideoUrl(child.url);
         } catch {}
         await sleep(1200);
         try {

@@ -16,6 +16,7 @@ const {
 } = require('../../threads/benchmarkAccounts');
 const { collectBenchmarkMaterials, collectPostDetails } = require('../../threads/threadsCollector');
 const { requireAdmin } = require('../auth');
+const { normalizeMediaItems, encodeMediaBundle } = require('../../threads/mediaBundle');
 const { requireAccount, getPublicBaseUrl, uploadsDir } = require('../middleware');
 
 const videoEditLocks = new Set(),
@@ -23,21 +24,6 @@ const videoEditLocks = new Set(),
   threadsSearchLocks = new Set();
 function ownVideoPath(accountId, filename) {
   return path.join(uploadsDir, 'videos', String(accountId), path.basename(String(filename || '')));
-}
-function normalizeMediaItems(items) {
-  if (!Array.isArray(items)) return [];
-  const out = [];
-  for (const item of items) {
-    const type = String(item?.type || '').toUpperCase();
-    const url = String(item?.url || '').trim();
-    if (!url || !['IMAGE', 'VIDEO'].includes(type)) continue;
-    if (!out.some(x => x.type === type && x.url === url)) out.push({ type, url });
-    if (out.length >= 10) break;
-  }
-  return out;
-}
-function mediaBundleSentinel(items) {
-  return `__THREADS_MEDIA_BUNDLE__${encodeURIComponent(JSON.stringify(items))}`;
 }
 function containsExternalLink(text) {
   const t = String(text || '');
@@ -206,7 +192,7 @@ router.post('/api/threads/material-post', requireAccount, (req, res) => {
     videoUrl = mediaItems[0].type === 'VIDEO' ? mediaItems[0].url : null;
     extraImageUrl = null;
   } else if (mediaItems.length > 1) {
-    imageUrl = mediaBundleSentinel(mediaItems);
+    imageUrl = encodeMediaBundle(mediaItems);
     extraImageUrl = null;
     videoUrl = null;
   } else {

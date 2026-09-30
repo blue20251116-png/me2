@@ -754,7 +754,6 @@ async function refillAccount(accountId) {
         break;
       }
       try {
-        global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID = accountId;
         // Calls through module.exports (not the bare local reference) so a test can substitute a
         // fake generator to exercise refillAccount's own preflight/retry/circuit logic in
         // isolation from the real generation pipeline - see autopilotRecovery.test.js.
@@ -799,8 +798,6 @@ async function refillAccount(accountId) {
         )
           break;
         console.log(`[Autopilot][TIMED PREFILL] account #${accountId} 실패 1건은 건너뛰고 다음 예약 슬롯 계속 시도`);
-      } finally {
-        if (global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID === accountId) delete global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID;
       }
     }
   } finally {
