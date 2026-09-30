@@ -1,6 +1,7 @@
 'use strict';
 const { createApp } = require('./app');
-const { startPublishJob, startInsightsJob, startAutopilotJob, startStaleQueueJob } = require('../publish/scheduler');
+const { startPublishJob, startInsightsJob, startStaleQueueJob } = require('../publish/scheduler');
+const { startAutopilotJob } = require('../autopilot/runner');
 const { startTokenRefreshJob } = require('../threads/tokenRefresh');
 const { startLiveInsightsJob } = require('../threads/liveInsightsJob');
 const { startThreadsDiagnosticsIfEnabled } = require('../threads/threadsCollector');

@@ -175,6 +175,8 @@ function bootstrapAdmin() {
   assignOrphanAccountsToAdmin();
 }
 const migrations = [
+  `ALTER TABLE posts ADD COLUMN comment_retry_count INTEGER DEFAULT 0`,
+  `ALTER TABLE posts ADD COLUMN comment_next_retry_at TEXT`,
   `ALTER TABLE posts ADD COLUMN recipe_comment_text TEXT`,
   `ALTER TABLE posts ADD COLUMN media_items_json TEXT`,
   `ALTER TABLE posts ADD COLUMN auto_comment_enabled INTEGER DEFAULT 1`,

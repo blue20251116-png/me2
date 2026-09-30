@@ -6,18 +6,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-// Execute the real scheduler.js source with isolated DB/network/clock dependencies.
-// No production startup patches, credentials, API calls, or writes are used.
-//
-// The timed-prefill controller (refillAccount/startAutopilotJob) used to live in a separate
-// file (autopilotTimedPrefillPatch.js) that wrapped scheduler.js's exported runAutopilotOnce via
-// Module._load, so this harness could swap in a fake generator just by returning a fake
-// `scheduler` object from a mocked Module._load. Now that logic lives directly inside
-// scheduler.js, runAutopilotOnce is a real local call refillAccount makes within the same file -
-// no longer interceptable from the outside. scheduler.js's own refillAccount instead calls
-// through `module.exports.runAutopilotOnce` for exactly this reason, so this harness overrides
-// that property on the vm context's module.exports after the real file has finished loading
-// (defining every other function normally), before ever calling startAutopilotJob().
+// Executes the real src/autopilot/runner.js (plus the real slots/commentText/mediaBundle modules
+// it builds on) inside a vm with fake DB/network/clock dependencies. refillAccount calls
+// runAutopilotOnce through module.exports, so the harness swaps in a fake generator after load
+// to exercise the controller's preflight/retry/circuit logic in isolation.
 function harness({ generationError, preflightError, env = {} } = {}) {
   let now = Date.parse('2026-09-03T00:00:00Z');
   let tick;
@@ -77,18 +69,16 @@ function harness({ generationError, preflightError, env = {} } = {}) {
       createDeeplink: async () => [],
     },
     '../content/contentOnlyAutomation': { generateRecipe: async () => ({}) },
-    '../autopilot/pipeline': { buildAutopilotPost: async () => ({}) },
+    './pipeline': { buildAutopilotPost: async () => ({}) },
     '../threads/mediaImporter': { importThreadsVideo: async () => ({}) },
     '../infra/isolatedTask': { getBrowserCircuitState: () => ({ open: false }), browserInfraFailure: () => false },
   };
   const contextModule = { exports: {} };
-  const context = vm.createContext({
+  const globals = {
     require: name => {
       assert.ok(name in dependencies, name);
       return dependencies[name];
     },
-    module: contextModule,
-    exports: contextModule.exports,
     __dirname,
     process: { env },
     global: {},
@@ -103,8 +93,20 @@ function harness({ generationError, preflightError, env = {} } = {}) {
     },
     setTimeout: () => {},
     console: { log() {}, warn() {}, error() {} },
-  });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', 'publish', 'scheduler.js'), 'utf8'), context);
+  };
+  const src = rel => path.join(__dirname, '..', 'src', rel);
+  // Runs a real source file in the fake environment and returns its exports.
+  const loadReal = (rel, moduleObj = { exports: {} }) => {
+    vm.runInContext(
+      fs.readFileSync(src(rel), 'utf8'),
+      vm.createContext({ ...globals, module: moduleObj, exports: moduleObj.exports })
+    );
+    return moduleObj.exports;
+  };
+  dependencies['../threads/mediaBundle'] = loadReal('threads/mediaBundle.js');
+  dependencies['../publish/commentText'] = loadReal('publish/commentText.js');
+  dependencies['../publish/slots'] = loadReal('publish/slots.js');
+  loadReal('autopilot/runner.js', contextModule);
   contextModule.exports.runAutopilotOnce = async () => {
     generations++;
     if (generationError) throw generationError;

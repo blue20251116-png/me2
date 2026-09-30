@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildDoubleLinkComment } = require('../src/publish/scheduler');
+const { buildDoubleLinkComment } = require('../src/publish/commentText');
 const { applyCoupangReplyPreviewGuard } = require('../src/threads/threadsApi');
 
 test('buildDoubleLinkComment uses a differentiated second URL, not a literal duplicate', () => {

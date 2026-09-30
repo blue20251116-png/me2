@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { chooseImageFallback, assertHasMedia } = require('../src/publish/scheduler');
+const { chooseImageFallback, assertHasMedia } = require('../src/autopilot/runner');
 
 // 2026-09-16 (user request, viral-formula screenshot: "사진과 영상은 꼭 넣으세요"): the Coupang
 // autopilot path must never publish a text-only post - chooseImageFallback()'s own label calls

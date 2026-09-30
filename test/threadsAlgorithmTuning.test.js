@@ -99,7 +99,7 @@ test('topic tags are sanitized to Threads rules and a rejected tag is detectable
 });
 
 test('autopilot slots stay inside the 07:00-24:00 KST active window', () => {
-  const { plannedSlots } = require('../src/publish/scheduler');
+  const { plannedSlots } = require('../src/publish/slots');
   for (const target of [1, 15, 25]) {
     for (const accountId of [1, 2, 7, 42]) {
       const slots = plannedSlots('2026-10-01', target, accountId);
