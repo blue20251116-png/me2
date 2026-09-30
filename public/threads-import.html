@@ -45,6 +45,7 @@
     </div>
   </div>
 
+  <script src="/escape.js"></script>
   <script>
     let currentFilename = '';
     let currentUrl = '';
@@ -66,7 +67,7 @@
           select.innerHTML = '<option value="">등록된 계정 없음</option>';
           return;
         }
-        select.innerHTML = accounts.map(a => `<option value="${a.id}">${a.label || '계정 ' + a.id}${a.threads_username ? ' · @' + a.threads_username : ''}</option>`).join('');
+        select.innerHTML = accounts.map(a => `<option value="${Number(a.id)}">${escapeHtml(a.label || '계정 ' + a.id)}${a.threads_username ? ' · @' + escapeHtml(a.threads_username) : ''}</option>`).join('');
       } catch (err) {
         select.innerHTML = '<option value="">계정을 불러오지 못함</option>';
         document.getElementById('importStatus').textContent = err.message;

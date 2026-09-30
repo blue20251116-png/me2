@@ -145,10 +145,10 @@ async function postThreadsContainer(params, timeout) {
     return axios.post(`${GRAPH_BASE}/me/threads`, null, { params: rest, timeout });
   }
 }
-async function publishPost(accountId, { text, imageUrl, videoUrl }) {
+async function publishPost(accountId, { text, imageUrl, videoUrl, onCreated }) {
   text = sanitizePublishedThreadsText(text);
   const bundle = decodeMediaBundle(imageUrl);
-  if (bundle?.length) return publishMediaItemsPost(accountId, { text, mediaItems: bundle });
+  if (bundle?.length) return publishMediaItemsPost(accountId, { text, mediaItems: bundle, onCreated });
   if (imageUrl) imageUrl = await cacheImage(imageUrl);
   const account = getAccount(accountId);
   if (!account) throw new Error('존재하지 않는 계정입니다');
@@ -172,6 +172,8 @@ async function publishPost(accountId, { text, imageUrl, videoUrl }) {
     logThreadsError('CREATE', err, { accountId, userId: account.threads_user_id, mediaType });
     throw err;
   }
+  // Record the container before publishing so a crash mid-publish is reported, never re-posted.
+  if (onCreated) await onCreated(creationId);
   if (mediaType === 'VIDEO') {
     await waitForContainerReady(creationId, accessToken, { maxTries: 40, waitMs: 2000, label: 'VIDEO' });
     return publishContainer(creationId, accessToken, 10, 3000);
@@ -249,10 +251,10 @@ async function createCarouselParent(accountId, text, children, accessToken, { ma
   throw lastError;
 }
 
-async function publishMediaItemsPost(accountId, { text, mediaItems }) {
+async function publishMediaItemsPost(accountId, { text, mediaItems, onCreated }) {
   text = sanitizePublishedThreadsText(text);
   const items = normalizeMediaItems(mediaItems);
-  if (!items.length) return publishPost(accountId, { text });
+  if (!items.length) return publishPost(accountId, { text, onCreated });
   let originalImages = 0,
     cachedImages = 0;
   for (const item of items) {
@@ -268,6 +270,7 @@ async function publishMediaItemsPost(accountId, { text, mediaItems }) {
   if (items.length === 1) {
     try {
       return await publishPost(accountId, {
+        onCreated,
         text,
         imageUrl: items[0].type === 'IMAGE' ? items[0].url : null,
         videoUrl: items[0].type === 'VIDEO' ? items[0].url : null,
@@ -277,7 +280,7 @@ async function publishMediaItemsPost(accountId, { text, mediaItems }) {
       console.warn(
         `[Threads][MEDIA_FALLBACK] 단일 ${items[0].type} 실패 → TEXT 발행 url=${items[0].url} reason="${err.message}"`
       );
-      return publishPost(accountId, { text });
+      return publishPost(accountId, { text, onCreated });
     }
   }
   const account = getAccount(accountId);
@@ -305,7 +308,7 @@ async function publishMediaItemsPost(accountId, { text, mediaItems }) {
     console.warn(`[Threads][CAROUSEL_CREATE_FALLBACK] 생성 성공=${children.length} 실패=${createFailed.length}`);
   if (!children.length) {
     console.warn('[Threads][CAROUSEL_FALLBACK] 자식 미디어 생성 전부 실패 → TEXT 발행');
-    return publishPost(accountId, { text });
+    return publishPost(accountId, { text, onCreated });
   }
 
   console.log(`[Threads][CAROUSEL_WAIT] 자식 ${children.length}개 준비 상태 확인`);
@@ -371,13 +374,14 @@ async function publishMediaItemsPost(accountId, { text, mediaItems }) {
     console.warn(`[Threads][CAROUSEL_FALLBACK] 준비 성공=${readyChildren.length} 실패=${failedChildren.length}`);
   if (!readyChildren.length) {
     console.warn('[Threads][CAROUSEL_FALLBACK] 모든 미디어 처리 실패 → TEXT 발행');
-    return publishPost(accountId, { text });
+    return publishPost(accountId, { text, onCreated });
   }
   if (readyChildren.length === 1) {
     const survivor = readyChildren[0];
     console.warn(`[Threads][CAROUSEL_FALLBACK] 미디어 1개만 정상 → 단일 ${survivor.type}로 재생성 후 발행`);
     try {
       return await publishPost(accountId, {
+        onCreated,
         text,
         imageUrl: survivor.type === 'IMAGE' ? survivor.url : null,
         videoUrl: survivor.type === 'VIDEO' ? survivor.url : null,
@@ -385,10 +389,11 @@ async function publishMediaItemsPost(accountId, { text, mediaItems }) {
     } catch (err) {
       if (!canFallBackToText(err)) throw err;
       console.warn(`[Threads][CAROUSEL_FALLBACK] 남은 ${survivor.type}도 실패 → TEXT 발행 reason="${err.message}"`);
-      return publishPost(accountId, { text });
+      return publishPost(accountId, { text, onCreated });
     }
   }
   const creationId = await createCarouselParent(accountId, text, readyChildren, accessToken, { maxTries: 5 });
+  if (onCreated) await onCreated(creationId);
   try {
     await waitForContainerReady(creationId, accessToken, { maxTries: 30, waitMs: 2000, label: 'CAROUSEL_PARENT' });
     return publishContainer(creationId, accessToken, 10, 3000);
@@ -400,6 +405,7 @@ async function publishMediaItemsPost(accountId, { text, mediaItems }) {
     const survivor = readyChildren[0];
     try {
       return await publishPost(accountId, {
+        onCreated,
         text,
         imageUrl: survivor.type === 'IMAGE' ? survivor.url : null,
         videoUrl: survivor.type === 'VIDEO' ? survivor.url : null,
@@ -407,14 +413,15 @@ async function publishMediaItemsPost(accountId, { text, mediaItems }) {
     } catch (singleErr) {
       if (!canFallBackToText(singleErr)) throw singleErr;
       console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 단일 미디어도 실패 → TEXT 발행 reason="${singleErr.message}"`);
-      return publishPost(accountId, { text });
+      return publishPost(accountId, { text, onCreated });
     }
   }
 }
 
-async function publishCarouselPost(accountId, { text, imageUrls }) {
+async function publishCarouselPost(accountId, { text, imageUrls, onCreated }) {
   return publishMediaItemsPost(accountId, {
     text,
+    onCreated,
     mediaItems: (imageUrls || []).filter(Boolean).map(url => ({ type: 'IMAGE', url })),
   });
 }

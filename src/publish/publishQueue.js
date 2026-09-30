@@ -4,11 +4,7 @@ const api = require('../threads/threadsApi');
 const cron = require('node-cron');
 const { setState } = require('../infra/automationState');
 const { classifyPublishFailure, publishRetryable } = require('./publishRetryPolicy');
-// Same crash class as the other files fixed in the 2026-09-12 persistent-volume-full incident:
-// this ran unguarded at module load. publishQueue.js is only require()'d lazily from inside
-// server.js's app.listen() callback (via scheduler.js's startPublishJob), so a throw here is the
-// same "crash after the healthcheck could already report healthy" risk as initializeRecovery()
-// below - a flapping crash-loop on a full disk instead of a clean failure.
+// Column migrations must not crash the boot on a full disk (the process keeps serving).
 try {
   for (const definition of [
     'publish_started_at TEXT',
@@ -38,11 +34,7 @@ function retryable(err) {
   return publishRetryable(err);
 }
 function initializeRecovery() {
-  // Same crash class as db.js/web/app.js/server.js/automationState.js/sessionStore.js/
-  // benchmarkAccounts.js/coupangApi.js (2026-09-12 persistent-volume-full incident): this runs
-  // unguarded, but from inside app.listen()'s callback (server.js) - i.e. AFTER the healthcheck
-  // could already report healthy. An uncaught exception here on a full disk crashes the process
-  // anyway, producing a flapping crash-loop instead of a clean "never became healthy" failure.
+  // Posts caught mid-publish by a restart are marked for review, never re-posted blindly.
   try {
     db.prepare(
       "UPDATE posts SET status='failed',error_message='PUBLISH_OUTCOME_UNKNOWN: 재시작 전 발행 결과 확인 필요',publish_next_retry_at=NULL WHERE status='publishing'"
@@ -60,7 +52,7 @@ function startPublishJob({ buildCommentText }) {
   let running = false;
   const tick = async () => {
     if (running) return;
-    running = true;
+    running = publishing = true;
     setState(-1, 'running', 'publish');
     try {
       const now = new Date().toISOString();
@@ -140,9 +132,10 @@ function startPublishJob({ buildCommentText }) {
             `[Publish][COMMITTED] account=${account.id} post=${post.id} mediaId=${mediaId} comment=${comment}`
           );
         } catch (err) {
-          const current =
-            db.prepare('SELECT publish_creation_id,publish_retry_count FROM posts WHERE id=?').get(post.id) || {};
-          if (current.publish_creation_id && !err.creationId) err.creationId = current.publish_creation_id;
+          // Ambiguous failures (the publish call itself errored) arrive tagged with creationId by
+          // threadsApi; publish_creation_id is only a diagnostic trail, so a transient error while
+          // a container was merely being prepared stays retryable.
+          const current = db.prepare('SELECT publish_retry_count FROM posts WHERE id=?').get(post.id) || {};
           const decision = classifyPublishFailure(err, current.publish_retry_count);
           if (mediaId)
             db.prepare(
@@ -216,7 +209,7 @@ function startPublishJob({ buildCommentText }) {
         }
       }
     } finally {
-      running = false;
+      running = publishing = false;
       setState(-1, 'idle', 'publish tick complete');
     }
   };
@@ -226,4 +219,8 @@ function startPublishJob({ buildCommentText }) {
   console.log('[Publish][QUEUE] atomic claims + safe bounded pre-creation retries + persisted outcomes');
   return tick;
 }
-module.exports = { startPublishJob, retryable, initializeRecovery };
+// True while a publish tick is talking to Threads; shutdown waits for it so a post is never cut off
+// between container creation and publish.
+let publishing = false;
+const isPublishing = () => publishing;
+module.exports = { startPublishJob, retryable, initializeRecovery, isPublishing };

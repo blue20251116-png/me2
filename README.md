@@ -20,7 +20,7 @@ src/
                         stages/(레시피 검증·상품 연결·최종 문체 검사 등 단계별 함수)
   content/              voicePolicy(문체 정책·검사), personas(페르소나), 수동 글쓰기 도구들
   threads/              threadsApi(발행), threadsAuth(로그인·토큰), threadsCollector(소재 읽기, 캐시·429 대응)
-                        threadsScraper(브라우저 수집, 격리 프로세스 전용), topicTag, tokenRefresh, liveInsightsJob …
+                        threadsScraper + scraper/(브라우저 수집, 격리 프로세스 전용), topicTag, tokenRefresh …
   integrations/         aiClient+aiRequestGuard(OpenAI 호출·예산), 쿠팡, 네이버, Pexels/Pixabay, YouTube
   infra/                SQLite, 세션, 브라우저 격리 실행(browserTasks·isolatedTask), HTTP 타임아웃
 public/                 대시보드 화면
@@ -31,9 +31,17 @@ docs/                   문체 규칙 등 문서
 개발할 때:
 
 ```
-npm run check     # 린트 + 포맷 검사 + 테스트 (CI와 동일)
-npm run format    # 코드 자동 정렬
+npm run check          # 린트 + 포맷 검사 + 테스트 (CI와 동일)
+npm run format         # 코드 자동 정렬
+npm run test:coverage  # 테스트 + 파일별 커버리지
 ```
+
+보안·운영 기본값:
+- 모든 응답에 CSP·X-Frame-Options·nosniff 헤더 (`src/web/securityHeaders.js`)
+- 로그인은 IP당 15분 30회, 가입은 1시간 10회로 제한 (`src/web/loginRateLimit.js`)
+- 화면에서 서버 데이터를 HTML로 넣을 때는 항상 `escapeHtml`/`safeUrl` (`public/escape.js`)
+- API 키·토큰은 DB에 AES-256-GCM으로 암호화 저장 (`ME2_SECRET_KEY`)
+- 재배포(SIGTERM) 시 진행 중인 발행을 마치고 DB를 닫은 뒤 종료 (`src/web/shutdown.js`)
 
 `test/frontendSmoke.test.js`는 실제 Chromium으로 화면을 열어봅니다. 브라우저가 없으면
 `npx playwright install chromium`으로 설치하거나, 설치된 Chromium 경로를 `PLAYWRIGHT_CHROMIUM_EXECUTABLE`에 지정하세요
@@ -402,5 +410,5 @@ Secret 값들은 저장 후 다시 화면에 표시되지 않고, 입력칸을 �
 - 회원가입 승인 알림(이메일 등)은 없습니다 — 관리자가 직접 `/admin`에 들어가서 확인해야 합니다.
 - 결제 자동화는 없습니다 — 관리자가 오픈카톡으로 입금을 확인한 뒤 "30일 부여" 버튼으로
   수동 부여하는 구조입니다.
-- 세션 저장소가 메모리 기반이라, 서버가 재시작되면(재배포 등) 로그인이 풀립니다. 회원이
-  많아지면 Redis 같은 별도 세션 저장소로 옮기는 걸 고려해야 합니다.
+- 세션은 SQLite(`db/`)에 저장되어 재배포해도 로그인이 유지됩니다. 다만 서버 1대 기준이라,
+  여러 대로 늘리려면 세션·발행 큐를 공용 저장소로 옮겨야 합니다.

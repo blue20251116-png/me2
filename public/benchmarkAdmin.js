@@ -31,7 +31,7 @@
     return out;
   }
   function row(a) {
-    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid var(--border)"><a href="https://www.threads.com/@${a.username}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;font-weight:700">@${a.username}</a><button class="admin-btn" type="button" data-delete="${a.id}">삭제</button></div>`;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid var(--border)"><a href="https://www.threads.com/@${encodeURIComponent(a.username)}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;font-weight:700">@${escapeHtml(a.username)}</a><button class="admin-btn" type="button" data-delete="${Number(a.id)}">삭제</button></div>`;
   }
   function render() {
     const q = norm(search.value),

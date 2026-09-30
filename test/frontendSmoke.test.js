@@ -1,5 +1,5 @@
 'use strict';
-/* global document */
+/* global document, window */
 // Browser smoke test for the dashboard UI: real app + real Chromium. Fails on any uncaught page
 // JavaScript error, so a broken script include or a renamed API field shows up in CI.
 // PLAYWRIGHT_CHROMIUM_EXECUTABLE can point at a preinstalled Chromium; ME2_SKIP_BROWSER_TESTS=1
@@ -34,6 +34,17 @@ test(
         body: JSON.stringify({ email: 'admin@example.com', password: 'admin-password-1' }),
       });
       assert.equal(setup.status, 200);
+      // A hostile signup: its name/Threads id must render as text on the admin page, never run.
+      const payload = '<img src=x onerror="window.__xss=1">';
+      await fetch(`${base}/api/auth/signup`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          email: 'evil@example.com',
+          password: 'evil-password-1',
+          name: `${payload}||THREADS:${payload}`,
+        }),
+      });
 
       const page = await browser.newPage();
       const pageErrors = [];
@@ -56,6 +67,13 @@ test(
       // Admin lands on the admin page.
       await login('admin@example.com', 'admin-password-1', '/admin');
       await page.waitForLoadState('networkidle');
+      await page.waitForFunction(() => document.querySelector('#userList')?.textContent.includes('evil@example.com'));
+      assert.match(await page.locator('#userList').innerText(), /<img src=x/);
+      assert.equal(
+        await page.evaluate(() => window.__xss),
+        undefined,
+        'signup data must not execute on the admin page'
+      );
 
       // Approve a member (signup creates their Threads account), then log in as them.
       const adminCookie = (await page.context().cookies()).map(c => `${c.name}=${c.value}`).join('; ');

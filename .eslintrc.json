@@ -33,15 +33,13 @@
         "checkLoops": false
       }
     ],
-    "strict": [
-      "error",
-      "global"
-    ]
+    "strict": ["error", "global"]
   },
   "overrides": [
     {
       "files": [
         "src/threads/threadsScraper.js",
+        "src/threads/scraper/*.js",
         "src/threads/mediaImporter.js",
         "src/autopilot/stages/videoTrigger.js",
         "src/autopilot/stages/sourceExactProduct.js"
@@ -55,35 +53,31 @@
       }
     },
     {
-      "files": [
-        "public/**/*.js"
-      ],
+      "files": ["public/**/*.js"],
       "env": {
         "browser": true,
         "node": false
+      },
+      "globals": {
+        "escapeHtml": "readonly",
+        "safeUrl": "readonly"
       }
     },
     {
-      "files": [
-        "public/threadsMaterialUi.js"
-      ],
+      "files": ["public/threadsMaterialUi.js"],
       "globals": {
         "apiFetch": "readonly",
         "loadDashboard": "readonly"
       }
     },
     {
-      "files": [
-        "public/**/*.js"
-      ],
+      "files": ["public/**/*.js"],
       "rules": {
         "strict": "off"
       }
     },
     {
-      "files": [
-        "public/reachReport.js"
-      ],
+      "files": ["public/reachReport.js"],
       "globals": {
         "apiFetch": "readonly",
         "activeAccountId": "readonly"
@@ -98,9 +92,7 @@
       }
     },
     {
-      "files": [
-        "public/app.js"
-      ],
+      "files": ["public/app.js"],
       "globals": {
         "loadReachReport": "readonly"
       }

@@ -48,10 +48,17 @@ router.get('/api/site-settings', (req, res) => {
   res.json(getSiteSettings());
 });
 
-router.post('/api/auth/signup', (req, res) => {
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+router.post('/api/auth/signup', require('../loginRateLimit').signupRateLimit, (req, res) => {
   const { email, password, name } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: '이메일과 비밀번호가 필요합니다' });
   const normalizedEmail = String(email).trim().toLowerCase();
+  if (normalizedEmail.length > 254 || !EMAIL_RE.test(normalizedEmail))
+    return res.status(400).json({ error: '이메일 형식이 올바르지 않습니다' });
+  if (String(password).length < 8 || String(password).length > 200)
+    return res.status(400).json({ error: '비밀번호는 8자 이상으로 설정해주세요' });
+  if (name != null && String(name).length > 300) return res.status(400).json({ error: '이름이 너무 깁니다' });
   if (getUserByEmail(normalizedEmail)) return res.status(400).json({ error: '이미 가입된 이메일입니다' });
   try {
     createUser(normalizedEmail, hashPassword(password), name);

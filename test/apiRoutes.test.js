@@ -55,6 +55,22 @@ test('health check and crawler blocking work without a session', async () => {
   assert.equal((await anon('GET', '/login.html', null, { 'user-agent': 'facebookexternalhit/1.1' })).status, 404);
 });
 
+test('every response carries the baseline security headers', async () => {
+  const res = await anon('GET', '/login.html');
+  assert.match(res.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(res.headers.get('x-frame-options'), 'DENY');
+  assert.equal(res.headers.get('x-powered-by'), null);
+});
+
+test('signup rejects malformed emails and short passwords', async () => {
+  const bad = [
+    { email: 'not-an-email', password: 'long-enough-1', name: 'x||THREADS:x' },
+    { email: 'short@example.com', password: 'short', name: 'x||THREADS:x' },
+  ];
+  for (const body of bad) assert.equal((await anon('POST', '/api/auth/signup', body)).status, 400);
+});
+
 test('first admin setup works once, then is locked', async () => {
   assert.equal((await anon('GET', '/api/auth/admin-setup-status')).json.needsSetup, true);
   const r = await admin('POST', '/api/auth/setup-admin', { email: 'Admin@Example.com', password: 'admin-password-1' });
@@ -76,12 +92,17 @@ test('signup stays pending until an admin approves it', async () => {
   }
   // A Threads id is required, and an email can only register once (case-insensitive).
   assert.equal(
-    (await anon('POST', '/api/auth/signup', { email: 'c@example.com', password: 'x', name: 'c' })).status,
+    (await anon('POST', '/api/auth/signup', { email: 'c@example.com', password: 'long-enough-1', name: 'c' })).status,
     400
   );
   assert.equal(
-    (await anon('POST', '/api/auth/signup', { email: 'ALICE@example.com', password: 'x', name: 'a||THREADS:a' }))
-      .status,
+    (
+      await anon('POST', '/api/auth/signup', {
+        email: 'ALICE@example.com',
+        password: 'long-enough-1',
+        name: 'a||THREADS:a',
+      })
+    ).status,
     400
   );
   const pending = await alice('POST', '/api/auth/login', { email: 'alice@example.com', password: 'user-password-1' });
@@ -235,8 +256,13 @@ test('a legacy mixed-case email blocks a lowercase duplicate signup and can stil
     "INSERT INTO users(email,password_hash,name,role,status,expires_at) VALUES('Legacy@Example.com',?,'l','user','active',?)"
   ).run(hashPassword('legacy-pass-1'), new Date(Date.now() + 86400000).toISOString());
   assert.equal(
-    (await anon('POST', '/api/auth/signup', { email: 'legacy@example.com', password: 'x', name: 'x||THREADS:x' }))
-      .status,
+    (
+      await anon('POST', '/api/auth/signup', {
+        email: 'legacy@example.com',
+        password: 'long-enough-1',
+        name: 'x||THREADS:x',
+      })
+    ).status,
     400
   );
   const legacy = client();

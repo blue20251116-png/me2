@@ -186,6 +186,12 @@ function killWorkerTree(child, signal = 'SIGKILL') {
     }
   }
 }
+// Live worker processes, so shutdown can take their detached Chromium trees down with it.
+const activeWorkers = new Set();
+function killAllWorkers() {
+  for (const child of activeWorkers) killWorkerTree(child, 'SIGKILL');
+  activeWorkers.clear();
+}
 async function runWorker(workerFile, payload, timeoutMs) {
   const slotDeadline = await acquireBrowserWorker(timeoutMs);
   return new Promise((resolve, reject) => {
@@ -203,6 +209,8 @@ async function runWorker(workerFile, payload, timeoutMs) {
       reject(err);
       return;
     }
+    activeWorkers.add(child);
+    child.once('exit', () => activeWorkers.delete(child));
     let result,
       failure,
       finished = false,
@@ -295,4 +303,5 @@ module.exports = {
   resetBrowserCircuitForTests,
   descendantsOf,
   killWorkerTree,
+  killAllWorkers,
 };

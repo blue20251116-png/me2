@@ -38,7 +38,9 @@ function createApp() {
     }
     next();
   });
-  app.use(express.json());
+  app.disable('x-powered-by');
+  app.use(require('./securityHeaders'));
+  app.use(express.json({ limit: '1mb' }));
   app.set('trust proxy', 1); // Railway 등 프록시 뒤에서 세션 쿠키가 정상 동작하도록
 
   app.use(require('./routes/system')); // /healthz, /admin/emergency-cleanup (must work without DB/session)

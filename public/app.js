@@ -39,7 +39,7 @@ function renderAccountStrip() {
     .map(
       a => `
     <button class="account-chip ${a.id === activeAccountId ? 'active' : ''} ${a.connected ? 'connected' : ''}" data-id="${a.id}">
-      <span class="dot"></span>${a.label}
+      <span class="dot"></span>${escapeHtml(a.label)}
     </button>`
     )
     .join('');
@@ -206,7 +206,9 @@ async function loadDashboard() {
   if (data.postedToday.length) {
     detail.innerHTML =
       '오늘 발행: ' +
-      data.postedToday.map(p => `${fmtTime(p.posted_at)} · 조회 ${p.insights?.views ?? 0}`).join(' &nbsp;|&nbsp; ');
+      data.postedToday
+        .map(p => `${escapeHtml(fmtTime(p.posted_at))} · 조회 ${Number(p.insights?.views) || 0}`)
+        .join(' &nbsp;|&nbsp; ');
   } else {
     detail.textContent = '오늘 아직 발행된 글이 없습니다.';
   }
@@ -254,7 +256,7 @@ async function runAiGenerate() {
         (t, i) => `
       <div class="ai-candidate" data-idx="${i}">
         <span class="pick-label">버전 ${i + 1} · 클릭하면 본문에 채워짐</span>
-        <p>${t.replace(/</g, '&lt;')}</p>
+        <p>${escapeHtml(t)}</p>
       </div>`
       )
       .join('');
@@ -317,9 +319,9 @@ async function searchCoupangProducts() {
       .map(
         (p, i) => `
       <div class="product-card">
-        <img src="${p.image}" alt="" onerror="this.style.visibility='hidden'" />
+        <img src="${escapeHtml(safeUrl(p.image))}" alt="" onerror="this.style.visibility='hidden'" />
         <div class="p-info">
-          <div class="p-name">${(p.name || '').replace(/</g, '&lt;')}</div>
+          <div class="p-name">${escapeHtml(p.name)}</div>
           <div class="p-price">${fmtPrice(p.price)}</div>
         </div>
         <button type="button" class="pick-btn" data-idx="${i}">이 상품 선택</button>
@@ -379,12 +381,12 @@ function renderYoutubeResults(videos) {
     .map(
       (v, i) => `
     <div class="youtube-card">
-      <img src="${v.thumbnail}" alt="" onerror="this.style.visibility='hidden'" />
+      <img src="${escapeHtml(safeUrl(v.thumbnail))}" alt="" onerror="this.style.visibility='hidden'" />
       <div class="yt-info">
-        <div class="yt-title">${(v.title || '').replace(/</g, '&lt;')}</div>
-        <div class="yt-meta">${(v.channelTitle || '').replace(/</g, '&lt;')} · 조회수 ${fmtViews(v.views)} · ${v.duration || ''} · ${fmtYoutubeDate(v.publishedAt)}</div>
+        <div class="yt-title">${escapeHtml(v.title)}</div>
+        <div class="yt-meta">${escapeHtml(v.channelTitle)} · 조회수 ${fmtViews(v.views)} · ${escapeHtml(v.duration)} · ${fmtYoutubeDate(v.publishedAt)}</div>
         <div class="yt-actions">
-          <a href="${v.url}" target="_blank" rel="noopener noreferrer">YouTube에서 보기</a>
+          <a href="${escapeHtml(safeUrl(v.url) || '#')}" target="_blank" rel="noopener noreferrer">YouTube에서 보기</a>
           <button type="button" class="use-btn" data-idx="${i}">이 소재 사용</button>
         </div>
       </div>
@@ -908,7 +910,7 @@ function frameBadgeHtml(frameId) {
   const rank = recommendedFrameIds.indexOf(frameId);
   const label = CATEGORY_LABELS[rec.category] || rec.category;
   const star = rank >= 0 ? '⭐'.repeat(1) + (rank + 1) + '순위 ' : '';
-  return `<span class="frame-badge">${star}${label} ${rec.score}점</span>`;
+  return `<span class="frame-badge">${star}${escapeHtml(label)} ${Number(rec.score) || 0}점</span>`;
 }
 
 function renderFrameCandidates() {
@@ -929,8 +931,8 @@ function renderFrameCandidates() {
         .filter(Boolean)
         .join(' ');
       return `
-    <div class="${classes}" data-url="${f.url}" data-id="${f.id}">
-      <img src="${f.url}" alt="" />
+    <div class="${classes}" data-url="${escapeHtml(f.url)}" data-id="${escapeHtml(f.id)}">
+      <img src="${escapeHtml(safeUrl(f.url))}" alt="" />
       ${frameBadgeHtml(f.id)}
       <span class="frame-time">${fmtFrameTime(f.time)}</span>
       <span class="frame-check"></span>
@@ -1042,7 +1044,7 @@ document.getElementById('showDetailImagesBtn').addEventListener('click', async (
       .map(
         (src, i) => `
       <div class="detail-img-thumb ${src === currentImg ? 'selected' : ''}" data-idx="${i}">
-        <img src="${src}" alt="" onerror="this.parentElement.style.display='none'" />
+        <img src="${escapeHtml(safeUrl(src))}" alt="" onerror="this.parentElement.style.display='none'" />
       </div>`
       )
       .join('');
@@ -1238,14 +1240,14 @@ async function loadPosts() {
       p => `
     <tr>
       <td>
-        <span class="status-pill status-${p.status}">${statusLabel[p.status]}</span>
-        ${p.status === 'failed' && p.error_message ? `<div class="post-error-text">${friendlyPostError(p.error_message).replace(/</g, '&lt;')}</div>` : ''}
+        <span class="status-pill status-${escapeHtml(p.status)}">${escapeHtml(statusLabel[p.status] || p.status)}</span>
+        ${p.status === 'failed' && p.error_message ? `<div class="post-error-text">${escapeHtml(friendlyPostError(p.error_message))}</div>` : ''}
       </td>
-      <td class="text-cell">${(p.text || '').replace(/</g, '&lt;')}</td>
+      <td class="text-cell">${escapeHtml(p.text)}</td>
       <td>${fmtTime(p.status === 'posted' ? p.posted_at : p.scheduled_at)}</td>
       <td>–</td>
       <td><span class="status-pill status-${p.comment_status === 'posted' ? 'posted' : p.comment_status === 'failed' ? 'failed' : p.comment_status === 'pending' ? 'pending' : 'none'}">${commentStatusLabel[p.comment_status] || '해당없음'}</span></td>
-      <td>${p.status === 'pending' ? `<button class="del-btn" data-id="${p.id}">삭제</button>` : ''}</td>
+      <td>${p.status === 'pending' ? `<button class="del-btn" data-id="${Number(p.id)}">삭제</button>` : ''}</td>
     </tr>`
     )
     .join('');
