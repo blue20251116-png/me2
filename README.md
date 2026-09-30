@@ -9,18 +9,30 @@
 
 ```
 src/
-  index.js            진입점 (npm start) — 환경변수 로드, HTTP 타임아웃, DB 정리 작업, 웹 서버 시작
-  config/paths.js     데이터 위치 (DB·업로드 파일은 항상 프로젝트 루트의 db/ — Railway 볼륨 그대로)
-  web/                Express 앱 (app.js), 서버 시작 (server.js), 공통 미들웨어, routes/ (기능별 API)
-  publish/            예약 발행 스케줄러, 발행 큐, 재시도 정책
-  autopilot/          완전자동화: pipeline.js(전체 흐름) → materialEngine.js(소재→글→상품) + stages/(단계별 검증·보정)
-  content/            문체 정책(voicePolicy), 페르소나(personas), 글 생성기들
-  threads/            Threads API, 주제 태그, 토큰 자동 갱신, 인사이트 수집, 소재 수집
-  integrations/       AI(OpenAI), 쿠팡, 네이버, Pexels/Pixabay, YouTube, 상품 스크래퍼
-  infra/              SQLite, 세션, 브라우저(Playwright) 격리 실행, HTTP 타임아웃
-public/               대시보드 화면
-test/                 자동 테스트 (npm test)
-docs/                 문체 규칙 등 문서
+  index.js              진입점 (npm start): 환경변수 → HTTP 타임아웃 → DB 정리 작업 → 웹 서버
+  config/               paths.js(데이터 위치, 항상 루트의 db/), publicUrl.js(공개 주소)
+  web/                  app.js(미들웨어·라우터 연결 순서), server.js(서버+백그라운드 작업 시작),
+                        middleware.js, routes/(system·auth·admin·accounts·media·content·posts·threads)
+  publish/              scheduler.js(발행 큐·인사이트·오래된 글 정리), publishQueue.js, slots.js(발행 시간대),
+                        commentText.js(쿠팡 댓글+고지문)
+  autopilot/            runner.js(10분마다 예약 채우기) → pipeline.js(전체 흐름 한눈에)
+                        → materialEngine.js(1회 시도) = materials·vision·productMatching·postWriter
+                        stages/(레시피 검증·상품 연결·최종 문체 검사 등 단계별 함수)
+  content/              voicePolicy(문체 정책·검사), personas(페르소나), 수동 글쓰기 도구들
+  threads/              threadsApi(발행), threadsAuth(로그인·토큰), threadsCollector(소재 읽기, 캐시·429 대응)
+                        threadsScraper(브라우저 수집, 격리 프로세스 전용), topicTag, tokenRefresh, liveInsightsJob …
+  integrations/         aiClient+aiRequestGuard(OpenAI 호출·예산), 쿠팡, 네이버, Pexels/Pixabay, YouTube
+  infra/                SQLite, 세션, 브라우저 격리 실행(browserTasks·isolatedTask), HTTP 타임아웃
+public/                 대시보드 화면
+test/                   자동 테스트
+docs/                   문체 규칙 등 문서
+```
+
+개발할 때:
+
+```
+npm run check     # 린트 + 포맷 검사 + 테스트 (CI와 동일)
+npm run format    # 코드 자동 정렬
 ```
 
 ## 1. 로컬에서 먼저 확인해보기
