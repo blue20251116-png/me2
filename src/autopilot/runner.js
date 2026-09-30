@@ -6,6 +6,7 @@ const cron = require('node-cron');
 const fs = require('fs');
 const crypto = require('crypto');
 const { UPLOADS_DIR } = require('../config/paths');
+const { publicUploadUrl } = require('../config/publicUrl');
 const { db, getAccount, getUserById } = require('../infra/db');
 const coupangApi = require('../integrations/coupangApi');
 const { generateRecipe: generateContentOnlyRecipe } = require('../content/contentOnlyAutomation');
@@ -29,24 +30,6 @@ function formatThreadsBody(text) {
 
 const uploadsDir = UPLOADS_DIR;
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-function getPublicBaseUrl() {
-  const explicit = String(process.env.PUBLIC_BASE_URL || process.env.APP_URL || '')
-    .trim()
-    .replace(/\/$/, '');
-  if (/^https?:\/\//i.test(explicit)) return explicit;
-  const railway = String(process.env.RAILWAY_PUBLIC_DOMAIN || '')
-    .trim()
-    .replace(/^https?:\/\//i, '')
-    .replace(/\/$/, '');
-  if (railway) return `https://${railway}`;
-  return '';
-}
-function publicUploadUrl(filename) {
-  const base = getPublicBaseUrl();
-  if (!base)
-    throw new Error('공개 서비스 주소를 확인할 수 없습니다. PUBLIC_BASE_URL 또는 RAILWAY_PUBLIC_DOMAIN이 필요합니다.');
-  return `${base}/uploads/${encodeURIComponent(filename)}`;
-}
 const AUTOPILOT_TARGETS = ['전체', '20대 여자', '20대 남자', '30대 여자', '30대 남자', '40대 이상'];
 function saveAutopilotPost({
   accountId,

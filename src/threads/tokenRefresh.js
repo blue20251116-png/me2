@@ -43,7 +43,7 @@ function expiryIso(expiresInSeconds, now = Date.now()) {
 }
 
 async function refreshDueTokens({
-  refresh = require('./threadsApi').refreshLongLivedToken,
+  refresh = require('./threadsAuth').refreshLongLivedToken,
   now = Date.now(),
   store = require('../infra/db'),
 } = {}) {

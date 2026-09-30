@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildDoubleLinkComment } = require('../src/publish/commentText');
-const { applyCoupangReplyPreviewGuard } = require('../src/threads/threadsApi');
+const { applyCoupangReplyPreviewGuard } = require('../src/threads/publishText');
 
 test('buildDoubleLinkComment uses a differentiated second URL, not a literal duplicate', () => {
   // Regression: this used to repeat the exact same URL string twice ([l, l, disclosure]) to make

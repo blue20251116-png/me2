@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { sanitizePublishedThreadsText, applyCoupangReplyPreviewGuard } = require('../src/threads/threadsApi');
+const { sanitizePublishedThreadsText, applyCoupangReplyPreviewGuard } = require('../src/threads/publishText');
 
 test('sanitizePublishedThreadsText strips a lone trailing sentence period', () => {
   assert.equal(sanitizePublishedThreadsText('이거 실화냐.'), '이거 실화냐');

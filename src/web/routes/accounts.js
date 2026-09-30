@@ -10,7 +10,7 @@ const {
   DEFAULT_DISCLOSURE_TEMPLATE,
   canAddThreadsAccount,
 } = require('../../infra/db');
-const threadsApi = require('../../threads/threadsApi');
+const threadsApi = require('../../threads/threadsAuth');
 const { expiryIso } = require('../../threads/tokenRefresh');
 const { requireAccount } = require('../middleware');
 

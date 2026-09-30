@@ -414,13 +414,6 @@ function canAddThreadsAccount(userId) {
   if (u.role === 'admin') return true;
   return countAccountsForUser(userId) < (u.max_threads_accounts || 1);
 }
-function getPublicBaseUrlForAccount() {
-  return (
-    process.env.PUBLIC_BASE_URL ||
-    (process.env.RAILWAY_PUBLIC_DOMAIN && `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`) ||
-    ''
-  );
-}
 function normalizeKeyword(v) {
   return String(v || '')
     .toLowerCase()
@@ -471,7 +464,6 @@ function markMediaSourceUsed(id) {
 }
 module.exports = {
   db,
-  getPublicBaseUrlForAccount,
   DEFAULT_DISCLOSURE_TEMPLATE,
   listAccounts,
   listAllAccountsForSystem,

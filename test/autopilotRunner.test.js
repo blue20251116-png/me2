@@ -39,6 +39,7 @@ function harness({ generationError, preflightError, env = {} } = {}) {
       },
     },
     '../config/paths': require('../src/config/paths'),
+    '../config/publicUrl': require('../src/config/publicUrl'),
     '../infra/automationState': { setState() {}, budgetState: () => ({ available: true }) },
     '../threads/tokenRefresh': require('../src/threads/tokenRefresh'),
     '../infra/db': {
