@@ -104,10 +104,44 @@ function personasForCategory(category) {
   return pool.length ? pool : PERSONAS.filter(p => p.id === 'reaction');
 }
 
-function pickPersona({ mode, text } = {}) {
-  const category = detectPersonaCategory({ mode, text });
-  const pool = personasForCategory(category);
-  return pool[Math.floor(Math.random() * pool.length)];
+// Minimum published posts before a persona's own numbers are trusted.
+const MIN_SAMPLES = 5;
+// Share of picks spread evenly across the pool no matter what the numbers say, so a persona that
+// had a bad week (or a new one) keeps getting tried.
+const EXPLORE_SHARE = 0.3;
+
+// Probability of each persona in the pool. Without enough data (fewer than two personas with
+// MIN_SAMPLES posts) every persona is equally likely. Otherwise 70% of the weight follows each
+// persona's engagement score (see personaStats.js); personas without enough posts are scored at the
+// pool average so they are neither favoured nor starved.
+function personaWeights(pool, scores = {}) {
+  const known = pool.filter(p => (scores[p.id]?.posts || 0) >= MIN_SAMPLES);
+  if (known.length < 2) return pool.map(() => 1 / pool.length);
+  const mean = known.reduce((sum, p) => sum + scores[p.id].score, 0) / known.length;
+  const raw = pool.map(p => Math.max(0.01, known.includes(p) ? scores[p.id].score : mean));
+  const total = raw.reduce((a, b) => a + b, 0);
+  return raw.map(r => EXPLORE_SHARE / pool.length + (1 - EXPLORE_SHARE) * (r / total));
 }
 
-module.exports = { PERSONAS, detectPersonaCategory, personasForCategory, pickPersona };
+// scores: optional { [personaId]: { posts, score } } from personaStats.personaScores(accountId).
+function pickPersona({ mode, text, scores, random = Math.random } = {}) {
+  const category = detectPersonaCategory({ mode, text });
+  const pool = personasForCategory(category);
+  const weights = personaWeights(pool, scores);
+  let r = random();
+  for (let i = 0; i < pool.length; i++) {
+    r -= weights[i];
+    if (r < 0) return pool[i];
+  }
+  return pool[pool.length - 1];
+}
+
+module.exports = {
+  PERSONAS,
+  detectPersonaCategory,
+  personasForCategory,
+  personaWeights,
+  pickPersona,
+  MIN_SAMPLES,
+  EXPLORE_SHARE,
+};

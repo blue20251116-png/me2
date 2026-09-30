@@ -173,6 +173,7 @@ function fmtTime(iso) {
 
 async function loadDashboard() {
   if (!activeAccountId) return;
+  if (typeof loadReachReport === 'function') loadReachReport().catch(() => {});
   const res = await apiFetch('/api/dashboard');
   const data = await res.json();
 

@@ -41,10 +41,12 @@ function saveAutopilotPost({
   videoUrl = null,
   recipeCommentText = null,
   scheduledAt = null,
+  persona = null,
+  contentMode = null,
 }) {
   const formattedText = formatThreadsBody(text);
   db.prepare(
-    `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL)`
+    `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?)`
   ).run(
     formattedText,
     link || null,
@@ -53,7 +55,9 @@ function saveAutopilotPost({
     videoUrl || null,
     String(scheduledAt || new Date().toISOString()),
     accountId,
-    recipeCommentText
+    recipeCommentText,
+    persona || null,
+    contentMode || null
   );
 }
 function recordAutopilotLast(accountId, keyword, target) {
@@ -74,6 +78,8 @@ async function runContentOnlyAutopilot(account, target, scheduledAt = null) {
     videoUrl: null,
     recipeCommentText: r.recipeCommentText,
     scheduledAt,
+    persona: r.persona,
+    contentMode: 'recipe',
   });
   recordAutopilotLast(account.id, r.keyword, target);
 }
@@ -324,6 +330,8 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
     videoUrl: media.videoUrl,
     recipeCommentText: result.commentLead,
     scheduledAt,
+    persona: result.persona,
+    contentMode: result.mode,
   });
   const last = result.productSearchTerm || result.secretTerm || result.topic;
   recordAutopilotLast(account.id, last, target);

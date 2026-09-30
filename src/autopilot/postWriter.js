@@ -2,6 +2,7 @@
 // Writing the Threads body and comment lead in the persona voice, recipe comment repair, secret-ingredient scrubbing.
 const { normalizeVoice, voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('../content/voicePolicy');
 const { pickPersona } = require('../content/personas');
+const { personaScores } = require('../content/personaStats');
 const { callAiText, clean } = require('./aiCalls');
 
 // Replaces the secret term only as a standalone word (not inside 소금물/마늘빵), remapping a trailing
@@ -90,7 +91,7 @@ async function generatePost(accountId, { material, analysis, product, target }) 
   ]
     .filter(Boolean)
     .join(' ');
-  const persona = pickPersona({ mode: analysis.mode, text: personaText });
+  const persona = pickPersona({ mode: analysis.mode, text: personaText, scores: personaScores(accountId) });
   console.log(`[AutopilotV3][PERSONA] picked="${persona.name}"(${persona.id}) mode=${analysis.mode}`);
   const d = await callAiText(
     accountId,

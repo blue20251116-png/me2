@@ -250,6 +250,42 @@ test('a legacy mixed-case email blocks a lowercase duplicate signup and can stil
   );
 });
 
+test('reach report compares periods and ranks personas, hours and topic tags by average views', async () => {
+  const day = 86400000;
+  const insert = (persona, text, daysAgo, views, replies) => {
+    const id = db
+      .prepare("INSERT INTO posts(account_id,text,scheduled_at,status,posted_at,persona) VALUES(?,?,?,'posted',?,?)")
+      .run(
+        ids.alice,
+        text,
+        new Date().toISOString(),
+        new Date(Date.now() - daysAgo * day).toISOString(),
+        persona
+      ).lastInsertRowid;
+    db.prepare('INSERT INTO insights(post_id,views,likes,replies,reposts,quotes) VALUES(?,?,0,?,0,0)').run(
+      id,
+      views,
+      replies
+    );
+  };
+  insert('empathy', '설거지 쌓아두는 사람 나만 이래?', 3, 900, 12);
+  insert('empathy', '빨래 개다가 양말 짝 안 맞으면 버림', 4, 700, 8);
+  insert('reaction', '애기 이유식 만들 때 이거 씀', 5, 200, 1);
+  insert('reaction', '아무 주제 없는 글', 20, 100, 0); // previous period
+  const r = (await alice('GET', `/api/reach-report?accountId=${ids.alice}`)).json;
+  assert.equal(r.current.posts, 3);
+  assert.equal(r.previous.posts, 1);
+  assert.equal(r.current.avgViews, 600);
+  assert.equal(r.byPersona[0].label, '공감 썰형');
+  assert.equal(r.byPersona[0].avgViews, 800);
+  assert.deepEqual(
+    r.byTopic.map(t => t.label),
+    ['살림', '육아']
+  );
+  assert.equal(r.byHour.length > 0, true);
+  assert.equal((await bob('GET', `/api/reach-report?accountId=${ids.alice}`)).status, 403);
+});
+
 test('product scraping refuses internal addresses', async () => {
   const r = await alice('POST', '/api/scrape-product', { url: 'http://169.254.169.254/latest/meta-data/' });
   assert.equal(r.status, 422);

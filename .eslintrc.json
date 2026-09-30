@@ -79,6 +79,31 @@
       "rules": {
         "strict": "off"
       }
+    },
+    {
+      "files": [
+        "public/reachReport.js"
+      ],
+      "globals": {
+        "apiFetch": "readonly",
+        "activeAccountId": "readonly"
+      },
+      "rules": {
+        "no-unused-vars": [
+          "error",
+          {
+            "varsIgnorePattern": "^loadReachReport$"
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "public/app.js"
+      ],
+      "globals": {
+        "loadReachReport": "readonly"
+      }
     }
   ]
 }

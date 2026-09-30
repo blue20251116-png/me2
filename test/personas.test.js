@@ -163,3 +163,43 @@ test('curiosity persona no longer instructs the model to end posts with "검색�
   assert.doesNotMatch(exampleList, /검색각/, `closing-example list still tells the model to use it: ${exampleList}`);
   assert.match(curiosity.block, /검색각.*쓰지 않는다/);
 });
+
+test('persona choice is uniform until at least two personas have enough published posts', () => {
+  const { personaWeights, personasForCategory } = require('../src/content/personas');
+  const pool = personasForCategory('general');
+  assert.deepEqual(
+    personaWeights(pool, {}),
+    pool.map(() => 1 / pool.length)
+  );
+  const oneKnown = { reaction: { posts: 20, score: 900 } };
+  assert.deepEqual(
+    personaWeights(pool, oneKnown),
+    pool.map(() => 1 / pool.length)
+  );
+});
+
+test('with enough data the better-performing persona is picked more, but every persona keeps a share', () => {
+  const { personaWeights, personasForCategory, EXPLORE_SHARE } = require('../src/content/personas');
+  const pool = personasForCategory('general'); // reaction, curiosity, empathy
+  const scores = { reaction: { posts: 10, score: 100 }, curiosity: { posts: 10, score: 400 } };
+  const w = Object.fromEntries(pool.map((p, i) => [p.id, personaWeights(pool, scores)[i]]));
+  assert.ok(Math.abs(Object.values(w).reduce((a, b) => a + b, 0) - 1) < 1e-9);
+  assert.ok(w.curiosity > w.reaction, 'higher score → higher weight');
+  // empathy has no data: scored at the known average, so between the two.
+  assert.ok(w.empathy > w.reaction && w.empathy < w.curiosity);
+  for (const v of Object.values(w)) assert.ok(v >= EXPLORE_SHARE / pool.length);
+});
+
+test('pickPersona follows the weights', () => {
+  const { pickPersona } = require('../src/content/personas');
+  const scores = { reaction: { posts: 10, score: 1 }, curiosity: { posts: 10, score: 10000 } };
+  const counts = {};
+  let seed = 1;
+  const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  for (let i = 0; i < 2000; i++) {
+    const id = pickPersona({ mode: 'product', text: '무선 청소기', scores, random }).id;
+    counts[id] = (counts[id] || 0) + 1;
+  }
+  assert.ok(counts.curiosity > counts.reaction * 3, JSON.stringify(counts));
+  assert.ok(counts.reaction > 0 && counts.empathy > 0, 'exploration keeps every persona in rotation');
+});

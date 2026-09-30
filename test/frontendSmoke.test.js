@@ -80,6 +80,10 @@ test(
       await page.waitForFunction(() => /^\d+$/.test(document.querySelector('#statPending')?.textContent || ''));
       assert.match(await page.locator('#accountStrip').innerText(), /member_t/);
       assert.ok(await page.locator('script[src*="liveInsights.js"]').count(), 'live insights script is included');
+      await page.waitForFunction(
+        () => !/불러오는 중/.test(document.querySelector('#reachReport')?.textContent || '불러오는 중')
+      );
+      assert.match(await page.locator('#reachReport').innerText(), /발행된 글이 쌓이면|평균 조회수/);
 
       assert.deepEqual(pageErrors, [], `uncaught page errors:\n${pageErrors.join('\n')}`);
     } finally {

@@ -1,5 +1,6 @@
 'use strict';
 const express = require('express');
+const { buildReachReport } = require('../../threads/reachReport');
 const { db, saveMediaSource } = require('../../infra/db');
 const { requireAccount } = require('../middleware');
 
@@ -138,6 +139,12 @@ router.get('/api/dashboard', requireAccount, (req, res) => {
     hourly,
     postedToday: postedToday.map(p => ({ ...p, insights: insightsByPost[p.id] || null })),
   });
+});
+
+// What got views: this period vs the previous one, by persona / posting hour / topic tag.
+router.get('/api/reach-report', requireAccount, (req, res) => {
+  const days = Math.min(60, Math.max(3, Number(req.query.days) || 14));
+  res.json(buildReachReport(req.account.id, { days }));
 });
 
 router.get('/api/posts', requireAccount, (req, res) => {
