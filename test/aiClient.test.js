@@ -56,7 +56,7 @@ test('imageBlockFromDataUri rejects a non-data-URI input', () => {
 
 // Added 2026-09-16 alongside the OpenAI revert: the stale anthropic_api_key DB field / env
 // var may still hold a real `sk-ant-...` Claude key left over from the 2026-09-13 migration.
-// callAnthropic() must not forward that to OpenAI (guaranteed 401) - it should fall back to
+// callAI() must not forward that to OpenAI (guaranteed 401) - it should fall back to
 // the shared OPENAI_API_KEY instead, while still honoring a legitimate per-account key that
 // happens to already be OpenAI-shaped.
 test('looksLikeAnthropicKey flags an sk-ant- prefixed key', () => {

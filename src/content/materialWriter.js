@@ -1,7 +1,7 @@
 const { voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('./voicePolicy');
 const { pickPersona } = require('./personas');
 const { getAccount, getSystemApiSettings } = require('../infra/db');
-const { callAnthropicJson } = require('../integrations/aiClient');
+const { callAIJson } = require('../integrations/aiClient');
 
 function getAnthropicKey(accountId) {
   const account = getAccount(accountId);
@@ -91,14 +91,14 @@ ${isRecipe ? '- 레시피에서 핵심 재료를 숨기는 편이 자연스러�
 JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}]}`;
 
   const user = `키워드:${String(keyword || '').trim()}\n[원문]\n${cleanedSource.slice(0, 6000)}\n[작성자 추가설명]\n${cleanedReplies.slice(0, 4000)}\n[사진/영상 이해]\n${multimodal || '(별도 분석 없음)'}\n전체 입력을 이해한 뒤 가장 강한 바이럴 포인트로 써라.`;
-  const parsed = await callAnthropicJson(apiKey, { system, userContent: user, maxTokens: 3000, temperature: .82, timeout: 45000 });
+  const parsed = await callAIJson(apiKey, { system, userContent: user, maxTokens: 3000, temperature: .82, timeout: 45000 });
   const items = Array.isArray(parsed.items) ? parsed.items.slice(0, 5) : [];
   const accepted = [];
   for (const x of items) {
     try {
       let text = formatVoice(x?.text || '');
       text = await reviewSourceVoice(text, { mode: isRecipe ? 'recipe' : 'product', sourceText: cleanedSource, authorReplies: cleanedReplies, visualEvidence: multimodal }, async (system, user) => {
-        return callAnthropicJson(apiKey, { system, userContent: user, maxTokens: 900, temperature: .15, timeout: 30000 });
+        return callAIJson(apiKey, { system, userContent: user, maxTokens: 900, temperature: .15, timeout: 30000 });
       });
       text = assertVoice(text, { mode: isRecipe ? 'recipe' : 'product' });
       const comment = sanitizeGeneratedComment(x?.comment || '');

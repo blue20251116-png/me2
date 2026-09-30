@@ -3,16 +3,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS, retryAfterMs } = require('../src/integrations/aiRequestGuard');
 
-const ANTHROPIC_URL = 'https://api.openai.com/v1/chat/completions'; // matches openAiBudgetGuardPatch.js's watched URL (reverted 2026-09-16)
+const { AI_CHAT_URL } = require('../src/integrations/aiRequestGuard');
 
+// Loads a fresh guard (fresh queue/cache/dedupe state) with axios.post stubbed as the transport.
 function freshPatchWith(fakePost) {
   const axios = require('axios');
   const originalPost = axios.post;
   axios.post = fakePost;
-  const patchPath = require.resolve('../src/integrations/aiRequestGuard');
-  delete require.cache[patchPath];
-  require(patchPath);
-  return { axios, restore() { axios.post = originalPost; delete require.cache[patchPath]; } };
+  const guardPath = require.resolve('../src/integrations/aiRequestGuard');
+  delete require.cache[guardPath];
+  const guard = require(guardPath);
+  return { guard, restore() { axios.post = originalPost; delete require.cache[guardPath]; } };
 }
 
 // The in-flight dedupe used to live in a separate file (openAiRequestDedupePatch.js) that wrapped
@@ -30,8 +31,8 @@ test('identical concurrent Anthropic requests share one upstream call', async ()
   try {
     const body = { model: 'claude-sonnet-4-6', temperature: 0.2, max_tokens: 100, messages: [{ role: 'user', content: 'same' }] };
     const config = { headers: { 'x-api-key': 'key-a' } };
-    const a = ctx.axios.post(ANTHROPIC_URL, body, config);
-    const b = ctx.axios.post(ANTHROPIC_URL, body, config);
+    const a = ctx.guard.guardedPost(AI_CHAT_URL, body, config);
+    const b = ctx.guard.guardedPost(AI_CHAT_URL, body, config);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(calls, 1);
     release();
@@ -46,8 +47,8 @@ test('different Anthropic prompts are not coalesced', async () => {
   try {
     const config = { headers: { 'x-api-key': 'key-a' } };
     await Promise.all([
-      ctx.axios.post(ANTHROPIC_URL, { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'a' }] }, config),
-      ctx.axios.post(ANTHROPIC_URL, { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'b' }] }, config),
+      ctx.guard.guardedPost(AI_CHAT_URL, { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'a' }] }, config),
+      ctx.guard.guardedPost(AI_CHAT_URL, { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'b' }] }, config),
     ]);
     assert.equal(calls, 2);
   } finally { ctx.restore(); }
@@ -63,8 +64,8 @@ test('identical-content requests from two different accounts (different x-api-ke
   try {
     const body = { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'same' }] };
     await Promise.all([
-      ctx.axios.post(ANTHROPIC_URL, body, { headers: { 'x-api-key': 'key-a' } }),
-      ctx.axios.post(ANTHROPIC_URL, body, { headers: { 'x-api-key': 'key-b' } }),
+      ctx.guard.guardedPost(AI_CHAT_URL, body, { headers: { 'x-api-key': 'key-a' } }),
+      ctx.guard.guardedPost(AI_CHAT_URL, body, { headers: { 'x-api-key': 'key-b' } }),
     ]);
     assert.equal(calls, 2);
   } finally { ctx.restore(); }
@@ -75,8 +76,8 @@ test('non-Anthropic requests bypass dedupe and the budget guard entirely', async
   const ctx = freshPatchWith(async () => { calls += 1; return { data: {} }; });
   try {
     await Promise.all([
-      ctx.axios.post('https://example.com/api', { same: true }, {}),
-      ctx.axios.post('https://example.com/api', { same: true }, {}),
+      ctx.guard.guardedPost('https://example.com/api', { same: true }, {}),
+      ctx.guard.guardedPost('https://example.com/api', { same: true }, {}),
     ]);
     assert.equal(calls, 2);
   } finally { ctx.restore(); }

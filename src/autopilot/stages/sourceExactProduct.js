@@ -1,3 +1,4 @@
+const { launchChromium } = require('../../infra/browserLauncher');
 const axios = require('axios');
 const { collectPostDetails } = require('../../threads/benchmarkAccounts');
 
@@ -172,8 +173,7 @@ async function resolveWithBrowser(sourceUrl) {
   }
   let browser;
   try {
-    const playwright = require('playwright');
-    browser = await playwright.chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+    browser = await launchChromium({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
     const page = await browser.newPage({
       locale: 'ko-KR',
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',

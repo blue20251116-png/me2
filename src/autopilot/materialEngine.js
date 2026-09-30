@@ -4,7 +4,7 @@ const axios = require('axios');
 const { db, getAccount, getSystemApiSettings } = require('../infra/db');
 const { collectBenchmarkMaterials, collectPostDetails, markUsedPost } = require('../threads/benchmarkAccounts');
 const coupangApi = require('../integrations/coupangApi');
-const { callAnthropic, extractJson, imageBlockFromDataUri } = require('../integrations/aiClient');
+const { callAI, extractJson, imageBlockFromDataUri } = require('../integrations/aiClient');
 
 function getAnthropicKey(accountId){
   const a=getAccount(accountId),s=getSystemApiSettings();
@@ -13,7 +13,7 @@ function getAnthropicKey(accountId){
 async function callClaudeText(accountId,system,user,{maxTokens=1800,temperature=.55}={}){
   const apiKey=getAnthropicKey(accountId);
   if(!apiKey)throw new Error('Anthropic API 키가 설정되지 않았습니다');
-  const raw=await callAnthropic(apiKey,{system,userContent:user,maxTokens,temperature,timeout:45000});
+  const raw=await callAI(apiKey,{system,userContent:user,maxTokens,temperature,timeout:45000});
   if(!raw)throw new Error('AI 결과가 비어 있습니다');
   return extractJson(raw);
 }
@@ -39,7 +39,7 @@ async function callClaudeVision(accountId,system,text,imageUrls,{maxTokens=1400,
   const safeImageUrls=await prepareVisionImageUrls(imageUrls);
   if(!safeImageUrls.length)throw new Error('VISION_IMAGE_CACHE_EMPTY');
   for(const dataUri of safeImageUrls)content.push(imageBlockFromDataUri(dataUri));
-  const raw=await callAnthropic(apiKey,{system,userContent:content,maxTokens,temperature,timeout:45000});
+  const raw=await callAI(apiKey,{system,userContent:content,maxTokens,temperature,timeout:45000});
   if(!raw)throw new Error('Vision 결과가 비어 있습니다');
   return extractJson(raw);
 }

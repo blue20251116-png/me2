@@ -3,7 +3,7 @@ const { searchFoodPhotos: searchPexels } = require('../integrations/pexelsApi');
 const { searchFoodPhotos: searchPixabay } = require('../integrations/pixabayApi');
 const { voiceGuide, assertVoice } = require('./voicePolicy');
 const { pickPersona, PERSONAS } = require('./personas');
-const { callAnthropic, callAnthropicJson, imageBlock } = require('../integrations/aiClient');
+const { callAI, callAIJson, imageBlock } = require('../integrations/aiClient');
 const REACTION_PERSONA = PERSONAS.find(p => p.id === 'reaction');
 
 const FALLBACK_TOPICS = [
@@ -21,8 +21,8 @@ function getAnthropicKey(accountId) {
 async function callClaudeText(accountId, system, user, { maxTokens = 1000, json = false, temperature = 0.85 } = {}) {
   const apiKey = getAnthropicKey(accountId);
   if (!apiKey) throw new Error('Anthropic API 키가 설정되지 않았습니다');
-  if (json) return callAnthropicJson(apiKey, { system, userContent: user, maxTokens, temperature, timeout: 30000 });
-  return callAnthropic(apiKey, { system, userContent: user, maxTokens, temperature, timeout: 30000 });
+  if (json) return callAIJson(apiKey, { system, userContent: user, maxTokens, temperature, timeout: 30000 });
+  return callAI(apiKey, { system, userContent: user, maxTokens, temperature, timeout: 30000 });
 }
 
 // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): same hardcoded-list
@@ -112,7 +112,7 @@ async function visionCheck(accountId, dish, imageUrl) {
   const apiKey = getAnthropicKey(accountId);
   if (!apiKey) return false;
   try {
-    const d = await callAnthropicJson(apiKey, {
+    const d = await callAIJson(apiKey, {
       system: '음식 사진 검수기다. 목표 음식과 완전히 동일하거나 일반 사용자가 봤을 때 같은 종류의 완성요리로 자연스럽게 받아들일 수 있으면 accept=true. 조리 전 재료, 포장제품, 완전히 다른 음식, 음식이 아닌 이미지는 false. 토핑/그릇/고명/재료 배치 차이는 허용한다. JSON={"accept":true/false,"confidence":0-100,"reason":"짧은 이유"}',
       userContent: [
         { type: 'text', text: `목표 음식: ${dish}\n이 사진이 Threads 레시피 대표사진으로 써도 자연스러운 같은 종류의 완성요리인지 판정해.` },

@@ -1,3 +1,4 @@
+const { launchChromium } = require('../infra/browserLauncher');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const fs = require('fs');
@@ -135,7 +136,7 @@ async function extractCandidatesWithBrowser(sourceUrl) {
   let poster = '';
   let title = '';
   try {
-    browser = await playwright.chromium.launch({
+    browser = await launchChromium({
       headless: true,
       args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--autoplay-policy=no-user-gesture-required'],
     });

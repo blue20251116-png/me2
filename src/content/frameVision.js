@@ -1,6 +1,6 @@
 const { resolveModelKeys } = require('./aiCaption');
 const { getAccount } = require('../infra/db');
-const { callAnthropic, extractJson, imageBlock } = require('../integrations/aiClient');
+const { callAI, extractJson, imageBlock } = require('../integrations/aiClient');
 
 // 추출된 영상 프레임들을 Claude Vision으로 분석해서, Threads 게시 이미지로 쓰기 좋은 순서로
 // 추천해주는 모듈. 사람의 실제 신원/유명인 이름은 절대 판별하지 않는다 — "사람이 잘 보이는
@@ -71,7 +71,7 @@ async function analyzeFrames(accountId, frames) {
     content.push(imageBlock(f.url));
   }
 
-  const text = await callAnthropic(anthropicKey, {
+  const text = await callAI(anthropicKey, {
     system: buildSystemPrompt(),
     userContent: content,
     maxTokens: 1500,

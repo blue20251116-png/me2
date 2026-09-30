@@ -1,8 +1,7 @@
 'use strict';
-// Child process that runs one Playwright task and exits (see isolatedTask.js). The parent forks
-// it with an empty execArgv, so it sets up its own HTTP deadline and Chromium launch guard first.
-require('./httpDeadline');
-require('./browserLauncher');
+// Child process that runs one Playwright task and exits (see isolatedTask.js). Task modules launch
+// Chromium through infra/browserLauncher.launchChromium(), which applies the container-safe flags.
+require('./httpDeadline').installHttpDeadline();
 
 // Only these module methods may be invoked from the parent. Keys are stable task names.
 const TASKS = {

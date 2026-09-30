@@ -1,3 +1,4 @@
+const { launchChromium } = require('../infra/browserLauncher');
 const { db } = require('../infra/db');
 
 // Same crash-at-boot class of bug found and fixed across db.js/bootstrap.js/server.js/
@@ -65,8 +66,7 @@ function isUsedPost(url) { return false; }
 function shuffle(items) { const a=[...items]; for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
 
 async function openBrowser() {
-  const playwright = require('playwright');
-  const browser = await playwright.chromium.launch({ headless:true, args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu'] });
+  const browser = await launchChromium({ headless:true, args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu'] });
   const __threadsFs=require('fs');
   const __threadsPath=require('path');
   const statePath=process.env.THREADS_STORAGE_STATE_PATH||require('path').join(require('../config/paths').DATA_DIR,'threads-storage-state.json');
@@ -389,7 +389,6 @@ async function videoFallbackFromProfile(url, username) {
   }
 }
 async function extractPlayableVideoUrls(postUrl) {
-  const playwright = require('playwright');
   let browser;
   const found = [];
   const add = url => {
@@ -399,7 +398,7 @@ async function extractPlayableVideoUrls(postUrl) {
   };
 
   try {
-    browser = await playwright.chromium.launch({
+    browser = await launchChromium({
       headless: true,
       args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--autoplay-policy=no-user-gesture-required'],
     });
@@ -575,8 +574,7 @@ async function collectFallbackDetails(url, username) {
   // 2) 상세 페이지를 새 브라우저로 열어 body/meta/작성자 댓글을 느슨하게 수집한다.
   let browser;
   try {
-    const playwright = require('playwright');
-    browser = await playwright.chromium.launch({
+    browser = await launchChromium({
       headless: true,
       args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
     });

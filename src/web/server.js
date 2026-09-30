@@ -1,5 +1,4 @@
 const { UPLOADS_DIR, PUBLIC_DIR } = require('../config/paths');
-require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');

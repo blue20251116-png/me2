@@ -2,9 +2,9 @@
   "name": "threads-scheduler",
   "version": "1.0.0",
   "description": "스레드(Threads) 예약 발행 + 조회수 대시보드",
-  "main": "src/web/bootstrap.js",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node -r ./src/infra/dbRetentionBootstrap.js -r ./src/infra/httpDeadline.js -r ./src/infra/browserLauncher.js -r ./src/infra/threadsPersistentBrowserSessionPatch.js -r ./src/integrations/aiRequestGuard.js src/web/bootstrap.js",
+    "start": "node src/index.js",
     "test": "node --test test/*.test.js"
   },
   "keywords": [],

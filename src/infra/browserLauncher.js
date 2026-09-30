@@ -1,7 +1,5 @@
 'use strict';
 
-const Module = require('module');
-
 // Keep Railway/container flags minimal. --single-process forces Chromium into
 // an atypical process model and was present on every observed SIGTRAP launch.
 // The parent isolatedTask circuit breaker now owns service-wide crash control.
@@ -79,42 +77,27 @@ function isLaunchCrash(err) {
   return /SIGTRAP|Target page, context or browser has been closed|browserType\.launch/i.test(msg);
 }
 
-function patchPlaywright(exp) {
-  if (!exp?.chromium || exp.chromium.__me2RailwayGuarded) return exp;
-  const chromium = exp.chromium;
-  const originalLaunch = chromium.launch.bind(chromium);
-  chromium.launch = async function guardedLaunch(options = {}) {
-    await acquireBrowserSlot();
-    let released = false;
-    const release = () => { if (!released) { released = true; releaseBrowserSlot(); } };
-    try {
-      const launchOptions = { ...options, headless: options.headless !== false, args: mergeSafeArgs(options.args) };
-      const browser = await originalLaunch(launchOptions);
-      const originalClose = typeof browser.close === 'function' ? browser.close.bind(browser) : null;
-      if (originalClose) browser.close = async (...args) => { try { return await originalClose(...args); } finally { release(); } };
-      if (typeof browser.once === 'function') browser.once('disconnected', release);
-      return browser;
-    } catch (err) {
-      if (isLaunchCrash(err)) {
-        cooldownUntil = Math.max(cooldownUntil, Date.now() + FAILURE_COOLDOWN_MS);
-        console.error(`[Railway Browser Guard] Chromium launch crash detected; workerCooldown=${FAILURE_COOLDOWN_MS}ms`);
-      }
-      release(); throw err;
+// Every Chromium launch in this app goes through here (explicitly - no more hooking require()).
+// Adds the container-safe flags above, serializes launches, and backs off after a launch crash.
+async function launchChromium(options = {}) {
+  const { chromium } = require('playwright');
+  await acquireBrowserSlot();
+  let released = false;
+  const release = () => { if (!released) { released = true; releaseBrowserSlot(); } };
+  try {
+    const browser = await chromium.launch({ ...options, headless: options.headless !== false, args: mergeSafeArgs(options.args) });
+    const originalClose = typeof browser.close === 'function' ? browser.close.bind(browser) : null;
+    if (originalClose) browser.close = async (...args) => { try { return await originalClose(...args); } finally { release(); } };
+    if (typeof browser.once === 'function') browser.once('disconnected', release);
+    return browser;
+  } catch (err) {
+    if (isLaunchCrash(err)) {
+      cooldownUntil = Math.max(cooldownUntil, Date.now() + FAILURE_COOLDOWN_MS);
+      console.error(`[Browser] Chromium launch crash detected; cooldown=${FAILURE_COOLDOWN_MS}ms`);
     }
-  };
-  Object.defineProperty(chromium, '__me2RailwayGuarded', { value: true });
-  console.log(`[Railway Browser Guard] Playwright Chromium guarded · concurrency=${MAX_BROWSER_CONCURRENCY} · safeArgs=${SAFE_ARGS.join(',')}`);
-  return exp;
+    release();
+    throw err;
+  }
 }
 
-if (!global.__ME2_RAILWAY_BROWSER_GUARD__) {
-  global.__ME2_RAILWAY_BROWSER_GUARD__ = true;
-  const originalLoad = Module._load;
-  Module._load = function railwayBrowserGuardLoad(request, parent, isMain) {
-    const exp = originalLoad.apply(this, arguments);
-    if (request === 'playwright' || request === 'playwright-core') return patchPlaywright(exp);
-    return exp;
-  };
-}
-
-module.exports = { SAFE_ARGS, mergeSafeArgs, isLaunchCrash };
+module.exports = { SAFE_ARGS, mergeSafeArgs, isLaunchCrash, launchChromium };

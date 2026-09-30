@@ -1,3 +1,4 @@
+const { launchChromium } = require('../../infra/browserLauncher');
 async function detectThreadsVideo(postUrl) {
   if (process.env.ME2_BROWSER_WORKER !== '1') {
     try { return await require('../../infra/isolatedTask').isolatedBrowserTask('videoTrigger', 'detectThreadsVideo', [postUrl], 45000); }
@@ -15,7 +16,7 @@ async function detectThreadsVideo(postUrl) {
 
   let browser;
   try {
-    browser = await playwright.chromium.launch({
+    browser = await launchChromium({
       headless: true,
       args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--autoplay-policy=no-user-gesture-required'],
     });

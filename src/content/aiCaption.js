@@ -1,7 +1,7 @@
 const { getAccount, getSystemApiSettings } = require('../infra/db');
 const { voiceGuide } = require('./voicePolicy');
 const { pickPersona } = require('./personas');
-const { callAnthropic } = require('../integrations/aiClient');
+const { callAI } = require('../integrations/aiClient');
 
 // OpenAI 완전히 걷어내고 Claude(Anthropic)만 쓰도록 전환 (2026-09-13): 이제 Anthropic 키도
 // OpenAI가 쓰던 것과 같은 SaaS 공용키 우선순위를 따른다 — 운영자가 system_api_settings에 등록한
@@ -343,7 +343,7 @@ function splitVariants(text) {
 // Anthropic
 // ----------------------------------------------------
 async function generateWithAnthropic(apiKey, userMessage, personaBlock) {
-  const text = await callAnthropic(apiKey, {
+  const text = await callAI(apiKey, {
     system: makeSystemPrompt(personaBlock),
     userContent: userMessage,
     maxTokens: 1200,
@@ -397,7 +397,7 @@ async function suggestKeywordCandidates(accountId, target) {
   if (!anthropicKey) {
     throw new Error('이 계정에 Anthropic API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
   }
-  const text = await callAnthropic(anthropicKey, {
+  const text = await callAI(anthropicKey, {
     system: makeKeywordSystemPrompt(),
     userContent: userMessage,
     maxTokens: 300,
@@ -435,7 +435,7 @@ async function suggestYoutubeSearchKeywords(accountId, productName) {
   if (!anthropicKey) {
     throw new Error('이 계정에 Anthropic API 키가 설정되지 않았습니다');
   }
-  const text = await callAnthropic(anthropicKey, {
+  const text = await callAI(anthropicKey, {
     system: makeYoutubeKeywordSystemPrompt(),
     userContent: userMessage,
     maxTokens: 150,

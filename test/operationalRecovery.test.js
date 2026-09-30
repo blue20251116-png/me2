@@ -53,9 +53,13 @@ test('isolated browser workers are serialized by the parent limiter', async () =
   assert.ok(Date.now()-started >= 250,'workers must not overlap at default concurrency=1');
 });
 
-test('browser worker loads Railway guard before task modules', () => {
+test('browser worker installs the HTTP deadline before task modules, and every Chromium launch goes through launchChromium', () => {
   const source=fs.readFileSync(path.join(repo,'src','infra','isolatedBrowserWorker.js'),'utf8');
-  assert.ok(source.indexOf("require('./browserLauncher')") < source.indexOf('require(task.path)'));
+  assert.ok(source.indexOf("installHttpDeadline()") < source.indexOf('require(task.path)'));
+  const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(d,e.name)):[path.join(d,e.name)]);
+  for (const file of walk(path.join(repo,'src')).filter(f=>f.endsWith('.js'))) {
+    assert.doesNotMatch(fs.readFileSync(file,'utf8'),/playwright\.chromium\.launch\(/,`${file} bypasses launchChromium`);
+  }
 });
 
 test('session survives restart and expired sessions are rejected', () => {

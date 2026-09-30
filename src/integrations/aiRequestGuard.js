@@ -4,16 +4,15 @@ const axios = require('axios');
 const crypto = require('crypto');
 const { budgetState, reserveRequest } = require('../infra/automationState');
 
-// OpenAI 완전히 걷어내고 Claude(Anthropic)로 전환 (2026-09-13): 이 파일이 지키던 안전장치
-// (동시성 1 · 최소 간격 · 시간당 호출 상한 · 저온도 분석 캐시 · 입력 글자수 캡)는 프로바이더가
-// 바뀌어도 여전히 필요하므로, 감시 대상 URL만 Anthropic 엔드포인트로 옮기고 나머지 로직은
-// 그대로 유지한다. 환경변수 이름(OPENAI_*)은 실제 배포 환경(Railway)에 이미 이 이름으로
-// 설정돼 있을 수 있어 그대로 두었다 — 이제는 프로바이더 무관 "AI 요청 예산" 설정으로 읽는다.
-// REVERTED 2026-09-16 (user request): watches OpenAI's endpoint again, since
-// anthropicClient.js was switched back to calling OpenAI. Kept the ANTHROPIC_URL
-// identifier name to minimize diff - see anthropicClient.js's own top-of-file note.
-const ANTHROPIC_URL = 'https://api.openai.com/v1/chat/completions';
-const originalPost = axios.post.bind(axios);
+// Every OpenAI chat/completions call goes through guardedPost() (called explicitly by
+// aiClient.js - this used to be a global axios.post override loaded with `node -r`). It enforces
+// concurrency 1, a minimum gap between calls, an hourly request cap shared across restarts
+// (automationState), a cache for low-temperature analysis calls, an input-size cap, one retry on
+// a TPM 429, and in-flight dedupe of identical concurrent requests per credential.
+// Env names keep their historical OPENAI_* prefix because they are already set on Railway.
+const AI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+// Resolved per call so tests (and nothing else) can stub the transport.
+const originalPost = (...args) => axios.post(...args);
 const inFlight = new Map();
 let queue = Promise.resolve();
 let lastStartAt = 0;
@@ -25,7 +24,7 @@ const analysisCache = new Map();
 const MAX_CACHE = 1000;
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-function isAnthropic(url) { return String(url || '') === ANTHROPIC_URL; }
+function isAiChatUrl(url) { return String(url || '') === AI_CHAT_URL; }
 function errorMessage(e) { return String(e?.response?.data?.error?.message || e?.message || ''); }
 function isTpm429(e) {
   if (Number(e?.response?.status || 0) !== 429) return false;
@@ -276,8 +275,8 @@ function requestKey(data, config) {
   return crypto.createHash('sha256').update(stable).digest('hex');
 }
 
-axios.post = function dedupedBudgetGuardedPost(url, data, config) {
-  if (!isAnthropic(url)) return originalPost(url, data, config);
+function guardedPost(url, data, config) {
+  if (!isAiChatUrl(url)) return originalPost(url, data, config);
 
   const key = requestKey(data, config);
   const existing = inFlight.get(key);
@@ -292,9 +291,6 @@ axios.post = function dedupedBudgetGuardedPost(url, data, config) {
   queue = task.catch(() => {});
   inFlight.set(key, task);
   return task;
-};
+}
 
-console.log(`[AI][IN-FLIGHT DEDUPE] enabled target=${ANTHROPIC_URL}; identical concurrent requests share one credential-scoped budgeted call`);
-console.log(`[AI][BUDGET GUARD] target=${ANTHROPIC_URL} concurrency=1 minGap=${MIN_GAP_MS}ms hourlyCap=${MAX_REQUESTS_PER_HOUR} textCap=${MAX_TEXT_CHARS}chars cache<=0.2 ttl=${Math.round(ANALYSIS_CACHE_MS / 3600000)}h`);
-
-module.exports = { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS, retryAfterMs };
+module.exports = { guardedPost, truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS, retryAfterMs, AI_CHAT_URL };

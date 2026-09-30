@@ -1,16 +1,11 @@
 'use strict';
-const axios = require('axios');
 
-// REVERTED 2026-09-16 (user request, after Claude API cost became unaffordable):
-// this file used to call Anthropic's Messages API. It now calls OpenAI's chat/completions
-// endpoint again, but keeps the file name and every exported function name unchanged
-// (callAnthropic/callAnthropicJson/imageBlock/imageBlockFromDataUri) so none of its 6
-// callers (aiCaption.js, contentOnlyAutomation.js, autopilotMaterialEngine.js,
-// threadsMaterialWriter.js, recipeQualityPatch.js, frameVision.js) or their tests need to
-// change - the same "keep the established name, swap the target" precedent this codebase
-// already used in openAiBudgetGuardPatch.js when it moved the other direction on 2026-09-13.
-// openAiBudgetGuardPatch.js's own ANTHROPIC_URL constant was updated to match this file's URL.
-const ANTHROPIC_URL = 'https://api.openai.com/v1/chat/completions';
+const { guardedPost, AI_CHAT_URL } = require('./aiRequestGuard');
+
+// AI text/vision client. Calls OpenAI chat/completions (gpt-4o-mini by default) through
+// aiRequestGuard.guardedPost(), which owns rate limiting, budget and dedupe.
+// The exported names callAI/callAIJson are historical (the app briefly used Claude);
+// callAI/callAIJson are the preferred aliases.
 const DEFAULT_MODEL = process.env.OPENAI_TEXT_MODEL || 'gpt-4o-mini';
 
 function extractText(res) {
@@ -59,14 +54,14 @@ function looksLikeAnthropicKey(k) {
 }
 
 // userContent may be a plain string or an array of OpenAI content parts (for vision).
-async function callAnthropic(apiKey, { system, userContent, model = DEFAULT_MODEL, maxTokens = 1200, temperature = 0.7, timeout = 30000 } = {}) {
+async function callAI(apiKey, { system, userContent, model = DEFAULT_MODEL, maxTokens = 1200, temperature = 0.7, timeout = 30000 } = {}) {
   const key = (!apiKey || looksLikeAnthropicKey(apiKey)) ? (process.env.OPENAI_API_KEY || apiKey) : apiKey;
   if (!key) throw new Error('OpenAI API 키가 설정되지 않았습니다');
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: userContent });
-  const res = await axios.post(
-    ANTHROPIC_URL,
+  const res = await guardedPost(
+    AI_CHAT_URL,
     { model, max_tokens: maxTokens, temperature, messages },
     {
       headers: {
@@ -81,8 +76,8 @@ async function callAnthropic(apiKey, { system, userContent, model = DEFAULT_MODE
   return text;
 }
 
-async function callAnthropicJson(apiKey, options) {
-  const text = await callAnthropic(apiKey, options);
+async function callAIJson(apiKey, options) {
+  const text = await callAI(apiKey, options);
   return extractJson(text);
 }
 
@@ -106,10 +101,10 @@ function imageBlockFromDataUri(dataUri) {
 }
 
 module.exports = {
-  ANTHROPIC_URL,
+  AI_CHAT_URL,
   DEFAULT_MODEL,
-  callAnthropic,
-  callAnthropicJson,
+  callAI,
+  callAIJson,
   extractText,
   extractJson,
   imageBlock,
