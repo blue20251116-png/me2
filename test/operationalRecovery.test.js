@@ -94,7 +94,7 @@ test('isolated browser workers are serialized by the parent limiter', async () =
 
 test('browser worker installs the HTTP deadline before task modules, and every Chromium launch goes through launchChromium', () => {
   const source = fs.readFileSync(path.join(repo, 'src', 'infra', 'isolatedBrowserWorker.js'), 'utf8');
-  assert.ok(source.indexOf('installHttpDeadline()') < source.indexOf('require(task.path)'));
+  assert.ok(source.indexOf('installHttpDeadline()') < source.indexOf('runTask(moduleName'));
   const walk = d =>
     fs
       .readdirSync(d, { withFileTypes: true })

@@ -3,6 +3,7 @@ const { createApp } = require('./app');
 const { startPublishJob, startInsightsJob, startAutopilotJob, startStaleQueueJob } = require('../publish/scheduler');
 const { startTokenRefreshJob } = require('../threads/tokenRefresh');
 const { startLiveInsightsJob } = require('../threads/liveInsightsJob');
+const { startThreadsDiagnosticsIfEnabled } = require('../threads/threadsCollector');
 
 function startServer() {
   const app = createApp();
@@ -15,6 +16,7 @@ function startServer() {
     startStaleQueueJob();
     startTokenRefreshJob();
     startLiveInsightsJob();
+    startThreadsDiagnosticsIfEnabled();
   });
 }
 

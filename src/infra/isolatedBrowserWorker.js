@@ -1,25 +1,13 @@
 'use strict';
-// Child process that runs one Playwright task and exits (see isolatedTask.js). Task modules launch
-// Chromium through infra/browserLauncher.launchChromium(), which applies the container-safe flags.
+// Child process that runs one Playwright task from browserTasks.js and exits (see isolatedTask.js).
+// Task modules launch Chromium through infra/browserLauncher.launchChromium().
 require('./httpDeadline').installHttpDeadline();
-
-// Only these module methods may be invoked from the parent. Keys are stable task names.
-const TASKS = {
-  benchmarkAccounts: {
-    path: '../threads/benchmarkAccounts',
-    methods: ['collectBenchmarkMaterials', 'collectPostDetails', 'collectProfilePosts'],
-  },
-  mediaImporter: { path: '../threads/mediaImporter', methods: ['importThreadsVideo', 'extractCandidatesWithBrowser'] },
-  sourceExactProduct: { path: '../autopilot/stages/sourceExactProduct', methods: ['resolveWithBrowser'] },
-  videoTrigger: { path: '../autopilot/stages/videoTrigger', methods: ['detectThreadsVideo'] },
-};
+const { runTask } = require('./browserTasks');
 
 process.once('message', async ({ moduleName, method, args, accountId }) => {
   try {
-    const task = TASKS[moduleName];
-    if (!task?.methods.includes(method)) throw new Error('Unsupported browser task');
     global.__ME2_CURRENT_AUTOPILOT_ACCOUNT_ID = accountId;
-    const value = await require(task.path)[method](...args);
+    const value = await runTask(moduleName, method, args);
     process.send({ ok: true, value });
   } catch (err) {
     process.send({ ok: false, error: { message: err.message, code: err.code } });

@@ -1,3 +1,4 @@
+const { runBrowserTask } = require('../infra/isolatedTask');
 const { launchChromium } = require('../infra/browserLauncher');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -128,7 +129,7 @@ async function fetchPostPage(url) {
   return String(response.data || '');
 }
 
-async function extractCandidatesWithBrowser(sourceUrl) {
+async function extractCandidatesInBrowser(sourceUrl) {
   // Playwright is an optional dependency; bail out quietly when it isn't installed.
   try {
     require.resolve('playwright');
@@ -390,7 +391,7 @@ async function tryDownloadCandidates(candidates, outputDir, requestHeaders = {})
   return { file: null, mediaUrl: '', lastError };
 }
 
-async function importThreadsVideo({ url, outputDir }) {
+async function importThreadsVideoInBrowser({ url, outputDir }) {
   const sourceUrl = validateThreadsUrl(url);
   let direct = { videos: [], poster: '', title: '' };
 
@@ -424,7 +425,7 @@ async function importThreadsVideo({ url, outputDir }) {
     }
   }
 
-  const browserFound = await extractCandidatesWithBrowser(sourceUrl);
+  const browserFound = await extractCandidatesInBrowser(sourceUrl);
   if (browserFound.videos.length) {
     const saved = await tryDownloadCandidates(
       browserFound.videos,
@@ -456,10 +457,15 @@ async function importThreadsVideo({ url, outputDir }) {
   );
 }
 
-module.exports = { validateThreadsUrl, extractCandidates, extractCandidatesWithBrowser, importThreadsVideo };
-if (process.env.ME2_BROWSER_WORKER !== '1') {
-  const { isolatedBrowserTask } = require('../infra/isolatedTask');
-  for (const method of ['importThreadsVideo', 'extractCandidatesWithBrowser']) {
-    module.exports[method] = (...args) => isolatedBrowserTask('mediaImporter', method, args, 180000);
-  }
+// App-facing entry point: the whole import (browser + download) runs in the isolated worker.
+function importThreadsVideo(options) {
+  return runBrowserTask('mediaImporter', 'importThreadsVideoInBrowser', [options], 180000);
 }
+
+module.exports = {
+  validateThreadsUrl,
+  extractCandidates,
+  importThreadsVideo,
+  importThreadsVideoInBrowser,
+  extractCandidatesInBrowser,
+};

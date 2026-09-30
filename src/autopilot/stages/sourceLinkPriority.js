@@ -1,7 +1,7 @@
 'use strict';
 
 const axios = require('axios');
-const { collectPostDetails } = require('../../threads/benchmarkAccounts');
+const { collectPostDetails } = require('../../threads/threadsCollector');
 
 function clean(v) {
   return String(v || '')

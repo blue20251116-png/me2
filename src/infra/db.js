@@ -202,6 +202,17 @@ for (const sql of migrations) {
     db.exec(sql);
   } catch {}
 }
+// Reference Threads accounts for material scanning (threads/benchmarkAccounts.js).
+try {
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS threads_benchmark_accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT (datetime('now')))`
+  );
+} catch (e) {
+  console.error(
+    '[DB][INIT] threads_benchmark_accounts 생성 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:',
+    e.message
+  );
+}
 // Per-minute view history for the live insights chart (see threads/liveInsightsJob.js).
 try {
   db.exec(

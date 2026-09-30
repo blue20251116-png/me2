@@ -1,7 +1,7 @@
 'use strict';
 const { normalizeVoice } = require('../../content/voicePolicy');
 
-const { collectPostDetails } = require('../../threads/benchmarkAccounts');
+const { collectPostDetails } = require('../../threads/threadsCollector');
 
 const MAX_MATERIAL_ROUNDS = 2;
 

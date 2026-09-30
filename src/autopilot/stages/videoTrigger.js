@@ -1,18 +1,16 @@
 const { launchChromium } = require('../../infra/browserLauncher');
+const { runBrowserTask } = require('../../infra/isolatedTask');
+// Does the source post contain a video? Runs in the isolated browser worker; never throws.
 async function detectThreadsVideo(postUrl) {
-  if (process.env.ME2_BROWSER_WORKER !== '1') {
-    try {
-      return await require('../../infra/isolatedTask').isolatedBrowserTask(
-        'videoTrigger',
-        'detectThreadsVideo',
-        [postUrl],
-        45000
-      );
-    } catch (err) {
-      console.warn(`[Autopilot][VIDEO DETECT] ${err.code || err.message}`);
-      return false;
-    }
+  try {
+    return await runBrowserTask('videoTrigger', 'detectThreadsVideoInBrowser', [postUrl], 45000);
+  } catch (err) {
+    console.warn(`[Autopilot][VIDEO DETECT] ${err.code || err.message}`);
+    return false;
   }
+}
+
+async function detectThreadsVideoInBrowser(postUrl) {
   if (!postUrl) return false;
 
   // Playwright is an optional dependency; bail out quietly when it isn't installed.
@@ -97,4 +95,4 @@ async function addSourceVideoSignal(result) {
   };
 }
 
-module.exports = { detectThreadsVideo, addSourceVideoSignal };
+module.exports = { detectThreadsVideo, detectThreadsVideoInBrowser, addSourceVideoSignal };

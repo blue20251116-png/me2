@@ -1,6 +1,7 @@
 const { launchChromium } = require('../../infra/browserLauncher');
+const { runBrowserTask } = require('../../infra/isolatedTask');
 const axios = require('axios');
-const { collectPostDetails } = require('../../threads/benchmarkAccounts');
+const { collectPostDetails } = require('../../threads/threadsCollector');
 
 function clean(v) {
   return String(v || '')
@@ -236,15 +237,11 @@ async function browserVisibleTitle(page) {
   return candidates[0] || '';
 }
 
-async function resolveWithBrowser(sourceUrl) {
-  if (process.env.ME2_BROWSER_WORKER !== '1') {
-    return require('../../infra/isolatedTask').isolatedBrowserTask(
-      'sourceExactProduct',
-      'resolveWithBrowser',
-      [sourceUrl],
-      90000
-    );
-  }
+function resolveWithBrowser(sourceUrl) {
+  return runBrowserTask('sourceExactProduct', 'resolveInBrowser', [sourceUrl], 90000);
+}
+
+async function resolveInBrowser(sourceUrl) {
   let browser;
   try {
     browser = await launchChromium({
@@ -559,4 +556,4 @@ async function applySourceExactProduct(result) {
   return result;
 }
 
-module.exports = { resolveWithBrowser, applySourceExactProduct };
+module.exports = { resolveWithBrowser, resolveInBrowser, applySourceExactProduct };

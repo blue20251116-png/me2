@@ -13,10 +13,8 @@ const {
   addBenchmarkAccount,
   addBenchmarkAccountsBulk,
   deleteBenchmarkAccount,
-  markUsedPost,
-  collectBenchmarkMaterials,
-  collectPostDetails,
 } = require('../../threads/benchmarkAccounts');
+const { collectBenchmarkMaterials, collectPostDetails } = require('../../threads/threadsCollector');
 const { requireAdmin } = require('../auth');
 const { requireAccount, getPublicBaseUrl, uploadsDir } = require('../middleware');
 
@@ -248,7 +246,6 @@ router.post('/api/threads/import', requireAccount, async (req, res) => {
     const outputDir = path.join(uploadsDir, 'videos', String(req.account.id));
     if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
     const result = await threadsMediaImporter.importThreadsVideo({ url, outputDir });
-    markUsedPost(url);
     const base = getPublicBaseUrl(req, req.account),
       publicUrl = `${base}/uploads/videos/${req.account.id}/${encodeURIComponent(result.filename)}`;
     res.json({

@@ -277,8 +277,21 @@ function isolatedBrowserTask(moduleName, method, args, timeoutMs = 120000) {
     timeoutMs
   );
 }
+// Runs a browser task from the registry in isolatedBrowserWorker.js. Inside the worker process
+// itself the task is called directly (a worker never forks another worker).
+function isBrowserWorker() {
+  return process.env.ME2_BROWSER_WORKER === '1';
+}
+function runBrowserTask(moduleName, method, args = [], timeoutMs = 120000) {
+  if (isBrowserWorker())
+    return Promise.resolve().then(() => require('./browserTasks').runTask(moduleName, method, args));
+  return isolatedBrowserTask(moduleName, method, args, timeoutMs);
+}
+
 module.exports = {
   isolatedBrowserTask,
+  runBrowserTask,
+  isBrowserWorker,
   runWorker,
   MAX_BROWSER_WORKERS,
   browserInfraFailure,

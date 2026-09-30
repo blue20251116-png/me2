@@ -2,7 +2,7 @@ const { normalizeVoice, voiceGuide, formatVoice, assertVoice, reviewSourceVoice 
 const { pickPersona } = require('../content/personas');
 const axios = require('axios');
 const { db, getAccount, getSystemApiSettings } = require('../infra/db');
-const { collectBenchmarkMaterials, collectPostDetails, markUsedPost } = require('../threads/benchmarkAccounts');
+const { collectBenchmarkMaterials, collectPostDetails } = require('../threads/threadsCollector');
 const coupangApi = require('../integrations/coupangApi');
 const { callAI, extractJson, imageBlockFromDataUri } = require('../integrations/aiClient');
 
@@ -1033,7 +1033,6 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
         console.log(
           `[AutopilotV3][VIDEO QUALITY SKIP] @${material.username || '-'} hasVideo=yes playable=0 → 이미지 강등 금지 · 다음 소재`
         );
-        markUsedPost(material.url);
         continue;
       }
       const localMode = localStrongContentMode(material);
@@ -1049,7 +1048,6 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
         console.log(
           `[AutopilotV3][CONFIDENCE SKIP] @${material.username || '-'} confidence=${vision?.confidence ?? 0} normalized=${conf.toFixed(2)} → 상품 연결 금지 · 다음 소재`
         );
-        markUsedPost(material.url);
         continue;
       }
       const analysis = await analyzeMaterial(accountId, material, target, vision);
@@ -1089,7 +1087,6 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
       if (!analysis.searchTerms.length) {
         lastError = new Error(`Threads 소재 "${analysis.topic}"에서 구매 가능한 상품 검색어를 찾지 못했습니다`);
         console.log(`[AutopilotV3][SKIP] ${lastError.message} → 다음 소재`);
-        markUsedPost(material.url);
         continue;
       }
       const soldIdentity = clean(vision?.soldObject || analysis?.topic || '');
@@ -1101,7 +1098,6 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
       if (!found.product) {
         lastError = new Error(`Threads 소재 기반 쿠팡 상품을 찾지 못했습니다: ${analysis.searchTerms.join(', ')}`);
         console.log(`[AutopilotV3][SKIP] ${lastError.message} → 다음 소재`);
-        markUsedPost(material.url);
         continue;
       }
       if (!productMatchOk(vision, found.product)) {
@@ -1111,7 +1107,6 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
         console.log(
           `[AutopilotV3][PRODUCT MATCH SKIP] @${material.username || '-'} sold="${vision?.soldObject || '-'}" product="${found.product.name || '-'}" → 다음 소재`
         );
-        markUsedPost(material.url);
         continue;
       }
       const generated = await generatePost(accountId, {
@@ -1120,7 +1115,6 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
         product: found.product,
         target,
       });
-      markUsedPost(material.url);
       console.log(
         `[AutopilotV3][SUCCESS] @${material.username || '-'} product="${found.product.name}" mode=${analysis.mode} persona=${generated.persona} specialStory=${Boolean(specialStory)} sourcePreserve=${analysis.mode === 'lifestyle' ? 'OFF' : 'ON'}`
       );
@@ -1165,7 +1159,6 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
         `[AutopilotV3][TRY FAIL] @${material.username || '-'} ${e.response?.data?.error?.message || e.message} → 다음 소재`
       );
       if (coupangApi.isRateLimitError?.(e)) throw e;
-      markUsedPost(material.url);
     }
   }
   throw new Error(

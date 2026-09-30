@@ -37,7 +37,7 @@
   "overrides": [
     {
       "files": [
-        "src/threads/benchmarkAccounts.js",
+        "src/threads/threadsScraper.js",
         "src/threads/mediaImporter.js",
         "src/autopilot/stages/videoTrigger.js",
         "src/autopilot/stages/sourceExactProduct.js"
