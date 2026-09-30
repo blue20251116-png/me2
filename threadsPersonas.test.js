@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const { PERSONAS, detectPersonaCategory, personasForCategory, pickPersona } = require('./threadsPersonas');
 const policy = require('./threadsVoicePolicy');
 
-test('there are exactly 5 personas: the original reaction persona plus 4 new ones', () => {
-  assert.equal(PERSONAS.length, 5);
+test('there are exactly 6 personas: the original reaction persona plus 5 new ones', () => {
+  assert.equal(PERSONAS.length, 6);
   const ids = PERSONAS.map(p => p.id);
   assert.deepEqual(new Set(ids).size, ids.length, 'persona ids must be unique');
   assert.ok(ids.includes('reaction'));
@@ -13,6 +13,7 @@ test('there are exactly 5 personas: the original reaction persona plus 4 new one
   assert.ok(ids.includes('housewife-recipe'));
   assert.ok(ids.includes('trainer-expert'));
   assert.ok(ids.includes('parenting-mom'));
+  assert.ok(ids.includes('empathy'));
 });
 
 test('detectPersonaCategory: recipe mode always maps to the recipe category regardless of text', () => {
@@ -74,9 +75,9 @@ test('personasForCategory: category pools do not leak personas meant for a diffe
   const general = personasForCategory('general').map(p => p.id);
 
   assert.deepEqual(new Set(recipe), new Set(['reaction', 'housewife-recipe']));
-  assert.deepEqual(new Set(fitness), new Set(['reaction', 'curiosity', 'trainer-expert']));
-  assert.deepEqual(new Set(kids), new Set(['reaction', 'curiosity', 'parenting-mom']));
-  assert.deepEqual(new Set(general), new Set(['reaction', 'curiosity']));
+  assert.deepEqual(new Set(fitness), new Set(['reaction', 'curiosity', 'trainer-expert', 'empathy']));
+  assert.deepEqual(new Set(kids), new Set(['reaction', 'curiosity', 'parenting-mom', 'empathy']));
+  assert.deepEqual(new Set(general), new Set(['reaction', 'curiosity', 'empathy']));
 
   assert.ok(!fitness.includes('parenting-mom'));
   assert.ok(!fitness.includes('housewife-recipe'));
@@ -85,13 +86,14 @@ test('personasForCategory: category pools do not leak personas meant for a diffe
   assert.ok(!recipe.includes('trainer-expert'));
   assert.ok(!recipe.includes('parenting-mom'));
   assert.ok(!recipe.includes('curiosity'));
+  assert.ok(!recipe.includes('empathy'));
 });
 
 test('pickPersona actually varies within a category pool across calls', () => {
   const seen = new Set();
   for (let i = 0; i < 200; i++) seen.add(pickPersona({ mode: 'product', text: '헬스장 트레이너 단백질 보충제' }).id);
   assert.ok(seen.size >= 2, 'should not always return the same persona for a fitness material');
-  for (const id of seen) assert.ok(['reaction', 'curiosity', 'trainer-expert'].includes(id));
+  for (const id of seen) assert.ok(['reaction', 'curiosity', 'trainer-expert', 'empathy'].includes(id));
 });
 
 test('pickPersona for a recipe material only ever returns reaction or housewife-recipe', () => {

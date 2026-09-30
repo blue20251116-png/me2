@@ -10,11 +10,31 @@ const BROWSER_HEADERS = {
 
 // 쿠팡파트너스 단축링크(link.coupang.com)는 실제 상품페이지로 리다이렉트되므로
 // axios의 follow-redirect 기본 동작으로 최종 URL까지 따라간 뒤 그 페이지를 파싱한다.
+// Any logged-in user can hand this an arbitrary URL, so refuse internal targets (cloud metadata
+// 169.254.169.254, localhost, private ranges, Railway private networking) on the first hop and on
+// every redirect hop. Public shop pages are unaffected.
+function isBlockedHost(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local')) return true;
+  if (h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80') || h.startsWith('::ffff:')) return h.includes(':');
+  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+}
+function assertPublicUrl(raw) {
+  let u;
+  try { u = new URL(String(raw)); } catch { throw new Error('올바른 URL이 아닙니다'); }
+  if (!['http:', 'https:'].includes(u.protocol) || isBlockedHost(u.hostname)) throw new Error('가져올 수 없는 주소입니다');
+  return u.toString();
+}
+
 async function scrapeProduct(url) {
-  const res = await axios.get(url, {
+  const res = await axios.get(assertPublicUrl(url), {
     headers: BROWSER_HEADERS,
     timeout: 10000,
     maxRedirects: 5,
+    beforeRedirect: (options) => { if (isBlockedHost(options.hostname)) throw new Error('가져올 수 없는 주소입니다'); },
   });
 
   const $ = cheerio.load(res.data);
@@ -58,4 +78,4 @@ async function scrapeProduct(url) {
   };
 }
 
-module.exports = { scrapeProduct };
+module.exports = { isBlockedHost, scrapeProduct };

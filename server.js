@@ -43,6 +43,7 @@ const coupangApi = require('./coupangApi');
 const { generateCaption, suggestKeyword, suggestKeywordCandidates } = require('./aiCaption');
 const { rankKeywordsByTrend } = require('./naverTrends');
 const { startPublishJob, startInsightsJob, startAutopilotJob, startStaleQueueJob } = require('./scheduler');
+const { startTokenRefreshJob, expiryIso } = require('./threadsTokenRefresh');
 const youtubeApi = require('./youtubeApi');
 const videoFrames = require('./videoFrames');
 const frameVision = require('./frameVision');
@@ -194,15 +195,19 @@ app.get('/api/auth/admin-setup-status', (req, res) => {
   res.json({ needsSetup: !hasAdmin() });
 });
 
-app.post('/api/auth/setup-admin', (req, res) => {
+app.post('/api/auth/setup-admin', (req, res, next) => {
   if (hasAdmin()) return res.status(409).json({ error: '이미 관리자 계정이 설정되어 있습니다' });
   const { email, password, name } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: '관리자 이메일과 비밀번호가 필요합니다' });
   if (String(password).length < 8) return res.status(400).json({ error: '비밀번호는 8자 이상으로 설정해주세요' });
   try {
     const id = createInitialAdmin(String(email).trim().toLowerCase(), hashPassword(password), name);
-    req.session.userId = Number(id);
-    res.json({ ok: true, role: 'admin' });
+    // Same session-fixation guard as /api/auth/login: never elevate a pre-existing session id.
+    req.session.regenerate(err => {
+      if (err) return next(err);
+      req.session.userId = Number(id);
+      req.session.save(err => err ? next(err) : res.json({ ok: true, role: 'admin' }));
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -216,9 +221,10 @@ app.get('/api/site-settings', (req, res) => {
 app.post('/api/auth/signup', (req, res) => {
   const { email, password, name } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: '이메일과 비밀번호가 필요합니다' });
-  if (getUserByEmail(email)) return res.status(400).json({ error: '이미 가입된 이메일입니다' });
+  const normalizedEmail = String(email).trim().toLowerCase();
+  if (getUserByEmail(normalizedEmail)) return res.status(400).json({ error: '이미 가입된 이메일입니다' });
   try {
-    createUser(email, hashPassword(password), name);
+    createUser(normalizedEmail, hashPassword(password), name);
     res.json({ ok: true, message: '가입 신청 완료 — 관리자 승인 후 이용 가능합니다' });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -227,7 +233,10 @@ app.post('/api/auth/signup', (req, res) => {
 
 app.post('/api/auth/login', require('./loginRateLimit'), (req, res, next) => {
   const { email, password } = req.body || {};
-  const user = getUserByEmail(email);
+  // Signup used to store the email exactly as typed while setup-admin lowercased it, so
+  // "User@x.com" signups could not log in as "user@x.com". Legacy mixed-case rows still match
+  // on the exact form as a fallback.
+  const user = getUserByEmail(String(email || '').trim().toLowerCase()) || (typeof email === 'string' && email ? getUserByEmail(email) : undefined);
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: '이메일 또는 비밀번호가 올바르지 않습니다' });
   }
@@ -509,9 +518,15 @@ app.get('/api/accounts/:accountId/connection-status', requireAccount, (req, res)
 });
 
 // ---------- OAuth ----------
+// state used to be the bare accountId and the callback trusted it, so any logged-in user could
+// finish OAuth with state=<someone else's accountId> and overwrite that account's Threads token
+// (their autopilot would then post to the attacker's Threads, or vice versa). state now carries a
+// one-time nonce bound to this session + account, and the callback re-checks ownership.
 app.get('/auth/login', requireAccount, (req, res) => {
   try {
-    res.redirect(threadsApi.getAuthUrl(req.account.id));
+    const nonce = crypto.randomBytes(16).toString('hex');
+    req.session.threadsOauth = { nonce, accountId: req.account.id, createdAt: Date.now() };
+    res.redirect(threadsApi.getAuthUrl(req.account.id, `${req.account.id}.${nonce}`));
   } catch (err) {
     res.status(400).send(err.message);
   }
@@ -520,8 +535,16 @@ app.get('/auth/login', requireAccount, (req, res) => {
 app.get('/auth/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
-    const accountId = Number(state);
+    const [accountIdRaw, nonce] = String(state || '').split('.');
+    const accountId = Number(accountIdRaw);
     if (!accountId) throw new Error('콜백에 계정 정보(state)가 없습니다');
+    const pending = req.session.threadsOauth;
+    delete req.session.threadsOauth;
+    if (!pending || !nonce || pending.nonce !== nonce || Number(pending.accountId) !== accountId || Date.now() - Number(pending.createdAt || 0) > 30 * 60000) {
+      return res.status(400).send('연결 실패: 연결 요청이 만료되었거나 올바르지 않습니다. 대시보드에서 "스레드 계정으로 연결하기"를 다시 눌러주세요.');
+    }
+    const target = getAccount(accountId);
+    if (!target || target.user_id !== req.currentUser.id) return res.status(403).send('연결 실패: 본인 소유의 계정만 연결할 수 있습니다');
 
     const shortLived = await threadsApi.exchangeCodeForToken(accountId, code);
     const longLived = await threadsApi.exchangeForLongLivedToken(accountId, shortLived.access_token);
@@ -535,7 +558,7 @@ app.get('/auth/callback', async (req, res) => {
     updateAccount(accountId, {
       threads_user_id: String(shortLived.user_id),
       threads_access_token: longLived.access_token,
-      threads_token_expires_at: String(Date.now() + longLived.expires_in * 1000),
+      threads_token_expires_at: expiryIso(longLived.expires_in),
       threads_username: username,
     });
 
@@ -557,23 +580,23 @@ app.post('/api/upload-media', requireAccount, upload.single('file'), (req, res) 
   res.json({ url, filename: req.file.filename, mediaType });
 });
 
-app.delete('/api/upload-media/:filename', (req, res) => {
+// Used to search every account's videos/<id>/ folder and delete the first match, with no account
+// check - any logged-in user could delete media another tenant's pending post points to. Videos
+// are now only deletable from the caller's own folder, and a flat (image) upload only while no
+// post references it yet (the UI only deletes right after upload, before the post is saved).
+app.delete('/api/upload-media/:filename', requireAccount, (req, res) => {
   const filename = path.basename(req.params.filename); // 경로 조작 방지
-  // 이미지(평면 위치)를 먼저 확인하고, 없으면 계정별 영상 폴더들에서 찾아 삭제한다
-  const flatPath = path.join(uploadsDir, filename);
-  if (fs.existsSync(flatPath)) {
-    fs.unlinkSync(flatPath);
+  const ownVideo = path.join(uploadsDir, 'videos', String(req.account.id), filename);
+  if (fs.existsSync(ownVideo)) {
+    fs.unlinkSync(ownVideo);
     return res.json({ ok: true });
   }
-  const videosDir = path.join(uploadsDir, 'videos');
-  if (fs.existsSync(videosDir)) {
-    for (const accountDir of fs.readdirSync(videosDir)) {
-      const candidate = path.join(videosDir, accountDir, filename);
-      if (fs.existsSync(candidate)) {
-        fs.unlinkSync(candidate);
-        break;
-      }
-    }
+  const flatPath = path.join(uploadsDir, filename);
+  if (fs.existsSync(flatPath)) {
+    const like = `%/uploads/${filename}`;
+    const referenced = db.prepare("SELECT 1 FROM posts WHERE image_url LIKE ? OR extra_image_url LIKE ? OR video_url LIKE ? LIMIT 1").get(like, like, like);
+    if (referenced) return res.status(409).json({ error: '예약된 글이 사용 중인 파일은 삭제할 수 없습니다' });
+    fs.unlinkSync(flatPath);
   }
   res.json({ ok: true });
 });
@@ -894,8 +917,11 @@ app.delete('/api/posts/:id', requireAccount, (req, res) => {
 // ---------- 대시보드용 요약 데이터 ----------
 app.get('/api/dashboard', requireAccount, (req, res) => {
   const accountId = req.account.id;
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
+  // "Today" and the hourly chart are KST, not server-local time (Railway runs in UTC, which made
+  // "today" run 09:00-09:00 KST and shifted every hourly bar by 9 hours).
+  const kstDayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const startOfDay = new Date(`${kstDayKey}T00:00:00+09:00`);
+  const kstHour = iso => (new Date(iso).getUTCHours() + 9) % 24;
   const startIso = startOfDay.toISOString();
   const endOfDay = new Date(startOfDay.getTime() + 24 * 3600 * 1000).toISOString();
 
@@ -935,7 +961,7 @@ app.get('/api/dashboard', requireAccount, (req, res) => {
 
   const hourly = Array.from({ length: 24 }, (_, h) => ({ hour: h, count: 0, views: 0 }));
   for (const p of postedToday) {
-    const h = new Date(p.posted_at).getHours();
+    const h = kstHour(p.posted_at);
     hourly[h].count += 1;
     hourly[h].views += insightsByPost[p.id]?.views || 0;
   }
@@ -945,7 +971,7 @@ app.get('/api/dashboard', requireAccount, (req, res) => {
     )
     .all(accountId, startIso, endOfDay);
   for (const p of pendingRows) {
-    const h = new Date(p.scheduled_at).getHours();
+    const h = kstHour(p.scheduled_at);
     hourly[h].count += 1;
   }
 
@@ -1036,4 +1062,5 @@ app.listen(PORT, () => {
   startInsightsJob();
   startAutopilotJob();
   startStaleQueueJob();
+  startTokenRefreshJob();
 });

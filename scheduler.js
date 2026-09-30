@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const { isTokenExpired } = require('./threadsTokenRefresh');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -79,7 +80,11 @@ function localPathFromUploadUrl(url){if(!url)return null;const marker='/uploads/
 function mediaSourceFilesExist(media){const p=localPathFromUploadUrl(media.image_url);if(!p||!fs.existsSync(p))return false;if(media.extra_image_url){const e=localPathFromUploadUrl(media.extra_image_url);if(!e||!fs.existsSync(e))return false;}return true;}
 async function buildCommentText(account,post){if(hasCoupangKeys(account)&&post.recipe_comment_text&&!post.link)throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');if(!post.link)return compactRecipePrefix(sanitizeCommentPrefix(post.recipe_comment_text||''),450);return buildDoubleLinkComment(account,post.recipe_comment_text||'',post.link,450);}
 function startPublishJob(){return require("./publishQueue").startPublishJob({buildCommentText});}
-function startInsightsJob(){cron.schedule('*/10 * * * *',async()=>{const start=new Date();start.setHours(0,0,0,0);for(const s of listAllAccountsForSystem()){const posts=db.prepare(`SELECT * FROM posts WHERE account_id=? AND status='posted' AND posted_at>=? AND threads_media_id IS NOT NULL`).all(s.id,start.toISOString());for(const p of posts){try{const stats=await getMediaInsights(s.id,p.threads_media_id);db.prepare(`INSERT INTO insights (post_id,views,likes,replies,reposts,quotes,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(post_id) DO UPDATE SET views=excluded.views,likes=excluded.likes,replies=excluded.replies,reposts=excluded.reposts,quotes=excluded.quotes,updated_at=excluded.updated_at`).run(p.id,stats.views||0,stats.likes||0,stats.replies||0,stats.reposts||0,stats.quotes||0,new Date().toISOString());}catch(e){console.error(`[인사이트 갱신 실패] account #${s.id}:`,e.message);}}}},{noOverlap:true});}
+// Refreshes posts from yesterday+today in KST. It used to use server-local midnight (UTC on
+// Railway = 09:00 KST), so a post stopped being refreshed at the next 09:00 KST at the latest -
+// posts published 00:00-09:00 KST were never refreshed after that morning, and every post's view
+// count froze within hours even though Threads keeps distributing a post for 1-2 days.
+function startInsightsJob(){cron.schedule('*/10 * * * *',async()=>{const start=kstMidnight(addDay(dayKeyKst(),-1));for(const s of listAllAccountsForSystem()){const posts=db.prepare(`SELECT * FROM posts WHERE account_id=? AND status='posted' AND posted_at>=? AND threads_media_id IS NOT NULL`).all(s.id,start.toISOString());for(const p of posts){try{const stats=await getMediaInsights(s.id,p.threads_media_id);db.prepare(`INSERT INTO insights (post_id,views,likes,replies,reposts,quotes,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(post_id) DO UPDATE SET views=excluded.views,likes=excluded.likes,replies=excluded.replies,reposts=excluded.reposts,quotes=excluded.quotes,updated_at=excluded.updated_at`).run(p.id,stats.views||0,stats.likes||0,stats.replies||0,stats.reposts||0,stats.quotes||0,new Date().toISOString());}catch(e){console.error(`[인사이트 갱신 실패] account #${s.id}:`,e.message);}}}},{noOverlap:true});}
 const AUTOPILOT_TARGETS=['전체','20대 여자','20대 남자','30대 여자','30대 남자','40대 이상'];
 function saveAutopilotPost({accountId,text,link,imageUrl,extraImageUrl,videoUrl=null,recipeCommentText=null,scheduledAt=null}){const formattedText=formatThreadsBody(text);db.prepare(`INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL)`).run(formattedText,link||null,imageUrl||null,extraImageUrl||null,videoUrl||null,String(scheduledAt||new Date().toISOString()),accountId,recipeCommentText);}
 function recordAutopilotLast(accountId,keyword,target){db.prepare(`UPDATE accounts SET autopilot_last_keyword=?, autopilot_last_target=? WHERE id=?`).run(keyword,target,accountId);}
@@ -179,16 +184,24 @@ function accountHash(accountId, dayKey='') {
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
+// 2026-09-30 (user: "조회수가 잘 안 나옴"): slots used to be spread evenly over all 24 hours, so at
+// 15-25 posts/day roughly a quarter of every account's posts went out between 01:00 and 07:00 KST.
+// Threads decides how far to push a post from the reactions it gets in its first hour, and at
+// 3-5 AM there is nobody awake to react - those posts were effectively thrown away. Slots now
+// spread over the active window only (default 07:00-24:00 KST, env-overridable), same count.
+const ACTIVE_START_HOUR = Math.min(23, Math.max(0, Number(process.env.AUTOPILOT_ACTIVE_START_HOUR ?? 7) || 0));
+const ACTIVE_END_HOUR = Math.min(24, Math.max(ACTIVE_START_HOUR + 1, Number(process.env.AUTOPILOT_ACTIVE_END_HOUR ?? 24) || 24));
 function plannedSlots(dayKey, target, accountId) {
-  const dayMinutes = 1440;
-  const step = dayMinutes / Math.max(1, target);
+  const windowStart = ACTIVE_START_HOUR * 60;
+  const windowMinutes = (ACTIVE_END_HOUR - ACTIVE_START_HOUR) * 60;
+  const step = windowMinutes / Math.max(1, target);
   const seed = accountHash(accountId, dayKey);
   const phase = seed % Math.max(1, Math.floor(step));
   const out = [];
   for (let i = 0; i < target; i++) {
     const itemJitter = (((seed >>> (i % 16)) + i * 19 + Number(accountId || 0) * 7) % 15) - 7;
-    let minute = Math.round(phase + i * step + itemJitter);
-    minute = ((minute % dayMinutes) + dayMinutes) % dayMinutes;
+    let minute = Math.round(windowStart + phase + i * step + itemJitter);
+    minute = Math.min(windowStart + windowMinutes - 1, Math.max(windowStart, minute));
     out.push(new Date(`${dayKey}T${String(Math.floor(minute / 60)).padStart(2,'0')}:${String(minute % 60).padStart(2,'0')}:00+09:00`));
   }
   return out.sort((a,b)=>a-b);
@@ -304,7 +317,7 @@ async function refillAccount(accountId) {
   if (autopilotRunningAccounts.has(accountId)) return;
   const account = getAccount(accountId);
   if (!account?.autopilot_enabled) return;
-  if (!String(account.threads_access_token || '').trim() || (account.threads_token_expires_at && Date.parse(account.threads_token_expires_at)<=Date.now())) {
+  if (!String(account.threads_access_token || '').trim() || isTokenExpired(account)) {
     setState(accountId, 'blocked', 'THREADS_TOKEN_MISSING');
     console.warn(`[Autopilot][PREFLIGHT] account #${accountId} THREADS_TOKEN_MISSING → 생성 생략`);
     return;
@@ -402,7 +415,11 @@ function startAutopilotJob(){
 
 // 예정 시각을 조금 넘긴 새 글은 허용하되, 오래 밀린 최초 발행만 폐기한다.
 // publishQueue가 명시적으로 재시도를 예약한 pending 글은 publish_next_retry_at까지 보존한다.
-const STALE_MINUTES=Math.max(1,Number(process.env.STALE_PENDING_MINUTES||5));
+// Default raised 5 -> 15 min (2026-09-30 audit): the publish tick handles due posts one at a time,
+// and a single video/carousel (readiness polling + publish retries + ffmpeg re-encode) can hold
+// it for several minutes - with a 5-min threshold, other accounts' posts queued behind it were
+// discarded as "stale" before the tick ever reached them. 15 min still drops genuinely old work.
+const STALE_MINUTES=Math.max(1,Number(process.env.STALE_PENDING_MINUTES||15));
 function expireStalePendingPosts(){
   const nowMs=Date.now();const nowIso=new Date(nowMs).toISOString();
   const columns=db.prepare('PRAGMA table_info(posts)').all();
@@ -441,5 +458,5 @@ function startStaleQueueJob(){
   cron.schedule('* * * * *',()=>{try{expireStalePendingPosts();}catch(e){console.warn('[Publish][STALE QUEUE] cleanup failed:',e.message);}},{noOverlap:true});
   console.log(`[Publish][STALE QUEUE] 오래된 최초 미발행 ${STALE_MINUTES}분 초과 자동폐기 + 예약 재시도 보존 + 새소재 재시작 활성화`);
 }
-module.exports={startPublishJob,startInsightsJob,startAutopilotJob,startStaleQueueJob,runAutopilotOnce,buildDoubleLinkComment,expireStalePendingPosts,chooseImageFallback,assertHasMedia};
+module.exports={startPublishJob,startInsightsJob,startAutopilotJob,startStaleQueueJob,runAutopilotOnce,buildDoubleLinkComment,expireStalePendingPosts,chooseImageFallback,assertHasMedia,plannedSlots};
 

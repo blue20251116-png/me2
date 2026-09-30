@@ -4,6 +4,7 @@ const { db, getAccount, getSystemApiSettings } = require('./db');
 const __me2Fs = require('fs');
 const __me2Path = require('path');
 const { editVideo: __me2EditVideo } = require('./videoEditor');
+const { pickTopicTag, isTopicTagRejection } = require('./threadsTopicTag');
 
 const uploadsDir = __me2Path.join(__dirname, 'db', 'uploads');
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -220,14 +221,14 @@ function logThreadsError(stage,err,extra={}){
   console.error(`[Threads][${stage}][RAW]`,JSON.stringify(err.response?.data||{}));
 }
 
-function getAuthUrl(accountId){
+function getAuthUrl(accountId,state){
   const account=getAccount(accountId);
   if(!account)throw new Error('존재하지 않는 계정입니다');
   const{appId,redirectUri}=resolveThreadsAppCreds(account);
   if(!appId)throw new Error('Threads App ID가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
   if(!redirectUri)throw new Error('Threads Redirect URI가 설정되지 않았습니다 (서비스 운영자에게 문의해주세요)');
   const scopes=['threads_basic','threads_content_publish','threads_manage_insights','threads_manage_replies','threads_read_replies'].join(',');
-  return`https://threads.net/oauth/authorize?client_id=${encodeURIComponent(appId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes)}&response_type=code&state=${encodeURIComponent(accountId)}`;
+  return`https://threads.net/oauth/authorize?client_id=${encodeURIComponent(appId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes)}&response_type=code&state=${encodeURIComponent(state??accountId)}`;
 }
 
 async function exchangeCodeForToken(accountId,code){
@@ -279,6 +280,14 @@ function isInvalidCarouselChildrenError(err){
   return Number(apiErr.error_subcode)===4279004||title.includes('invalid carousel children')||msg.includes('invalid carousel children')||msg.includes('children with ids');
 }
 
+// A media attempt may fall back to re-publishing the same text without media only if the first
+// attempt provably did not publish. publishContainer() tags /threads_publish failures with
+// publishOutcomeUnknown (Threads may have published anyway, e.g. a 500 after accepting) - those
+// must propagate so publishQueue fails closed instead of posting a text-only duplicate.
+function canFallBackToText(err){
+  if(err?.publishOutcomeUnknown)return false;
+  return isMediaProcessingError(err)||isTransientThreadsError(err);
+}
 function mediaProcessingError(message,details={}){
   const err=new Error(message);
   err.code='THREADS_MEDIA_PROCESSING_FAILED';
@@ -341,6 +350,17 @@ function normalizeMediaItems(items){
 }
 function decodeMediaBundle(value){const s=String(value||'');if(!s.startsWith(MEDIA_BUNDLE_PREFIX))return null;try{return normalizeMediaItems(JSON.parse(decodeURIComponent(s.slice(MEDIA_BUNDLE_PREFIX.length))));}catch{return null;}}
 
+// Creates a top-level post container. topic_tag (threadsTopicTag.js) is best-effort: if Threads
+// rejects it, retry once without it so a tag can never be the reason a post fails to publish.
+async function postThreadsContainer(params,timeout){
+  try{return await axios.post(`${GRAPH_BASE}/me/threads`,null,{params,timeout});}
+  catch(err){
+    if(!params.topic_tag||!isTopicTagRejection(err))throw err;
+    console.warn(`[Threads][TOPIC_TAG] rejected tag="${params.topic_tag}" → retry without tag reason="${err.response?.data?.error?.message||err.message}"`);
+    const {topic_tag,...rest}=params;
+    return axios.post(`${GRAPH_BASE}/me/threads`,null,{params:rest,timeout});
+  }
+}
 async function publishPost(accountId,{text,imageUrl,videoUrl}){
   text=sanitizePublishedThreadsText(text);
   const bundle=decodeMediaBundle(imageUrl);
@@ -353,8 +373,9 @@ async function publishPost(accountId,{text,imageUrl,videoUrl}){
   const accessToken=account.threads_access_token,mediaType=videoUrl?'VIDEO':imageUrl?'IMAGE':'TEXT';
   console.log(`[Threads][CREATE] 시작 account=${accountId} userId=${account.threads_user_id} type=${mediaType}`);
   const params={media_type:mediaType,text,access_token:accessToken};if(imageUrl)params.image_url=imageUrl;if(videoUrl)params.video_url=videoUrl;
+  const topicTag=pickTopicTag(text);if(topicTag)params.topic_tag=topicTag;
   let creationId;
-  try{const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params,timeout:30000});creationId=createRes.data?.id;if(!creationId)throw new Error('Threads 컨테이너 생성 응답에 id가 없습니다');console.log(`[Threads][CREATE] 성공 account=${accountId} creationId=${creationId}`);}catch(err){logThreadsError('CREATE',err,{accountId,userId:account.threads_user_id,mediaType});throw err;}
+  try{const createRes=await postThreadsContainer(params,30000);creationId=createRes.data?.id;if(!creationId)throw new Error('Threads 컨테이너 생성 응답에 id가 없습니다');console.log(`[Threads][CREATE] 성공 account=${accountId} creationId=${creationId}`);}catch(err){logThreadsError('CREATE',err,{accountId,userId:account.threads_user_id,mediaType});throw err;}
   if(mediaType==='VIDEO'){await waitForContainerReady(creationId,accessToken,{maxTries:40,waitMs:2000,label:'VIDEO'});return publishContainer(creationId,accessToken,10,3000);}
   if(mediaType==='IMAGE')await waitForContainerReady(creationId,accessToken,{maxTries:15,waitMs:1000,label:'IMAGE'});
   return publishContainer(creationId,accessToken,5,2000);
@@ -391,7 +412,8 @@ async function createCarouselParent(accountId,text,children,accessToken,{maxTrie
   for(let i=0;i<maxTries;i++){
     try{
       console.log(`[Threads][CAROUSEL_PARENT] 생성 시도 account=${accountId} try=${i+1}/${maxTries} children=${childIds.join(',')}`);
-      const createRes=await axios.post(`${GRAPH_BASE}/me/threads`,null,{params:{media_type:'CAROUSEL',children:childIds.join(','),text,access_token:accessToken},timeout:30000});
+      const params={media_type:'CAROUSEL',children:childIds.join(','),text,access_token:accessToken};const topicTag=pickTopicTag(text);if(topicTag)params.topic_tag=topicTag;
+      const createRes=await postThreadsContainer(params,30000);
       const creationId=createRes.data?.id;if(!creationId)throw new Error('캐러셀 부모 컨테이너 응답에 id가 없습니다');
       console.log(`[Threads][CAROUSEL_PARENT] 생성 성공 creationId=${creationId}`);return creationId;
     }catch(err){lastError=err;logThreadsError('CAROUSEL_CREATE',err,{accountId,try:`${i+1}/${maxTries}`});if(!isInvalidCarouselChildrenError(err)||i===maxTries-1)throw err;console.log('[Threads][CAROUSEL_RETRY] 자식 상태를 다시 확인한 뒤 부모 생성을 재시도합니다');await Promise.all(children.map(child=>waitForContainerReady(child.id,accessToken,{maxTries:child.type==='VIDEO'?20:10,waitMs:2000,label:`CAROUSEL_${child.type}`})));await sleep(Math.min(2000+(i*2000),8000));}
@@ -409,7 +431,7 @@ async function publishMediaItemsPost(accountId,{text,mediaItems}){
   if(cachedImages!==originalImages)throw new Error(`Threads 원본 이미지 ${originalImages}장 중 ${cachedImages}장만 로컬 캐시에 성공했습니다.`);
   if(items.length===1){
     try{return await publishPost(accountId,{text,imageUrl:items[0].type==='IMAGE'?items[0].url:null,videoUrl:items[0].type==='VIDEO'?items[0].url:null});}
-    catch(err){if(!isMediaProcessingError(err)&&!isTransientThreadsError(err))throw err;console.warn(`[Threads][MEDIA_FALLBACK] 단일 ${items[0].type} 실패 → TEXT 발행 url=${items[0].url} reason="${err.message}"`);return publishPost(accountId,{text});}
+    catch(err){if(!canFallBackToText(err))throw err;console.warn(`[Threads][MEDIA_FALLBACK] 단일 ${items[0].type} 실패 → TEXT 발행 url=${items[0].url} reason="${err.message}"`);return publishPost(accountId,{text});}
   }
   const account=getAccount(accountId);if(!account?.threads_access_token)throw new Error('스레드 Access Token이 없습니다. 계정을 다시 연결해주세요.');
   const accessToken=account.threads_access_token;
@@ -467,11 +489,11 @@ async function publishMediaItemsPost(accountId,{text,mediaItems}){
   if(readyChildren.length===1){
     const survivor=readyChildren[0];console.warn(`[Threads][CAROUSEL_FALLBACK] 미디어 1개만 정상 → 단일 ${survivor.type}로 재생성 후 발행`);
     try{return await publishPost(accountId,{text,imageUrl:survivor.type==='IMAGE'?survivor.url:null,videoUrl:survivor.type==='VIDEO'?survivor.url:null});}
-    catch(err){if(!isMediaProcessingError(err)&&!isTransientThreadsError(err))throw err;console.warn(`[Threads][CAROUSEL_FALLBACK] 남은 ${survivor.type}도 실패 → TEXT 발행 reason="${err.message}"`);return publishPost(accountId,{text});}
+    catch(err){if(!canFallBackToText(err))throw err;console.warn(`[Threads][CAROUSEL_FALLBACK] 남은 ${survivor.type}도 실패 → TEXT 발행 reason="${err.message}"`);return publishPost(accountId,{text});}
   }
   const creationId=await createCarouselParent(accountId,text,readyChildren,accessToken,{maxTries:5});
   try{await waitForContainerReady(creationId,accessToken,{maxTries:30,waitMs:2000,label:'CAROUSEL_PARENT'});return publishContainer(creationId,accessToken,10,3000);}
-  catch(err){if(!isMediaProcessingError(err))throw err;console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 부모 처리 실패 → 첫 정상 미디어 1개로 발행 reason="${err.message}"`);const survivor=readyChildren[0];try{return await publishPost(accountId,{text,imageUrl:survivor.type==='IMAGE'?survivor.url:null,videoUrl:survivor.type==='VIDEO'?survivor.url:null});}catch(singleErr){if(!isMediaProcessingError(singleErr)&&!isTransientThreadsError(singleErr))throw singleErr;console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 단일 미디어도 실패 → TEXT 발행 reason="${singleErr.message}"`);return publishPost(accountId,{text});}}
+  catch(err){if(!isMediaProcessingError(err))throw err;console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 부모 처리 실패 → 첫 정상 미디어 1개로 발행 reason="${err.message}"`);const survivor=readyChildren[0];try{return await publishPost(accountId,{text,imageUrl:survivor.type==='IMAGE'?survivor.url:null,videoUrl:survivor.type==='VIDEO'?survivor.url:null});}catch(singleErr){if(!canFallBackToText(singleErr))throw singleErr;console.warn(`[Threads][CAROUSEL_PARENT_FALLBACK] 단일 미디어도 실패 → TEXT 발행 reason="${singleErr.message}"`);return publishPost(accountId,{text});}}
 }
 
 async function publishCarouselPost(accountId,{text,imageUrls}){return publishMediaItemsPost(accountId,{text,mediaItems:(imageUrls||[]).filter(Boolean).map(url=>({type:'IMAGE',url}))});}

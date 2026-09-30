@@ -34,6 +34,7 @@ function harness({ generationError, preflightError, env = {} } = {}) {
     path, crypto: require('node:crypto'),
     'node-cron': { schedule: (_, fn) => { tick = fn; } },
     './automationState': { setState() {}, budgetState: () => ({ available: true }) },
+    './threadsTokenRefresh': require('./threadsTokenRefresh'),
     './db': {
       db, getAccount: () => account, getUserById: () => null,
       listAllAccountsForSystem: () => [], canPublish: () => true, logUsage: () => {},

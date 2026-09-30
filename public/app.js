@@ -725,7 +725,7 @@ async function removeUploadedMedia() {
   const form = document.getElementById('composeForm');
   if (uploadedFilename) {
     try {
-      await fetch(`/api/upload-media/${uploadedFilename}`, { method: 'DELETE' });
+      await apiFetch(`/api/upload-media/${encodeURIComponent(uploadedFilename)}`, { method: 'DELETE' });
     } catch {
       /* 서버에서 이미 지워졌어도 무시 */
     }
