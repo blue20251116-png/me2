@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// The /admin/emergency-cleanup route in server.js is plain fs walking logic behind an
+// The /admin/emergency-cleanup route in src/web/routes/system.js is plain fs walking logic behind an
 // ADMIN_PASSWORD-gated query param, deliberately mounted before the session middleware so
 // it still works even when SQLite disk I/O is failing. This test exercises that walk logic
 // in isolation (mirroring it exactly) against a throwaway temp directory - it never touches
@@ -75,8 +75,8 @@ test('wipeAll=true deletes every file regardless of age', () => {
 // encodeURIComponent(key), which the browser form-encoded a second time, so the POST received
 // "%EC%82%AD..." instead of the key itself.
 test('delete-button form carries the raw (HTML-escaped) key, not a URL-encoded copy', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'server.js'), 'utf8');
-  const route = src.slice(src.indexOf("app.get('/admin/emergency-cleanup'"), src.indexOf("app.post('/admin/emergency-cleanup'"));
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'routes', 'system.js'), 'utf8');
+  const route = src.slice(src.indexOf("router.get('/admin/emergency-cleanup'"), src.indexOf("router.post('/admin/emergency-cleanup'"));
   assert.doesNotMatch(route, /encodeURIComponent\(String\(req\.query\.key\)\)/);
   const key = '삭제해도조아1234';
   const escapeHtml = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

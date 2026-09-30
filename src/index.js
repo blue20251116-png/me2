@@ -3,4 +3,4 @@
 require('dotenv').config();
 require('./infra/httpDeadline').installHttpDeadline();
 require('./infra/dbRetentionJob').startDbRetention();
-require('./web/bootstrap');
+require('./web/server').startServer();
