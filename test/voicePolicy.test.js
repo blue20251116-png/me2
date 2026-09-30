@@ -1,0 +1,1004 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const policy = require('../src/content/voicePolicy');
+
+const count = s => Array.from(String(s)).length;
+
+function assertThreadsShape(text) {
+  const lines = String(text).split('\n');
+  assert.ok(lines.length <= policy.MAX_LINES, `too many lines: ${lines.length}`);
+}
+
+test('persona is a Threads viral writer, not a source-faithful summarizer', () => {
+  const guide = policy.voiceGuide();
+  assert.match(guide, /스레드 전용 바이럴 작가/);
+  assert.match(guide, /소재\/씨앗/);
+  assert.match(guide, /리액션|비유|상황 연출/);
+  assert.doesNotMatch(guide, /원문 90%|새 사건을 덧붙였는지|지어내지 않는다/);
+});
+
+test('voiceGuide() tells the model to always break the line when a sentence ends, not just when a line gets long', () => {
+  // User request (2026-09-23, direct follow-up to the missingParagraphBreak fix): "문장 끝나면
+  // 줄바꿈" (break the line when a sentence ends). The old wording ("한 호흡에 다 읽히는 문장은
+  // 길어도 한 줄에 그대로 둔다... 한 줄이 여러 문장을 억지로 욱여넣을 만큼 길어질 때만 문장
+  // 경계에서 나눈다") gave the model an explicit "keep multiple sentences on one line if they read
+  // in one breath" loophole - exactly what produced the real posts that missingParagraphBreak()
+  // just had to be taught to catch after the fact. Rewritten so a completed sentence always
+  // starts a new line unconditionally, while still allowing one single long sentence to stay on
+  // its own line without being chopped mid-word.
+  const guide = policy.voiceGuide();
+  assert.match(guide, /문장 하나가 끝나면 무조건 줄을 바꾼다/);
+  assert.doesNotMatch(guide, /한 호흡에 다 읽히는 문장은 길어도 한 줄에 그대로 둔다/);
+});
+
+test('voiceGuide() clarifies that "새 문장 = 새 줄" does not mean "새 줄 = 빈 줄"', () => {
+  // REGRESSION (found live, 2026-09-23, same day as the sentence-per-line fix above): a real
+  // published post over-applied that fix - EVERY single one-sentence line got its own blank-line
+  // separation, turning a 4-sentence post into 7 isolated one-line "paragraphs" that read like a
+  // mechanically generated list, not natural texting. The two rules ("문장이 끝나면 줄을 바꾼다"
+  // and "생각 덩어리가 끝나면 빈 줄을 넣는다") are independent - a "덩어리" can and should still
+  // span 2-3 consecutive one-sentence lines with no blank line between them, only getting a blank
+  // line once the whole group of related sentences ends.
+  const guide = policy.voiceGuide();
+  assert.match(guide, /문장 하나마다 매번 빈 줄까지 넣어서 문장을 전부 따로따로 떼어놓지 않는다/);
+  assert.match(guide, /빈 줄 없이 줄바꿈만으로 붙여서 한 덩어리로 묶고/);
+});
+
+test('voiceProblems catches a real post where every single line is its own blank-line-separated paragraph', () => {
+  // REGRESSION (found live, 2026-09-23): the voiceGuide() wording fix above is prompt-only - a
+  // dry-run simulation confirmed voiceProblems() had zero code-side check for "blank lines
+  // everywhere, fragmenting every sentence into its own paragraph" (missingParagraphBreak() only
+  // ever catches the OPPOSITE failure: an absence of blank lines). Added overFragmentedParagraphs()
+  // as a matching safety net, mirroring how missingParagraphBreak/bodyTooLong/highRiskClaim are
+  // all code-enforced, not prompt-only. Requires 4+ paragraph groups where EVERY group is exactly
+  // 1 line - a strict, unambiguous shape that a normal post mixing a 1-line hook/closer with
+  // 2-3-line body groups (the wellFormatted fixture below) never trips.
+  const realPost = '이거 왜 이렇게 맛있냐고??\n\n말차의 진한 향이 빵과 크림을 감싸고,\n\n한 입 베어물면 식감이 사라지는 게 실화냐고...\n\n완전 미쳤다 진짜 이런 케이크 처음 먹어봤는데,\n\n주말 간식으로 완전 강추!\n\n품절되기 전에 꼭 먹어봐야겠다\n\n이거 알던 사람 손??';
+  assert.ok(policy.voiceProblems(realPost).includes('문단 과다 분절'));
+  // A post with only a few groups, or one that mixes 1-line and multi-line groups, must stay
+  // unflagged - the opening-hook-then-blank-line pattern is explicitly encouraged, not a bug.
+  const wellFormatted = '옷은 많은데\n막상 나가려면 입을 게 없음ㅋㅋ\n\n이런 코트 하나 보고 있는데\n가을 오면 바로 입을 듯\n\n색감 진짜 예쁘더라\n이번 주에 주문할 듯';
+  assert.deepEqual(policy.voiceProblems(wellFormatted).filter(r => r === '문단 과다 분절'), []);
+  const shortHookThenBody = '이거 실화냐??\n\n말차 향이 진하고 크림이 부드러워서 계속 손이 감\n\n주말 간식으로 강추';
+  assert.deepEqual(policy.voiceProblems(shortHookThenBody).filter(r => r === '문단 과다 분절'), []);
+});
+
+test('every persona carries a shared baseline curiosity-gap hook, not just the dedicated curiosity persona', () => {
+  // Content-style change requested by the user (2026-09-15): exposure/reach improved after
+  // leaning into curiosity-driven SNS Threads viral hooks, so the shared voiceGuide() section
+  // (which comes after EVERY persona's own character block) now also tells the model to hold at
+  // least one thing back and plant a curiosity-maintaining device, regardless of which of the 5
+  // personas gets picked - not only CURIOSITY_BLOCK's own dedicated identity-hiding mechanic.
+  const { PERSONAS } = require('../src/content/personas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    assert.match(guide, /궁금증을 유지하는 장치/, `${persona.id} is missing the shared curiosity-gap directive`);
+  }
+});
+
+test('every persona carries the shared "always pick the stronger version" intensity directive', () => {
+  // Content-style change requested by the user (2026-09-15): "sns 스레드바이럴 작가로 너무 밋밋해"
+  // (the persona reads too flat/bland for an SNS Threads viral writer) - "페르소나를 최대로
+  // 강화하자" (let's maximize the persona). Added a shared bullet (after every persona's own
+  // character block, same placement as the curiosity-gap directive above) that forces choosing
+  // the stronger/more intense version of any line over a safe, hedging one, regardless of which
+  // of the 5 personas gets picked.
+  const { PERSONAS } = require('../src/content/personas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    assert.match(guide, /무조건 더 센 쪽을 고른다/, `${persona.id} is missing the shared intensity directive`);
+  }
+});
+
+test('every persona carries the shared real-viral-post technique list (numbers/third-party reaction/comic self-blame/open question/ongoing tease)', () => {
+  // Content-style change requested by the user (2026-09-15): the user sent 7 screenshots of real
+  // high-performing Threads posts ("이런글이 스레드 바이럴글이야") as the actual benchmark, after
+  // saying the bot's own output still reads too flat. The examples share concrete techniques the
+  // persona blocks didn't have: a precise quantified number ("2주 먹고 7키로"), a third party's own
+  // reaction as social proof (딸/시어머니/조카/병원 쌤), comic self-blame/deflection as a hook
+  // ("바지가 이상한거야.. 바람이 잘못된거야.."), ending on a genuine unresolved question instead of
+  // a neatly wrapped conclusion (계란 껍데기밥 post: 110 comments off "~해도 괜찮은 걸까?"), and an
+  // ongoing-story tease implying the post isn't the end ("더 빡세게 굴리는 중...").
+  const { PERSONAS } = require('../src/content/personas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    assert.match(guide, /숫자로 찍히는 구체적 디테일/, `${persona.id} is missing the quantified-detail technique`);
+    assert.match(guide, /나 아닌 다른 사람의 반응으로 검증한다/, `${persona.id} is missing the third-party-reaction technique`);
+    assert.match(guide, /코믹한 자기 비하나 엉뚱한 남 탓/, `${persona.id} is missing the comic self-blame technique`);
+    assert.match(guide, /실제 질문으로 남긴다/, `${persona.id} is missing the genuine open-question ending`);
+    assert.match(guide, /지금도 계속되고 있다는 인상/, `${persona.id} is missing the ongoing-story tease`);
+  }
+});
+
+test('every persona carries the shared "reach depends on early replies" directive elevating the open-question ending', () => {
+  // Content-style change requested by the user (2026-09-20): "노출이 잘 안돼" (exposure/reach has
+  // been chronically low overall, not a single new bad post) - asked to patch the persona again.
+  // Threads' own reach mechanic rewards early reply velocity, and technique #4 above (a genuine
+  // open question instead of a neatly wrapped conclusion) is the one device most directly aimed at
+  // provoking a reply - so this promotes it from "one of five options" to "use nearly every time,
+  // absent a specific reason not to," with the reach rationale spelled out so the model has a
+  // concrete reason to actually prioritize it over the other four techniques.
+  const { PERSONAS } = require('../src/content/personas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    assert.match(guide, /노출이 안 되는 가장 큰 원인은 발행 직후 댓글이 안 달리는 것이다/, `${persona.id} is missing the reach-via-replies directive`);
+    assert.match(guide, /거의 매번 쓴다/, `${persona.id} is missing the "use almost every time" elevation of the open-question ending`);
+  }
+});
+
+test('every persona is told not to use emoji, keeping text-only reactions (ㅋㅋ/ㄷㄷ/ㅠㅠ/;;)', () => {
+  // Content-style change requested by the user (2026-09-21): "스레드는 이모티콘쓰면 노출잘안돼"
+  // (Threads posts using emoji get less reach). Added a shared bullet banning pictograph emoji
+  // (🙂😊👍✨ etc.) everywhere in body and comment, while keeping the already-sanctioned text-only
+  // reaction markers (ㅋㅋ/ㄷㄷ/ㅠㅠ/;;) and punctuation (??, !!, ...) as the only emotion markers.
+  const { PERSONAS } = require('../src/content/personas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    assert.match(guide, /이모지\)는 본문·댓글 어디에도 쓰지 않는다/, `${persona.id} is missing the no-emoji directive`);
+  }
+});
+
+test('hard format is a line-count ceiling - there is no per-line character limit at all', () => {
+  const valid = '이거 처음 봤는데\n생각보다 훨씬 신기함\n마지막이 진짜 포인트';
+  assertThreadsShape(policy.assertVoice(valid));
+
+  // A real, complete Korean sentence can run arbitrarily long - it must be accepted whole, never
+  // rejected or force-split just for length. A fixed per-line character cap used to reject any
+  // line over 40 chars regardless of whether it was one complete sentence, directly contradicting
+  // this file's own rule ("줄은 글자수가 아니라 완결된 문장·절 단위로 나눈다"). Length alone is no
+  // longer a rejection reason - only whether a line is a complete sentence/clause matters.
+  const naturalLongLine = '사촌오빠가 밥먹다 말고 물고기 밥주러 가야된다고 함';
+  assert.ok(count(naturalLongLine) > 24, 'fixture must exceed the old low cap to be a meaningful check');
+  assert.deepEqual(policy.voiceProblems(naturalLongLine), []);
+
+  const wayLongerThanTheOldCap = '이 세제 하나 사고 나서부터는 진짜 매번 손빨래하던 얼룩진 옷들이 거짓말처럼 깨끗해져서 신세계임';
+  assert.ok(count(wayLongerThanTheOldCap) > 40, 'fixture must exceed the old removed cap to be a meaningful check');
+  assert.deepEqual(policy.voiceProblems(wayLongerThanTheOldCap), []);
+  assert.equal(policy.assertVoice(wayLongerThanTheOldCap), wayLongerThanTheOldCap);
+
+  const tooManyLines = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}줄`).join('\n');
+  assert.ok(policy.voiceProblems(tooManyLines).includes(`${policy.MAX_LINES}줄 초과`));
+  assert.throws(() => policy.assertVoice(tooManyLines), { code: 'CONTENT_STYLE_REJECTED' });
+
+  // 2026-09-16: voiceGuide() now targets ~120 chars for the whole body (a Threads
+  // growth-tips post the account owner shared). MAX_BODY_CHARS (180) is a generous ceiling
+  // past that target, not the target itself - a post that finishes a sentence a bit over
+  // 120 must NOT be flagged, matching this file's own "don't cut a complete sentence to hit
+  // a count" principle for MAX_LINE_CHARS above.
+  const finishesJustOverTarget = '이 정리함 진짜 미쳤다 방 어질러놓는 게 습관이었는데 이거 하나로 다 정리되니까 너무 신기함 진짜 인정 이건 무조건 사야됨 없어서 못 살 뻔했잖아 진짜 이거 알려준 친구한테 감사인사 백만번 하고 싶은 심정임 진짜로 완전 강추';
+  assert.ok(
+    Array.from(finishesJustOverTarget).length > 120 && Array.from(finishesJustOverTarget).length <= policy.MAX_BODY_CHARS,
+    `fixture must land between the 120-char target and MAX_BODY_CHARS: ${Array.from(finishesJustOverTarget).length}`
+  );
+  assert.deepEqual(policy.voiceProblems(finishesJustOverTarget), []);
+  assert.equal(policy.bodyTooLong(finishesJustOverTarget), false);
+
+  const paddedPastTheCeiling = Array.from({length: policy.MAX_BODY_CHARS + 20}, () => '가').join('');
+  assert.ok(policy.bodyTooLong(paddedPastTheCeiling));
+  assert.ok(policy.voiceProblems(paddedPastTheCeiling).includes('본문 길이 초과'));
+  assert.throws(() => policy.assertVoice(paddedPastTheCeiling), { code: 'CONTENT_STYLE_REJECTED' });
+
+  // Blank lines (voiceGuide()'s own paragraph-break rhythm) must not count toward the body
+  // length - only visible characters do. MAX_LINES caps a post at 13 newlines, so this packs
+  // content just under the 180-char ceiling across all 14 lines: content alone must stay under
+  // the ceiling, but content + newlines (13 extra chars) must not - the exact case bodyTooLong()
+  // exists to get right.
+  const contentOnly175 = '짧은문장'.repeat(50).slice(0, 175);
+  const linesOf175 = Array.from({length: policy.MAX_LINES}, (_, i) => contentOnly175.slice(i * 13, (i + 1) * 13)).join('\n');
+  assert.equal(Array.from(linesOf175.replace(/\n/g, '')).length, 175, 'fixture content must stay under MAX_BODY_CHARS on its own');
+  assert.ok(linesOf175.length > policy.MAX_BODY_CHARS, 'fixture must exceed MAX_BODY_CHARS only when newlines are counted');
+  assert.equal(policy.bodyTooLong(linesOf175), false, 'newlines must not count toward body length');
+
+  assert.equal(count('가나다😀'), 4, 'emoji must count as one Unicode code point');
+});
+
+test('formatVoice never truncates or hard-wraps generated copy, however long a single line is', () => {
+  const long = '가'.repeat(60);
+  assert.equal(policy.formatVoice(long), long);
+  assert.deepEqual(policy.voiceProblems(long), []);
+  assert.equal(policy.assertVoice(long), long);
+});
+
+test('blank-line paragraph breaks are allowed and count toward the line boundary', () => {
+  const text = ['첫줄 생각 하나','','둘째 생각 하나','','셋째 생각 하나'].join('\n');
+  assertThreadsShape(policy.assertVoice(text));
+  assert.deepEqual(policy.voiceProblems(text), []);
+
+  const parts = Array.from({length: policy.MAX_LINES}, (_, i) => (i % 2 === 0 ? `${i}번째 줄` : ''));
+  if (!parts[parts.length - 1]) parts[parts.length - 1] = '마지막 줄'; // must not end on a blank line
+  const atTheBoundary = parts.join('\n');
+  assert.equal(atTheBoundary.split('\n').length, policy.MAX_LINES);
+  assertThreadsShape(policy.assertVoice(atTheBoundary));
+});
+
+test('incomplete-line guard rejects only obvious fragments, not normal Korean beats', () => {
+  assert.deepEqual(policy.incompleteLineReasons('이 조합은 의외인데\n먹어보면 바로 이해됨'), []);
+  assert.deepEqual(policy.incompleteLineReasons('이거는\n진짜 신기함'), []);
+  assert.deepEqual(policy.incompleteLineReasons('나는\n진짜 신기함'), []);
+  assert.ok(policy.incompleteLineReasons('그리고\n진짜 신기함').length > 0);
+  assert.ok(policy.incompleteLineReasons('하지만\n결과는 완전 다름').length > 0);
+});
+
+test('incomplete-line guard also catches a bare dependent connective as the very last line, with no following line to pair it with', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the main loop only ever
+  // checks a line as CONNECTOR_ONLY when a FOLLOWING line exists, so a post trailing off with a
+  // bare connective as its literal last line ("이거 완전 신기함 / 그런데") - or a single-line post
+  // that is only "그런데" - went completely undetected, despite being the clearest possible
+  // evidence of a cut-off post.
+  assert.ok(policy.incompleteLineReasons('이거 완전 신기함\n그런데').length > 0);
+  assert.ok(policy.incompleteLineReasons('그런데').length > 0);
+  assert.ok(policy.incompleteLineReasons('가격도 착함\n그니까').length > 0);
+  // A normal complete post, or one that merely ends with a blank line, must not be flagged.
+  assert.deepEqual(policy.incompleteLineReasons('이거 완전 신기함\n진짜 좋음'), []);
+  assert.deepEqual(policy.incompleteLineReasons('이거 완전 신기함\n\n'), []);
+});
+
+test('connector-only guard also catches 그니까/그러니까, not just 그리고/근데/그래서', () => {
+  // Regression: 그니까 (casual) / 그러니까 (formal) are grammatically dependent connectives in
+  // the exact same family as 그래서/근데 - always require a following clause, never a complete
+  // standalone utterance - but were missing from CONNECTOR_ONLY entirely.
+  assert.ok(policy.incompleteLineReasons('이거 완전 신기함ㅋㅋ\n그니까\n한번 써봐야될듯').length > 0);
+  assert.ok(policy.incompleteLineReasons('가격도 착함\n그러니까\n더 고민할 필요가 없음').length > 0);
+  const { repairConnectorOnlyBreaks } = require('../src/content/voiceLocalRepair');
+  const fixed = repairConnectorOnlyBreaks('이거 완전 신기함ㅋㅋ\n그니까\n한번 써봐야될듯', policy.MAX_LINE_CHARS);
+  assert.deepEqual(policy.incompleteLineReasons(fixed), []);
+});
+
+test('connector-only guard does not flag words that can stand alone as a complete reaction', () => {
+  // 그치/그럼/아니 look connector-shaped but each also works as a genuine standalone
+  // interjection ("그치" = "right?", "그럼" = "of course!", "아니" = "no way!"), so they must
+  // stay out of CONNECTOR_ONLY - unlike 그래서/그니까, a bare line consisting only of one of
+  // these is not itself proof of a cut-off sentence.
+  assert.deepEqual(policy.incompleteLineReasons('이거 완전 좋았음\n그치\n네 말이 맞아'), []);
+  assert.deepEqual(policy.incompleteLineReasons('가는거 맞지\n그럼\n같이 준비하자'), []);
+});
+
+test('connector-only guard catches "그런데"/"그러니깐", the same words as 근데/그니까 just a different register or spelling', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "그런데" is the exact
+  // same word as "근데" (only more formal), and "그러니깐" is just a third common spelling of
+  // "그니까"/"그러니까" - both already in this list - but neither variant was itself listed, so a
+  // bare line consisting only of one of them went completely unflagged even though it needs a
+  // following clause exactly like its already-covered counterpart does.
+  const { repairConnectorOnlyBreaks } = require('../src/content/voiceLocalRepair');
+  const broken = ['그런데\n생각보다 비쌈', '그러니깐\n결국 산 거임'];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
+test('connector-only guard also catches "그치만"/"게다가"/"왜냐하면" - dependent connectives missing from the list', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "그치만" (casual
+  // "하지만"), "게다가" (moreover), and "왜냐하면" (because) are just as grammatically dependent
+  // as the connectives already in this list - each only ever introduces a following clause and
+  // is never a complete standalone utterance - but were missing entirely, so a bare line
+  // consisting only of one of them went completely unflagged.
+  const { repairConnectorOnlyBreaks } = require('../src/content/voiceLocalRepair');
+  const broken = ['그치만\n배송이 좀 느림', '게다가\n디자인도 예쁨', '왜냐하면\n기능이 다름'];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
+test('connector-only guard does not flag "그래도" - it genuinely stands alone as a defiant one-word reply', () => {
+  // Deliberately excluded for the same reason as 그치/그럼/아니 above: "그래도!" is a real,
+  // complete standalone utterance in casual Korean ("still, I will"), not proof of a cut-off
+  // sentence, so it must not be treated the same as the always-dependent connectives.
+  assert.deepEqual(policy.incompleteLineReasons('하지 말라니까\n그래도\n할 거임'), []);
+});
+
+test('a bound-noun exclamation ("토할" / "뻔!") split across lines is caught and repaired, not shipped', () => {
+  const broken = '올라오고... 진짜 토할\n뻔! 근데 이 세제';
+  assert.ok(policy.incompleteLineReasons(broken).length > 0, 'must flag the mid-phrase split');
+  assert.ok(policy.voiceProblems(broken).includes('미완결 줄바꿈'));
+  const { repairConnectorOnlyBreaks } = require('../src/content/voiceLocalRepair');
+  const fixed = repairConnectorOnlyBreaks(broken, policy.MAX_LINE_CHARS);
+  assert.deepEqual(policy.incompleteLineReasons(fixed), []);
+  assert.equal(fixed.split('\n').length, 1, 'the exclamation must end up on one line, not split');
+});
+
+test('the local repair pass shares the same bound-noun regex as detection, not a stale copy', () => {
+  // Regression: threadsVoiceLocalRepair.js used to keep its own copy of
+  // DANGLING_BOUND_NOUN_START (and the other two line-guard regexes) instead
+  // of importing from threadsVoiceLineGuards.js. When that regex was widened
+  // to catch 만큼/정도 with a trailing particle (see the test above this
+  // one), the repair copy never got the update - so voiceProblems() flagged
+  // a "정도로"-led split as broken, but repairConnectorOnlyBreaks() silently
+  // failed to merge it back (returned the text unchanged), because its own
+  // stale regex didn't recognize "정도" at all.
+  const broken = '진짜 놀랄 정도\n정도로 맛있었음';
+  assert.ok(policy.voiceProblems(broken).includes('미완결 줄바꿈'), 'must be flagged as broken');
+  const { repairConnectorOnlyBreaks } = require('../src/content/voiceLocalRepair');
+  const fixed = repairConnectorOnlyBreaks(broken, policy.MAX_LINE_CHARS);
+  assert.deepEqual(policy.voiceProblems(fixed), [], 'the repair must actually fix what detection flagged');
+  assert.equal(fixed.split('\n').length, 1, 'the split bound-noun phrase must end up merged onto one line');
+});
+
+test('bound-noun detection is not fooled by ordinary words that share a first syllable', () => {
+  // Synthetic-sentence check: 채, 리, 참, 겸, 셈, 법 are bound nouns only when they stand
+  // bare before punctuation - as the first syllable of an ordinary word (채소, 리뷰, 참고,
+  // 겸사겸사, 셈이다, 법적으로) they must NOT be flagged as a dangling split.
+  const safe = [
+    '오늘 장 보고 왔는데\n채소를 많이 샀음ㅋㅋ',
+    '이거 써보고\n리뷰 남겨볼게',
+    '가격 보고\n참고로 말하면 반값 세일함',
+    '청소하고\n겸사겸사 정리도 했음',
+    '이거\n법적으로 문제없다고 하더라',
+    '어차피 사려고 했던\n셈이니까 잘됐다',
+    '집에 와서\n정리하고 씻었음',
+  ];
+  for (const text of safe) assert.deepEqual(policy.incompleteLineReasons(text), [], `false positive on: ${text}`);
+});
+
+test('bound nouns with a trailing particle (만큼이나, 정도로) are still caught as a dangling split', () => {
+  // Regression: real generated text almost always attaches a particle straight onto 만큼/정도
+  // ("만큼이나", "정도로") rather than leaving it bare before punctuation - the original bound-noun
+  // check missed all of these, and 정도 itself was missing from the list entirely.
+  const broken = [
+    '이거\n만큼이나 좋아함',
+    '먹을\n만큼만 담았음',
+    '한 박스 다 먹을\n만큼 맛있음',
+    '소름 돋을\n정도로 좋음',
+    '살 뺀\n정도는 아니지만',
+  ];
+  for (const text of broken) assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+});
+
+test('정도 also catches the 만/밖에 particles, not just 로/까지/는/도/의', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the 정도 particle group
+  // already covered 로/까지/는/도/의 but was still missing "만"/"밖에" - both at least as common as
+  // the particles already listed - so a split using either one went completely undetected.
+  const { repairConnectorOnlyBreaks } = require('../src/content/voiceLocalRepair');
+  const broken = ['생각보다 작은\n정도만 딱 나옴', '이 정도\n정도밖에 안 됨'];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
+test('three more everyday bound nouns (편, 만한, 듯이) are caught as a dangling split, and repaired', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): 편/만한/듯이 are at least
+  // as common as 만큼/정도 in casual product reviews but were entirely missing from
+  // DANGLING_BOUND_NOUN_START, so a split like "이 국물은 좀 순한" / "편이라 아이도 잘 먹음" went
+  // completely undetected even though the second line is grammatically incomplete on its own.
+  const { repairConnectorOnlyBreaks } = require('../src/content/voiceLocalRepair');
+  const broken = [
+    '이 국물은 좀 순한\n편이라 아이도 잘 먹음',
+    '생각보다 훨씬 큼\n만한 사이즈였음',
+    '이거 써보니까\n듯이 편해짐',
+  ];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
+test('the new 편/만한/듯이 bound-noun check is not fooled by ordinary words sharing the same first syllable(s)', () => {
+  // Synthetic-sentence check mirroring the existing 채/리/참/겸/셈/법 false-positive test above:
+  // 편의점 (convenience store), 편하게 (comfortably), and other ordinary 편-led words must not be
+  // flagged just because they start with the same syllable as the bound noun 편.
+  const safe = [
+    '아까 갔다온\n편의점에서 산 거 완전 대박',
+    '이거 완전\n편하게 앉아서 볼 수 있음',
+    '어제 산\n편지지가 너무 예쁨',
+  ];
+  for (const text of safe) assert.deepEqual(policy.incompleteLineReasons(text), [], `false positive on: ${text}`);
+});
+
+test('the bound noun 터 is caught as a dangling split in its 터인데/터였는데 forms, not just 터라', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): DANGLING_BOUND_NOUN_START
+  // only matched "터라" - the equally common "터인데"/"터였는데" conjugations went completely
+  // undetected, so a split like "나가려던" / "터인데 비가 옴" was shipped as two lines even though
+  // the second line is grammatically incomplete without "터인데" attaching to the line before it.
+  const { repairConnectorOnlyBreaks } = require('../src/content/voiceLocalRepair');
+  const broken = [
+    '나가려던\n터인데 비가 옴',
+    '이미 산\n터였는데 세일함',
+    '막 도착한\n터라 정신없음',
+  ];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
+test('the 터 bound-noun check is not fooled by ordinary words that merely start with 터', () => {
+  // Synthetic-sentence check mirroring the existing 편/만한/듯이 false-positive test above:
+  // 터널/터졌음/터미널/터치감 are ordinary words unrelated to the bound-noun meaning and must not
+  // be flagged just because they start with the same syllable as 터.
+  const safe = [
+    '아까 지나온\n터널 진짜 길었음',
+    '풍선이 결국\n터졌음ㅋㅋ 완전 놀람',
+    '버스\n터미널 도착해서 바로 탐',
+    '이 케이스\n터치감 진짜 좋음',
+  ];
+  for (const text of safe) assert.deepEqual(policy.incompleteLineReasons(text), [], `false positive on: ${text}`);
+});
+
+test('the bound nouns 덕분에/대신에/때문에 are caught as a dangling split, and repaired', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 덕분에("thanks to")/
+  // 대신에("instead of")/때문에("because of") are dependent on a preceding noun/clause exactly
+  // like the already-listed 김에/바람에/탓에 - "때문에" especially is likely the single most common
+  // causal bound expression in Korean - but none were in the list, so a split like "이 가격 /
+  // 때문에 망설여짐" went completely undetected.
+  const { repairConnectorOnlyBreaks } = require('../src/content/voiceLocalRepair');
+  const broken = [
+    '이 필터를 쓴\n덕분에 물이 깨끗해짐',
+    '이거 산\n대신에 다른 걸 포기함',
+    '이 가격\n때문에 망설여짐',
+    // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): "덕에" is the exact
+    // same causal bound noun as "덕분에" (the contracted/casual form, not a different word) -
+    // omitted when 덕분에/대신에/때문에 were added earlier this same hour.
+    '이 앱 진짜 편함\n덕에 시간 엄청 절약됨',
+    // REGRESSION (found via synthetic testing, hourly review, 2026-09-15): "대로"("as/according
+    // to")/"와중에"("in the midst of") are exactly as dependent on a preceding modifier as the
+    // already-listed 터인데/참, but were missing entirely.
+    '말한\n대로 했더니 완전 좋아짐',
+    '진짜 바쁜\n와중에 겨우 시간내서 씀',
+  ];
+  for (const text of broken) {
+    assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
+    const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
+    assert.deepEqual(policy.incompleteLineReasons(fixed), [], `repair must fix: ${text}`);
+    assert.equal(fixed.split('\n').length, 1, `must merge onto one line: ${text}`);
+  }
+});
+
+test('runtime review repairs a too-many-lines post instead of discarding the material', async () => {
+  // Fixture updated: an overlong single line used to be a rejection reason on its own and was
+  // this test's trigger, but length alone no longer gates rejection - too-many-lines still does,
+  // so that's what exercises the same repair path here now.
+  let calls = 0;
+  const original = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번째 줄`).join('\n');
+  assert.ok(policy.voiceProblems(original).includes(`${policy.MAX_LINES}줄 초과`), 'fixture must actually trigger a rejection to exercise the repair path');
+  const out = await policy.reviewSourceVoice(original, { mode: 'product', sourceText: '집게형 실리콘 뒤집개 영상' }, async () => {
+    calls++;
+    return { text: '집게랑 뒤집개가 합쳐짐\n요리할 때 진짜 편함' };
+  });
+  assert.equal(calls, 1);
+  assert.equal(out, '집게랑 뒤집개가 합쳐짐\n요리할 때 진짜 편함');
+  assertThreadsShape(out);
+});
+
+test('runtime review retries one more time when first format repair still fails', async () => {
+  let calls = 0;
+  const tooManyLines = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번째 줄`).join('\n');
+  const out = await policy.reviewSourceVoice(tooManyLines, { mode: 'product' }, async () => {
+    calls++;
+    if (calls === 1) return { text: Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번`).join('\n') };
+    return { text: '이건 진짜 신기함\n써보면 바로 이해됨' };
+  });
+  assert.equal(calls, 2);
+  assertThreadsShape(out);
+});
+
+test('runtime review is bounded and rejects after two failed repairs', async () => {
+  let calls = 0;
+  const tooManyLines = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번째 줄`).join('\n');
+  await assert.rejects(
+    policy.reviewSourceVoice(tooManyLines, { mode: 'product' }, async () => {
+      calls++;
+      return { text: Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번`).join('\n') };
+    }),
+    { code: 'CONTENT_STYLE_REJECTED' }
+  );
+  assert.equal(calls, policy.MAX_FORMAT_REPAIR_ATTEMPTS);
+});
+
+test('a formulaic "너도 해봐~🙂" ad-CTA sign-off is rejected, even split across the last two lines', () => {
+  const splitAcrossLines = '이거 진짜 신기함ㅋㅋ\n진짜 가능할 듯! 너도\n도전해봐~😊';
+  assert.ok(policy.voiceProblems(splitAcrossLines).includes('뻔한 CTA 마무리'));
+  assert.throws(() => policy.assertVoice(splitAcrossLines), { code: 'CONTENT_STYLE_REJECTED' });
+
+  const sameLine = '이거 완전 신기함ㅋㅋ\n너도 한번 해봐~😆';
+  assert.ok(policy.voiceProblems(sameLine).includes('뻔한 CTA 마무리'));
+
+  assert.deepEqual(policy.voiceProblems('이거 진짜 신기함\n다음에도 또 봐야지'), []);
+});
+
+test('the ad-CTA guard catches "너도 <verb>봐" for verbs other than 해/써, not just the two named as examples', () => {
+  // Regression: voiceGuide() only *names* 해봐/도전해봐/써봐 as illustrative examples of the
+  // banned CTA shape ("너도 해봐, 너도 도전해봐, 너도 써봐처럼"), but the old regex hardcoded
+  // exactly those verb stems - so the identical formulaic CTA slipped through untouched for
+  // every other verb this bot's product categories actually use: 발라봐 (skincare), 만들어봐/
+  // 먹어봐 (food/recipe), 사봐 (a general purchase nudge), 들어봐 (media).
+  for (const verbEnding of ['너도 발라봐~😊', '너도 만들어봐~', '너도 사봐!', '너도 먹어봐~', '너도 들어봐', '너도 발라보길']) {
+    const post = '이거 진짜 좋았음\n' + verbEnding;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${verbEnding}"`);
+  }
+});
+
+test('the ad-CTA guard catches the same formulaic CTA under other reader-address pronouns, not just "너도"', () => {
+  // Regression: only the literal "너도" was matched, so a model could reproduce the identical
+  // banned CTA shape untouched just by swapping the pronoun ("너희도", "당신도", "다들", "모두").
+  for (const variant of ['너희도 한번 써봐', '당신도 써보길', '다들 한번 써봐', '모두 써보길']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
+test('the ad-CTA guard catches "~보길 바람/바래요/바랍니다" - the same CTA with a wish-verb tacked on', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "보길"/"봐" had to be the
+  // literal last word before the guard fired - "너희도 한번 써보길 바람" slipped through completely
+  // untouched simply because a wish-verb ("바람"/"바래요"/"바랍니다") came after "보길", even though
+  // it is the exact same formulaic recommend-and-hope CTA shape.
+  for (const variant of ['너희도 한번 써보길 바람', '너도 한번 해보길 바람', '다들 써보길 바래요', '당신도 한번 도전해보길 바랍니다']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
+test('the wish-verb CTA extension does not flag ordinary well-wishes that do not recommend trying the product', () => {
+  assert.deepEqual(policy.voiceProblems('이거 완전 신세계였음\n다들 좋아할 듯').filter(r => r === '뻔한 CTA 마무리'), []);
+  assert.deepEqual(policy.voiceProblems('요즘 다들 힘들텐데\n너도 좋아하는 스타일이길 바람').filter(r => r === '뻔한 CTA 마무리'), []);
+  assert.deepEqual(policy.voiceProblems('날씨 추운데\n다들 건강 챙기길 바람').filter(r => r === '뻔한 CTA 마무리'), []);
+});
+
+test('the ad-CTA guard catches the plain polite "-요" ending after 봐, not just the bare form', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "요" straight after 봐
+  // ("다들 한번 써봐요~", "너도 한번 먹어봐요") is at least as common as the bare "봐" form this guard
+  // already caught, and is the exact same formulaic recommend CTA - it slipped through completely
+  // untouched simply because "요" wasn't a recognized optional suffix after 봐/보길.
+  for (const variant of ['다들 한번 써봐요~', '너도 한번 먹어봐요', '너희도 꼭 써봐요!', '당신도 한번 사봐요']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
+test('the ad-CTA guard catches the formal imperative register (-세요/-시길/-십시오), not just casual -봐', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): only the casual 아/어 봐
+  // register was covered - the formal imperative register of the exact same recommend-and-try CTA
+  // ("다들 한번 써보세요", "너도 한번 드셔보세요", "당신도 꼭 사용해보세요~", "너도 함 써보시길") slipped
+  // through completely untouched simply because it uses -세요/-시길/-십시오 instead of -봐/-보길.
+  for (const variant of ['다들 한번 써보세요', '너도 한번 드셔보세요', '당신도 꼭 사용해보세요~', '너도 함 써보시길']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
+test('the ad-CTA guard catches "여러분도", a common audience address form missing from the pronoun list', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): "여러분도" is at least as
+  // common a formal-plural way to address an audience on social media as the already-covered
+  // 다들/모두, but was still missing, so "여러분도 한번 써보세요" reproduced the exact same banned
+  // CTA shape completely untouched.
+  for (const variant of ['여러분도 한번 써보세요', '여러분도 꼭 써봐요~', '여러분도 한번 써봐', '여러분도 써보길 바람']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
+test('the ad-CTA guard catches "보시기"/"보시기를", the uncontracted form of the already-covered "보시길"', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 보시길 is a contraction of
+  // 보시기를, already paired with the 바랍니다/바래요/바람 trailing group - but the uncontracted
+  // "보시기"/"보시기를" form is at least as common a formal invitation ending ("너도 꼭 사용해보시기
+  // 바랍니다") and was missing entirely, so it sailed through unflagged.
+  for (const variant of ['너도 꼭 사용해보시기 바랍니다', '여러분도 꼭 드셔보시기를 바랍니다', '다들 한번 써보시기 바람']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
+test('the generalized ad-CTA guard does not flag ordinary sentences that merely contain "너도"', () => {
+  for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬', '다들 이렇게 사나요?', '다들 힘내자', '여러분도 이런 경험 있으신가요?']) {
+    const post = '완전 신기했음\n' + safe;
+    assert.deepEqual(policy.voiceProblems(post).filter(r => r === '뻔한 CTA 마무리'), [], `should not catch: "${safe}"`);
+  }
+});
+
+test('the ad-CTA guard catches "다 같이"/"우리 다 같이", group-address forms missing from the pronoun list', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-15): "다 같이"/"우리 다 같이"
+  // address a group exactly like the already-covered 다들/모두 ("다 같이 써봐요", "우리 다 같이
+  // 써봐" reproduce the identical formulaic CTA), but were missing entirely.
+  for (const variant of ['다 같이 써봐요', '우리 다 같이 써봐', '다같이 써보세요']) {
+    const post = '이거 진짜 좋았음\n' + variant;
+    assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
+  }
+});
+
+test('the ad-CTA guard still does not flag ordinary "보다"(to look) sentences with no address pronoun', () => {
+  // A fully pronoun-optional version of this guard was tried and reverted in the same review pass
+  // that added "다 같이"/"우리 다 같이" above: 보다/봐/보세요 is also the ordinary literal verb "to
+  // look", and without some address/group signal there is no way to tell a genuine CTA ("한번쯤
+  // 써보세요") apart from someone just saying "look at this" ("저기 좀 보세요", "이 사진 좀 봐").
+  for (const safe of ['저기 좀 보세요', '이 사진 좀 봐', '와 대박 저것 좀 봐봐']) {
+    const post = '완전 신기했음\n' + safe;
+    assert.deepEqual(policy.voiceProblems(post).filter(r => r === '뻔한 CTA 마무리'), [], `should not catch: "${safe}"`);
+  }
+});
+
+test('the persona guide never recommends an example that trips any of its own safety checks', () => {
+  // The closing-pattern example list once suggested "너도 꼭 써봐!" as a good ending while a
+  // later rule banned "너도 해봐/도전해봐/써봐" ad-CTAs outright — a self-contradiction that could
+  // lead the model straight into the exact ending GENERIC_CTA_ENDING rejects. Only check the
+  // "패턴 예시" (recommended pattern) lines, not the ban rule's own quoted counter-examples.
+  // REGRESSION-PREVENTION (hourly review, 2026-09-14): this used to call voiceGuide() with no
+  // argument, which only exercises DEFAULT_PERSONA_BLOCK (reaction) - GENERIC_CTA_ENDING has since
+  // been broadened three separate times this session (-요, formal -세요/-시길/-십시오, 여러분도),
+  // and each of the other 4 persona blocks in threadsPersonas.js (curiosity, housewife-recipe,
+  // trainer-expert, parenting-mom) has its own independent "[마무리 패턴 예시]" line that a broader
+  // guard could just as easily start matching without this test ever noticing. Checking all 5
+  // confirmed no current contradiction, but only checking the default going forward would leave
+  // the other 4 blocks free to silently regress the next time either side changes.
+  // REGRESSION-PREVENTION (hourly review, 2026-09-14): this used to filter voiceProblems() down to
+  // just the CTA-ban reason, so a persona example that happened to trip a DIFFERENT check this
+  // session also broadened (highRiskClaim's 아토피/습진/비염/cm/줄었 additions, or any of the
+  // dangling-line-split additions) would have gone completely unnoticed. Checking the full,
+  // unfiltered result confirmed no current contradiction on any check, not just the CTA one.
+  const { PERSONAS } = require('../src/content/personas');
+  for (const persona of PERSONAS) {
+    const guide = policy.voiceGuide(persona.block);
+    const exampleLines = guide.split('\n').filter(line => /\[(?:오프닝|마무리) 패턴 예시/.test(line));
+    assert.ok(exampleLines.length >= 2, `expected both opening and closing pattern-example lines for persona "${persona.id}"`);
+    for (const line of exampleLines) {
+      const quotedExamples = [...line.matchAll(/"([^"]+)"/g)].map(m => m[1]);
+      for (const example of quotedExamples) {
+        assert.deepEqual(policy.voiceProblems(example), [],
+          `persona "${persona.id}"'s recommended example trips a safety check it also enforces: "${example}"`);
+      }
+    }
+  }
+});
+
+test('old style blacklist is gone while safety checks remain', () => {
+  for (const expressive of [
+    '여러분은 어때?',
+    '대박임 ㅋㅋ',
+    '강력 추천',
+    '원문에서는 이렇대',
+    'ㅋㅋㅋㅋㅋㅋ',
+  ]) assert.deepEqual(policy.voiceProblems(expressive), []);
+
+  assert.ok(policy.voiceProblems('한 달 만에 12kg 빠졌어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이거 먹으면 암이 치료돼').includes('고위험 효능 주장'));
+});
+
+test('high-risk weight-loss claims are caught with 키로/킬로 units, not just kg', () => {
+  // Regression: the weight-loss branch only matched the "kg" spelling, so the
+  // same claim written with the equally common Korean unit spellings slipped
+  // through the safety guard untouched.
+  assert.ok(policy.voiceProblems('일주일 만에 3키로 빠짐').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('한 달 만에 5킬로 감량했어').includes('고위험 효능 주장'));
+});
+
+test('high-risk body-change claims also cover cm/센치 units and 줄었/줄음, not just kg-weight loss', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the quantified body-
+  // change claim only ever recognized weight units (kg/키로/킬로) and a narrow verb set (빠졌/빠짐/
+  // 감량/뺐/감소) - "cm"/"센치" body-measurement reduction claims ("허리 5cm 줄었어") are exactly as
+  // common and exactly as unverifiable for this bot's shapewear/diet-product categories, and
+  // "줄었/줄음" is at least as common a reduction verb as the ones already listed.
+  assert.ok(policy.voiceProblems('이거 입고 허리 5cm 줄었어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('일주일 만에 허벅지 3센치 빠짐').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('뱃살 10cm 감소했어요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('체중이 3키로 줄었어').includes('고위험 효능 주장'));
+  assert.deepEqual(policy.voiceProblems('이 옷 사이즈 5cm 크게 나옴'), []);
+  assert.deepEqual(policy.voiceProblems('이 침대 폭 10cm 넉넉함'), []);
+});
+
+test('high-risk cure claims are caught in their natural casual conjugations, not just "낫음"', () => {
+  // Regression: "낫다" is ㅅ-irregular - the ㅅ drops before a vowel-starting
+  // ending, so the grammatically correct casual forms are 나아/나았/나음/나은
+  // (never 낫아/낫음). The old regex only matched the ungrammatical "낫음",
+  // so real cured-of-illness claims written the way voiceGuide() itself
+  // prefers (짧고 담백한 반말체) never tripped the guard at all.
+  assert.ok(policy.voiceProblems('염증이 싹 나았어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('통증이 다 나음').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('염증이 나아졌음').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('당뇨가 다 나은 느낌').includes('고위험 효능 주장'));
+});
+
+test('the unrelated "낫다" comparison sense does not falsely trigger the cure-claim guard', () => {
+  // "나아/나은" also mean "better than" in a plain comparison with no illness
+  // involved. The cure branch always requires a disease/symptom keyword in
+  // the same clause, so ordinary comparisons must stay clear.
+  assert.deepEqual(policy.voiceProblems('이 옷이 저 옷보다 나아'), []);
+  assert.deepEqual(policy.voiceProblems('나이가 좀 있는 편인데'), []);
+  assert.deepEqual(policy.voiceProblems('나아갈 방향을 고민 중'), []);
+});
+
+test('absolute claims of protection from real child-safety hazards are caught (choking/swallowing/allergy)', () => {
+  // This guard is deliberately narrow, not a blanket "완전/100% 안전" catch - see the next test
+  // for why. The real, narrow risk worth code-enforcing is a false claim of protection from
+  // actual physical harm to a child, which the parenting-mom persona (threadsPersonas.js)
+  // separately warns against in its own prompt text.
+  assert.ok(policy.voiceProblems('이 젖병 삼켜도 100% 안전해요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이 이유식 알레르기 걱정 전혀 없음').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('질식 위험 없는 사이즈').includes('고위험 효능 주장'));
+});
+
+test('the child-safety-hazard guard catches the particle/spaced phrasing real sentences actually use', () => {
+  // REGRESSION found via synthetic-sentence testing (hourly review): this guard's keywords were
+  // written assuming no subject particle (위험/걱정 directly followed by 없) and no space after
+  // "완전" - but the single most natural way to write these absolute claims in Korean inserts a
+  // particle ("위험'이' 없어요") or a space ("완전 안전해요", not "완전안전해요"). Without those,
+  // the guard silently let the most common phrasing of exactly the claims it exists to catch
+  // pass straight through - a false negative in a child-safety check, worse than a false positive.
+  assert.ok(policy.voiceProblems('삼켜도 완전 안전해요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('알레르기 위험이 없어요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('알레르기 위험이 전혀 없어요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('질식 위험이 없어요').includes('고위험 효능 주장'));
+});
+
+test('fixing the particle under-match does not reopen a false positive on hedged, non-absolute phrasing', () => {
+  // The parenting-mom persona (threadsPersonas.js) is explicitly instructed to prefer hedged
+  // safety language over absolute claims (e.g. "이거 완전 안전함" 대신 "이 정도면 안심되는 편").
+  // Allowing the "위험이" particle above must not start catching that same hedge shape applied
+  // to an allergy/choking claim - only the sentence-final absolute form should trigger.
+  assert.deepEqual(policy.voiceProblems('알레르기 위험이 없는 편이라 그나마 안심하고 씀'), []);
+  assert.deepEqual(policy.voiceProblems('질식 위험이 없는 편이라 어린이집에서도 많이 써요'), []);
+  assert.deepEqual(policy.voiceProblems('알레르기 위험이 없는 것은 아니지만 그래도 안심되는 편'), []);
+});
+
+test('a generic "완전/100% 안전" claim does NOT trigger the guard - that is ordinary marketing language', () => {
+  // REGRESSION (found live: real posts were failing to publish): an earlier version of this
+  // guard matched any "완전 안전"/"100% 안전" regardless of context, which is completely
+  // ordinary marketing language across nearly every product category, not a red flag on its
+  // own - it was rejecting a huge fraction of ordinary posts across every category, not just
+  // kids' products.
+  assert.deepEqual(policy.voiceProblems('이 장난감 완전 안전함ㅋㅋ'), []);
+  assert.deepEqual(policy.voiceProblems('이 케이스 완전 안전하게 보호해줌'), []);
+  assert.deepEqual(policy.voiceProblems('이 콘센트 완전 안전함'), []);
+  assert.deepEqual(policy.voiceProblems('헬멧 완전 안전한 느낌'), []);
+  assert.deepEqual(policy.voiceProblems('이 잠금장치 100% 안전해요'), []);
+  assert.deepEqual(policy.voiceProblems('아이 손 안 닿게 완전 안전하게 설치함'), []);
+  assert.deepEqual(policy.voiceProblems('와이파이 완전 안전하게 연결됨'), []);
+  assert.deepEqual(policy.voiceProblems('결제 정보 완전 안전하게 보호됨'), []);
+  assert.deepEqual(policy.voiceProblems('위험 전혀 없어요'), []);
+});
+
+test('the child-safety-hazard guard does not falsely trigger on ordinary "안전"/"완전"/"전혀" phrases', () => {
+  assert.deepEqual(policy.voiceProblems('이 정도면 안심되는 편'), []);
+  assert.deepEqual(policy.voiceProblems('안전벨트 튼튼함'), []);
+  assert.deepEqual(policy.voiceProblems('안전모 착용하고 탐'), []);
+  assert.deepEqual(policy.voiceProblems('이거 완전 좋음ㅋㅋ'), []);
+  assert.deepEqual(policy.voiceProblems('위험한 느낌은 아닌데'), []);
+  assert.deepEqual(policy.voiceProblems('전혀 다른 느낌이었음'), []);
+  assert.deepEqual(policy.voiceProblems('완전 신기했음'), []);
+  assert.deepEqual(policy.voiceProblems('가격이 완전 착함'), []);
+});
+
+test('cure-claim guard also catches 사라지다/가라앉다, not just 낫다/치료되다/없어짐', () => {
+  // Regression: 통증/염증 등은 이미 질병·증상 키워드 목록에 있었지만, 완치 동사 목록에는
+  // "사라지다"(disappear)와 "가라앉다"(subside)가 아예 없었다. 심지어 이미 목록에 있던
+  // "없어짐"도 정확히 그 활용형만 매칭해서 "없어졌어"/"없어져" 같은 흔한 변형은 놓치고 있었다.
+  // 일상 반말에서 "낫다"/"치료되다"만큼, 혹은 그보다 더 자주 쓰이는 표현들이라 실제 효능
+  // 주장이 완전히 안 걸리고 있었다.
+  assert.ok(policy.voiceProblems('통증 100% 사라짐').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('염증이 사라졌어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('염증이 없어졌어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('염증이 가라앉았어').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('통증이 가라앉음').includes('고위험 효능 주장'));
+});
+
+test('사라지다/가라앉다 do not falsely trigger without a disease/symptom keyword nearby', () => {
+  assert.deepEqual(policy.voiceProblems('스트레스가 싹 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('먼지가 다 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('냄새가 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('얼룩이 사라졌어'), []);
+});
+
+test('"병" was removed from the disease-keyword list - it is bare-word ambiguous with "bottle"', () => {
+  // Regression found live (real posts failing to publish): "병" matches both "disease" and the
+  // extremely common "-병" bottle/container suffix (화장품병, 샴푸병, 오일병, 약병, 유리병, or a
+  // bare "이 오일 병"). That ambiguity was already a latent false-positive risk with the original
+  // "없어짐" alone, but widening the verb list this session to include 사라지다/가라앉다 - both
+  // completely ordinary ways to describe a bottle's contents running out or sediment settling -
+  // turned it into a routine false rejection for completely normal beauty/food product reviews.
+  assert.deepEqual(policy.voiceProblems('이 화장품병 안에 있던 크림이 다 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('유리병에 담긴 오일 금방 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('샴푸병 내용물이 순식간에 없어짐'), []);
+  assert.deepEqual(policy.voiceProblems('이 오일병 냄새가 사라짐'), []);
+  assert.deepEqual(policy.voiceProblems('약병 안에 먼지가 가라앉았어'), []);
+  // 질환 already covers the "disease" sense unambiguously, and every other keyword (암/통증/염증/
+  // 당뇨/고혈압) has no equivalent common-word collision, so genuine claims are still caught.
+  assert.ok(policy.voiceProblems('이 질환 완치됨').includes('고위험 효능 주장'));
+});
+
+test('highRiskClaim also covers finance, as voiceGuide() itself promises ("건강·의학·안전·금융")', () => {
+  // REGRESSION (found via re-reading voiceGuide() against the code, hourly review, 2026-09-13):
+  // the shared rule explicitly lists finance alongside health/medicine/safety as a category that
+  // must never get an unverified absolute claim, but the code only ever checked the first three -
+  // a plain prose-vs-code contradiction. A model writing about a financial product/service with an
+  // absolute guarantee should be caught exactly like a health claim is.
+  assert.ok(policy.voiceProblems('이 적금 가입하면 무조건 이득임').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이거 사면 원금 손실 절대 없음').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('무조건 수익 나는 재테크 방법임').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('복리로 무조건 돈 불어남').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이 주식 무조건 오릅니다').includes('고위험 효능 주장'));
+});
+
+test('the finance-claim guard does not flag ordinary savings/budgeting content or unrelated "무조건"', () => {
+  assert.deepEqual(policy.voiceProblems('원금 손실 없는 편이라 그나마 안심하고 가입함'), []);
+  assert.deepEqual(policy.voiceProblems('이 통장 이자 진짜 짭짤함'), []);
+  assert.deepEqual(policy.voiceProblems('가계부 쓰는 습관 들이니까 돈이 좀 모임'), []);
+  assert.deepEqual(policy.voiceProblems('이 다이어리 쓰면서 저축 습관 생김'), []);
+  assert.deepEqual(policy.voiceProblems('무조건 예쁜 디자인이라 삼'), []);
+});
+
+test('highRiskClaim also catches "무손실" guaranteed-profit phrasing, not just bare 원금/손실/무조건', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-15): the finance branch only
+  // recognized 원금/손실 paired with 없/보장, or a bare "무조건 <수익어>" - a claim phrased as
+  // "무손실로 확실하게 수익남" (no-loss, guaranteed profit) sailed through unchecked because it uses
+  // neither shape, despite being the exact same deceptive guaranteed-return claim this branch
+  // exists to catch.
+  assert.ok(policy.voiceProblems('무손실로 확실하게 수익남').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이 부업 무손실로 이득 보는 구조임').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('무손실 보장되는 재테크임').includes('고위험 효능 주장'));
+  // "손해"/"손실" alone, without "무손실", are extremely common harmless shopping-deal praise in
+  // this bot's core product-review content ("남는 장사" = a good bargain) and were deliberately
+  // NOT added, to avoid the false-positive class that sank the earlier GENERIC_CTA_ENDING
+  // optional-pronoun attempt.
+  assert.deepEqual(policy.voiceProblems('이거 하면 손해 볼 일 없음'), []);
+  assert.deepEqual(policy.voiceProblems('이 상품 절대 손해 안 봄'), []);
+  assert.deepEqual(policy.voiceProblems('이거 사면 100% 남는 장사임'), []);
+  // "무손실" alone is ambiguous (lossless compression/audio, a common harmless tech term) and must
+  // stay unflagged without a nearby profit/certainty word.
+  assert.deepEqual(policy.voiceProblems('무손실 압축 파일이라 화질 그대로임'), []);
+});
+
+test('highRiskClaim also covers 아토피/습진/비염, everyday conditions missing from the disease-keyword list', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 아토피/습진/비염 (atopic
+  // dermatitis/eczema/rhinitis) are exactly as common in this bot's baby/skincare-adjacent product
+  // reviews as 암/통증/질환/염증/당뇨/고혈압 already are, and are unambiguous condition names with no
+  // unrelated everyday meaning - but were missing entirely, so an absolute cure claim about any of
+  // them sailed through completely unchecked.
+  assert.ok(policy.voiceProblems('이 크림 바르니까 아토피 완전 나음').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이거 바르고 습진 다 나았어요').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('아이 비염 이거 쓰고 나서 싹 없어짐').includes('고위험 효능 주장'));
+});
+
+test('the 아토피/습진/비염 addition does not flag the softened "있는 편"/"괜찮은 편" phrasing the persona prefers', () => {
+  assert.deepEqual(policy.voiceProblems('이 옷 재질 완전 좋아서 아토피 있는 애도 편하게 입힘'), []);
+  assert.deepEqual(policy.voiceProblems('습진 있는 아이도 순한 편이라 안심하고 씀'), []);
+  assert.deepEqual(policy.voiceProblems('비염 있는 우리 애한테도 괜찮은 편이었음'), []);
+});
+
+test('highRiskClaim also covers 탈모/여드름, the conditions this bot\'s haircare/skincare product posts are most likely to generate a cure claim about', () => {
+  // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 탈모(hair loss)/
+  // 여드름(acne) are unambiguous condition names with no unrelated everyday meaning, same shape
+  // as the already-listed 아토피/습진/비염 - but were missing entirely, so "이 샴푸 쓰고 탈모 완전
+  // 없어짐"/"이 크림 바르니까 여드름 싹 나았음" sailed through completely unchecked despite being
+  // exactly the shady-marketing cure claim shape this bot's beauty-product affiliate posts are
+  // most at risk of generating.
+  assert.ok(policy.voiceProblems('이 샴푸 쓰고 탈모 완전 없어짐').includes('고위험 효능 주장'));
+  assert.ok(policy.voiceProblems('이 크림 바르니까 여드름 싹 나았음').includes('고위험 효능 주장'));
+  assert.deepEqual(policy.voiceProblems('탈모 있는 편이라 조심스럽게 씀'), []);
+  assert.deepEqual(policy.voiceProblems('여드름 있는 편이지만 자극 없이 순함'), []);
+});
+
+test('source is a creative seed: invented low-risk connective copy is allowed', async () => {
+  const text = '처음엔 별거 아닌데\n보다가 계속 보게 됨ㅋㅋ';
+  const out = await policy.reviewSourceVoice(text, { sourceText: '금붕어가 먹이를 먹는 영상' }, async () => {
+    throw new Error('low-risk creative copy should not require source-faithful semantic audit');
+  });
+  assert.equal(out, text);
+});
+
+test('health claims still use a separate factual safety audit', async () => {
+  let calls = 0;
+  await assert.rejects(
+    policy.reviewSourceVoice('이 동작이면\n허리통증이 치료됨', { sourceText: '허리 스트레칭 영상' }, async () => {
+      calls++;
+      return { issues: ['치료 효과 근거 없음'], sourceAnchors: [] };
+    }),
+    { code: 'CONTENT_STYLE_REJECTED' }
+  );
+  assert.ok(calls >= 1);
+});
+
+test('a health claim the factual audit clears is not rejected outright', async () => {
+  // Regression: reviewSourceVoice used to call the audit and then reject
+  // unconditionally regardless of its result, making the audit pointless -
+  // any text matching the blunt highRiskClaim regex was always rejected
+  // even when the model confirmed it was accurate/sourced.
+  const text = '한 달 만에 12kg 빠졌어\n진짜 신기함ㅋㅋ';
+  const out = await policy.reviewSourceVoice(text, { sourceText: '체중 12kg 감량 인증 게시물' }, async () => {
+    return { issues: [], sourceAnchors: ['체중 12kg 감량 인증 게시물'] };
+  });
+  assert.equal(out, text);
+});
+
+test('recipe comment reveal is conditional, not a global requirement', () => {
+  const body = '계란찜에 이거 넣음\n맛이 확 달라짐ㅋㅋ\n비밀재료는 댓글에';
+  assertThreadsShape(policy.assertVoice(body, { mode: 'recipe' }));
+  assert.deepEqual(policy.voiceProblems('그냥 신기한 영상임', { mode: 'product' }), []);
+});
+
+test('short posts are valid; ten lines are never mandatory', () => {
+  for (const text of ['이거 뭐임ㅋㅋ', '처음엔 평범했는데\n마지막이 미쳤음', '이거 하나로 끝']) {
+    assertThreadsShape(policy.assertVoice(text));
+  }
+});
+
+test('a real published post with a hard line break after every line and zero paragraph breaks is rejected', () => {
+  // REGRESSION (found live, 2026-09-13): voiceGuide() explicitly instructs grouping a 1~3-line
+  // thought and inserting a blank line before the next one, but nothing ever checked whether the
+  // model actually did this. Two real published posts came back as a flat wall of one-liners -
+  // a hard line break after every single line, not one blank line anywhere - and voiceProblems()
+  // passed both silently.
+  const realPost1 = '골반 비틀림 교정이\n이렇게 쉽다니! ㅋㅋ\n이거 해보니까\n힙라인이 확 달라짐 ㄷㄷ\n1주일 만에 효과가\n보이더라? ㅠㅠ\n이거 따라해봐!\n소리 질렀음;;\n효과 진짜 대박임\n링크는 댓글에!';
+  const realPost2 = '이거 진짜 대박임! 😍\n협탁 위가 깔끔해지면서\n동시 충전까지 가능해\n보조배터리처럼 쏙 넣어 다니기\n편한 것도 완전 좋음\n이런 거 있으면 삶의 질\n확실히 올라가니까,\n앱등이들은 무조건 사야 해! 🔥';
+  assert.ok(policy.voiceProblems(realPost1).includes('문단 구분 없음'));
+  assert.ok(policy.voiceProblems(realPost2).includes('문단 구분 없음'));
+});
+
+test('the paragraph-break guard does not force a blank line into a short, single-thought post', () => {
+  assert.deepEqual(policy.voiceProblems('이거 진짜 좋음\n너무 신기함'), []);
+  assert.deepEqual(policy.voiceProblems('처음엔 반신반의했는데\n막상 써보니까\n생각보다 괜찮음\n다음에 또 살 듯'), []);
+});
+
+test('the paragraph-break guard passes a post that already groups thoughts with a blank line', () => {
+  const wellFormatted = '옷은 많은데\n막상 나가려면 입을 게 없음ㅋㅋ\n\n이런 코트 하나 보고 있는데\n가을 오면 바로 입을 듯\n\n색감 진짜 예쁘더라\n이번 주에 주문할 듯';
+  assert.deepEqual(policy.voiceProblems(wellFormatted).filter(r => r === '문단 구분 없음'), []);
+});
+
+test('the paragraph-break guard catches a real 5-line post with no blank line, below the old 6-line threshold', () => {
+  // REGRESSION (found live, 2026-09-23): a real published post (오목판 game) had 5 lines, each
+  // already its own distinct thought (situation -> product feature -> comparison -> question ->
+  // reaction), with zero blank line anywhere - it stayed under the old lines.length>=6 threshold
+  // and sailed through unflagged, even though it clearly spans multiple thoughts, not a genuine
+  // short single-thought post.
+  const post = '이거 뭐야, 남편이 아이방에서 2시간째 안 나오고 있어ㅋㅋ\n바둑알 1도 필요 없고, 손만 대면 불이 들어오는 오목판이야\n스마트폰 쥐어주는 것보다 100배 나을 듯...\n이거 집중력 향상에도 진짜 좋대??\n이렇게 재밌는 걸 이제야 알다니 미쳤다...';
+  assert.ok(policy.voiceProblems(post).includes('문단 구분 없음'));
+});
+
+test('the paragraph-break guard catches a real post written as one unbroken line with no \\n at all', () => {
+  // REGRESSION (found live, 2026-09-23): two real published posts were written as ONE physical
+  // line with zero \n anywhere - a line-count check can never catch this no matter how low the
+  // threshold goes, since lines.length is always 1. This is the same "wall of undifferentiated
+  // text" problem the line-count check exists to catch, just expressed as one long line instead
+  // of many short ones. Both real examples ran multiple complete thoughts together with several
+  // strong sentence-ending marks (?/!/;;/..) and no separation at all.
+  const post2 = '이거 뭔데 이렇게 난리냐;; 진짜 바삭함이 미쳤다는데? 춘천 조선전집에서 모둠전 먹어봤어? 1번 손님으로 들어갔는데, 이건 진짜 완전 정답이었음 양도 많고, 뭐 하나 빠지는 게 없더라 여기가 이제 내 최애 전집이 됐어 춘천 가면 무조건 오픈런으로 가야 하는 집이야 ㅋㅋ';
+  const post3 = '이거 실화냐?! 김신영템이라는 거품 변기 클리너 써봤는데, 비주얼이 미쳤음ㅋㅋ 거품이 완전 쫀쫀해서 묵은 때가 그냥 녹아내림 변기 청소가 이렇게 한방에 끝나다니, 진짜 속이 다 시원해.. 거품 멍 때리는 것도 은근 꿀잼이라 시간 가는 줄 모르겠음 이거 하나면 변기 청소 끝! 품절되기 전에 꼭 써봐야겠다!';
+  assert.ok(policy.voiceProblems(post2).includes('문단 구분 없음'));
+  assert.ok(policy.voiceProblems(post3).includes('문단 구분 없음'));
+});
+
+test('the paragraph-break guard does not flag a single long line that is genuinely one complete sentence', () => {
+  // A long single sentence with zero or one strong sentence-ending mark must stay unflagged -
+  // voiceGuide() explicitly allows one complete sentence to run long on one line, and the new
+  // one-line trigger requires 2+ separate strong endings to distinguish "one long thought" from
+  // "several thoughts crammed together with no breaks."
+  const oneLongSentence = '이 세제 하나 사고 나서부터는 진짜 매번 손빨래하던 얼룩진 옷들이 거짓말처럼 깨끗해져서 완전 신세계임';
+  assert.deepEqual(policy.voiceProblems(oneLongSentence).filter(r => r === '문단 구분 없음'), []);
+  const oneDramaticEnding = '이거 진짜 실화냐?? 이렇게까지 좋아질 줄은 진짜 상상도 못했는데 완전 인생템 등극함??';
+  assert.deepEqual(policy.voiceProblems(oneDramaticEnding).filter(r => r === '문단 구분 없음'), []);
+});
+
+test('voiceProblems flags the worn-out "이거 실화냐 / 이거 뭔데" opener clichés seen on real posts', () => {
+  // User feedback (2026-09-24): "이거실화냐? 이말투 너무 반복적으로 사용하고 스레드 바이럴 sns
+  // 페르소나가 아닌거같아". Five real posts on one account opened with these back to back.
+  for (const t of ['이거 실화냐? HOKA 처음 신어봤는데', '이거 뭔데 이렇게 난리냐;;', '이거 실화냐?! 김신영템이라는', '이거 뭐야, 남편이 아이방에서', '이거 왜 이렇게 맛있냐고??']) {
+    assert.ok(policy.voiceProblems(t).includes('상투적 표현'), `should flag: ${t}`);
+  }
+  assert.ok(policy.voiceProblems('우리 딸 굽은 등 보고\n진짜 실화임').includes('상투적 표현'));
+});
+
+test('the cliché guard does not flag concrete situation-first openers, including a plain "이거" start', () => {
+  for (const t of ['우리 딸램 굽은 등 보고 식겁했잖아;;', '시어머니가 밥할 때마다 계란을 같이 넣으시는데', '이거 사주고 나서 조용한 시간 생김ㅋㅋ', '식빵 그냥 주면 거들떠도 안 봄;;']) {
+    assert.deepEqual(policy.voiceProblems(t).filter(r => r === '상투적 표현'), [], `false positive: ${t}`);
+  }
+});
+
+test('persona prompts no longer seed 실화냐/미쳤다 or tell the model to open with "이거 뭔데"', () => {
+  const { PERSONAS } = require('../src/content/personas');
+  for (const persona of PERSONAS) {
+    assert.doesNotMatch(persona.block, /"[^"]*실화냐[^"]*"/, `${persona.id} still seeds 실화냐 as an example`);
+    assert.doesNotMatch(persona.block, /대신 "미쳤다"/, `${persona.id} still lists 미쳤다 as a model reaction`);
+  }
+  const curiosity = PERSONAS.find(p => p.id === 'curiosity');
+  const openingExamples = curiosity.block.split('\n').find(l => /\[오프닝 패턴 예시/.test(l));
+  assert.doesNotMatch(openingExamples, /"이거 뭔데|"이게 대체/);
+});
