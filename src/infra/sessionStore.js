@@ -1,7 +1,7 @@
 'use strict';
 const session = require('express-session');
 const { db } = require('./db');
-// Same crash-at-boot class of bug found and fixed across db.js/bootstrap.js/server.js/
+// Same crash-at-boot class of bug found and fixed across db.js/web/app.js/server.js/
 // automationState.js during the 2026-09-12 persistent-volume-full incident: this ran completely
 // unguarded at module load. server.js requires this file very early (line 8, before the session
 // middleware and the filesystem-only /admin/emergency-cleanup route are even registered), so on a

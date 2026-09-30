@@ -5,7 +5,7 @@
 // OpenAI->Claude migration earlier today. Anthropic's actual insufficient-credit error reads
 // "Your credit balance is too low to access the Claude API..." - matching none of the listed
 // phrases - so a real Claude credit-exhaustion error would fail this text check (the __openAiNoRetry
-// flag set upstream by openAiBudgetGuardPatch.js's isNoCredits() already covers the common case,
+// flag set upstream by aiRequestGuard.js's isNoCredits() already covers the common case,
 // but this is the independent, defense-in-depth signal this function was designed to also check).
 function isGeminiDown(e) {
   const msg = `${e?.message || ''} ${e?.response?.data?.error?.message || ''}`;

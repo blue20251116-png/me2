@@ -1,7 +1,7 @@
 const { launchChromium } = require('../infra/browserLauncher');
 const { db } = require('../infra/db');
 
-// Same crash-at-boot class of bug found and fixed across db.js/bootstrap.js/server.js/
+// Same crash-at-boot class of bug found and fixed across db.js/web/app.js/server.js/
 // automationState.js/sessionStore.js during the 2026-09-12 persistent-volume-full incident: this
 // ran completely unguarded at module load.
 try {

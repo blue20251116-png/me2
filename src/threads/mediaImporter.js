@@ -124,9 +124,9 @@ async function fetchPostPage(url) {
 }
 
 async function extractCandidatesWithBrowser(sourceUrl) {
-  let playwright;
+  // Playwright is an optional dependency; bail out quietly when it isn't installed.
   try {
-    playwright = require('playwright');
+    require.resolve('playwright');
   } catch {
     return { videos: [], poster: '', title: '', requestHeaders: {}, unavailable: true };
   }

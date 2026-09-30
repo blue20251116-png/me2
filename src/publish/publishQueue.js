@@ -20,7 +20,7 @@ try {
 
 function retryable(err) { return publishRetryable(err); }
 function initializeRecovery() {
-  // Same crash class as db.js/bootstrap.js/server.js/automationState.js/sessionStore.js/
+  // Same crash class as db.js/web/app.js/server.js/automationState.js/sessionStore.js/
   // benchmarkAccounts.js/coupangApi.js (2026-09-12 persistent-volume-full incident): this runs
   // unguarded, but from inside app.listen()'s callback (server.js) - i.e. AFTER the healthcheck
   // could already report healthy. An uncaught exception here on a full disk crashes the process

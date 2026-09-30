@@ -18,7 +18,6 @@ let queue = Promise.resolve();
 let lastStartAt = 0;
 const MIN_GAP_MS = Math.max(1000, Number(process.env.OPENAI_MIN_GAP_MS || 3000));
 const ANALYSIS_CACHE_MS = Math.max(5 * 60 * 1000, Number(process.env.OPENAI_ANALYSIS_CACHE_MS || 24 * 60 * 60 * 1000));
-const MAX_REQUESTS_PER_HOUR = Math.max(10, Number(process.env.OPENAI_MAX_REQUESTS_PER_HOUR || 240));
 const MAX_TEXT_CHARS = Math.max(6000, Number(process.env.OPENAI_MAX_TEXT_CHARS || 18000));
 const analysisCache = new Map();
 const MAX_CACHE = 1000;
@@ -74,9 +73,9 @@ function assertHourlyBudget() {
   const state = budgetState();
   if (state.available) return;
   // Error code/flag names kept as OPENAI_* even after the Claude migration: this exact code/flag
-  // is checked directly by geminiEmergencyFallbackPatch.js, scheduler.js (formerly
-  // autopilotTimedPrefillPatch.js), automationState.js, and autopilotMaterialEngine.js/
-  // recipeQualityPatch.js's own catch blocks (formerly injected by runtimeStabilityPatch.js,
+  // is checked directly by qualityHold.js, scheduler.js (formerly
+  // autopilotTimedPrefillPatch.js), automationState.js, and materialEngine.js/
+  // recipeQuality.js's own catch blocks (formerly injected by runtimeStabilityPatch.js,
   // now baked in directly) - renaming here without touching all of them would silently break
   // the no-retry-on-budget-exceeded behavior everywhere else.
   const e = new Error(`OPENAI_HOURLY_BUDGET_EXCEEDED: ${state.used}/${state.limit} requests in last hour`);

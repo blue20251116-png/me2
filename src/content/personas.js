@@ -1,6 +1,6 @@
 'use strict';
 
-// Extra writing personas layered on top of threadsVoicePolicy.js's shared voiceGuide().
+// Extra writing personas layered on top of voicePolicy.js's shared voiceGuide().
 // Each persona only swaps the "[캐릭터 강도]" block (opening/closing hook style) - the shared
 // formatting and safety rules (line limits, no dangling line breaks, no formulaic CTA, no
 // unverified high-risk claims) stay identical for every persona, so none of this touches the
@@ -116,7 +116,7 @@ const FITNESS_KEYWORDS = /(운동|헬스|다이어트|단백질|보충제|프로
 // (분유/카시트/속싸개) that don't happen to contain "아기"/"유아"/etc. as a substring had the same gap.
 const KIDS_KEYWORDS = /(아기|애기|유아|이유식|기저귀|어린이|장난감|아동용|육아|신생아|초등학생|아이용|유모차|젖병|딸랑이|분유|카시트|속싸개)/i;
 
-// mode is autopilotMaterialEngine.js's analysis.mode ('recipe'|'product'|'lifestyle') - only
+// mode is materialEngine.js's analysis.mode ('recipe'|'product'|'lifestyle') - only
 // 'recipe' maps directly to a category here. For everything else, this only decides which VOICE
 // persona to write with; it is a separate concern from mode/content-type selection and must
 // never feed back into it.

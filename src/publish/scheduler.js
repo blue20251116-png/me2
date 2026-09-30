@@ -1,11 +1,10 @@
 const { UPLOADS_DIR } = require('../config/paths');
 const cron = require('node-cron');
 const { isTokenExpired } = require('../threads/tokenRefresh');
-const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { db, listAllAccountsForSystem, getAccount, getUserById, canPublish, logUsage, findMediaSourceForProduct, markMediaSourceUsed } = require('../infra/db');
-const { publishPost, publishCarouselPost, publishReply, getMediaInsights } = require('../threads/threadsApi');
+const { db, listAllAccountsForSystem, getAccount, getUserById } = require('../infra/db');
+const { getMediaInsights } = require('../threads/threadsApi');
 const coupangApi = require('../integrations/coupangApi');
 const { generateRecipe: generateContentOnlyRecipe } = require('../content/contentOnlyAutomation');
 const { buildAutopilotPost } = require('../autopilot/pipeline');
@@ -33,8 +32,6 @@ function encodeMediaBundle(items){
 function hasCoupangKeys(a){return !!(String(a?.coupang_access_key||'').trim()&&String(a?.coupang_secret_key||'').trim());}
 function isCoupangLink(link){return /(^|\.)coupang\.com|link\.coupang\.com/i.test(String(link||''));}
 const DEFAULT_COUPANG_DISCLOSURE='이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.';
-function buildDisclosureOnly(account){return DEFAULT_COUPANG_DISCLOSURE;}
-function trimToLimit(text,limit){const n=String(text||'').trim();const cap=Math.max(0,Number(limit)||0);if(!cap)return'';if(n.length<=cap)return n;if(cap===1)return'…';return `${n.slice(0,cap-1).trimEnd()}…`;}
 function cleanCommentLine(line){return String(line||'').replace(/\s+/g,' ').trim();}
 function compactRecipePrefix(prefix,limit){const cap=Math.max(0,Number(limit)||0);if(!cap)return'';const raw=String(prefix||'').replace(/\r/g,'').trim();if(!raw)return'';if(raw.length<=cap)return raw;const lines=raw.split('\n').map(cleanCommentLine).filter(Boolean);const ingredientIdx=lines.findIndex(x=>/재료/.test(x));const methodIdx=lines.findIndex(x=>/(만드는\s*법|조리\s*법|만들기)/.test(x));const isRecipe=ingredientIdx>=0||methodIdx>=0;if(!isRecipe){const out=[];let used=0;for(const line of lines){const add=(out.length?1:0)+line.length;if(used+add>cap)break;out.push(line);used+=add;}return out.join('\n');}const ingredientHeader='🥘 재료';const methodHeader='🍳 만드는 법';let ingredients=[];let methods=[];const ingStart=ingredientIdx>=0?ingredientIdx+1:0;const ingEnd=methodIdx>ingStart?methodIdx:lines.length;for(const line of lines.slice(ingStart,ingEnd)){const cleaned=line.replace(/^[▪•·\-–—*✅\s]+/,'').trim();if(cleaned&&!/^(재료|만드는\s*법|조리\s*법)$/i.test(cleaned))ingredients.push(cleaned);}if(methodIdx>=0){for(const line of lines.slice(methodIdx+1)){const cleaned=line.replace(/^\s*\d+[.)]\s*/,'').replace(/^[▪•·\-–—*✅\s]+/,'').trim();if(cleaned)methods.push(cleaned);}}if(!ingredients.length&&ingredientIdx>=0){const inline=lines[ingredientIdx].replace(/^.*?재료\s*[:：]?\s*/,'').trim();if(inline)ingredients=[inline];}if(!methods.length&&methodIdx>=0){const inline=lines[methodIdx].replace(/^.*?(?:만드는\s*법|조리\s*법|만들기)\s*[:：]?\s*/,'').trim();if(inline)methods=[inline];}const render=(ings,steps)=>{const a=ings.length?`${ingredientHeader}\n${ings.join(', ')}`:'';const b=steps.length?`${methodHeader}\n${steps.map((x,i)=>`${i+1}. ${x}`).join('\n')}`:'';return[a,b].filter(Boolean).join('\n\n');};let ing=ingredients.slice(0,8),steps=methods.slice(0,4),out=render(ing,steps);while(out.length>cap&&steps.length>1){steps.pop();out=render(ing,steps);}while(out.length>cap&&ing.length>3){ing.pop();out=render(ing,steps);}if(out.length<=cap&&ing.length&&steps.length)return out;const minIng=ingredients.slice(0,3);const minSteps=methods.slice(0,1);out=render(minIng,minSteps);if(out.length<=cap&&minIng.length&&minSteps.length)return out;const safe=[];let used=0;for(const line of lines){const add=(safe.length?1:0)+line.length;if(used+add>cap)break;safe.push(line);used+=add;}return safe.join('\n');}
 function extractFirstHttpUrl(value){const m=String(value||'').match(/https?:\/\/[^\s<>'\"\])}]+/i);return m?m[0].replace(/[.,;]+$/,''):'';}
@@ -77,8 +74,6 @@ const uploadsDir=UPLOADS_DIR;
 if(!fs.existsSync(uploadsDir))fs.mkdirSync(uploadsDir,{recursive:true});
 function getPublicBaseUrl(){const explicit=String(process.env.PUBLIC_BASE_URL||process.env.APP_URL||'').trim().replace(/\/$/,'');if(/^https?:\/\//i.test(explicit))return explicit;const railway=String(process.env.RAILWAY_PUBLIC_DOMAIN||'').trim().replace(/^https?:\/\//i,'').replace(/\/$/,'');if(railway)return `https://${railway}`;return'';}
 function publicUploadUrl(filename){const base=getPublicBaseUrl();if(!base)throw new Error('공개 서비스 주소를 확인할 수 없습니다. PUBLIC_BASE_URL 또는 RAILWAY_PUBLIC_DOMAIN이 필요합니다.');return `${base}/uploads/${encodeURIComponent(filename)}`;}
-function localPathFromUploadUrl(url){if(!url)return null;const marker='/uploads/';const idx=url.indexOf(marker);if(idx===-1)return null;return path.join(uploadsDir,decodeURIComponent(url.slice(idx+marker.length)));}
-function mediaSourceFilesExist(media){const p=localPathFromUploadUrl(media.image_url);if(!p||!fs.existsSync(p))return false;if(media.extra_image_url){const e=localPathFromUploadUrl(media.extra_image_url);if(!e||!fs.existsSync(e))return false;}return true;}
 async function buildCommentText(account,post){if(hasCoupangKeys(account)&&post.recipe_comment_text&&!post.link)throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');if(!post.link)return compactRecipePrefix(sanitizeCommentPrefix(post.recipe_comment_text||''),450);return buildDoubleLinkComment(account,post.recipe_comment_text||'',post.link,450);}
 function startPublishJob(){return require("./publishQueue").startPublishJob({buildCommentText});}
 // Refreshes posts from yesterday+today in KST. It used to use server-local midnight (UTC on
@@ -93,7 +88,7 @@ async function runContentOnlyAutopilot(account,target,scheduledAt=null){const r=
 // 2026-09-16 (user request, viral-formula screenshot: "사진과 영상은 꼭 넣으세요"): media is
 // reached as missing only when chooseSourceMedia()'s whole fallback chain runs out - no Threads
 // source images/video AND no Coupang product image (chooseImageFallback()'s own label calls
-// this exact case '미디어 없음'). Same posture as geminiEmergencyFallbackPatch.js's QUALITY HOLD:
+// this exact case '미디어 없음'). Same posture as qualityHold.js's QUALITY HOLD:
 // don't publish a worse post than the format calls for. CONTENT_QUALITY_HOLD is caught by
 // refillAccount's error handler, which stops this account's batch without poisoning any cache -
 // the material itself is never marked used, so a later refill tick retries it with a fresh

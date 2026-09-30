@@ -153,7 +153,7 @@ async function __me2NormalizeCarouselVideoUrl(rawUrl){
 // reaction marker (only "ㅋㅋ, ㄷㄷ, ㅠㅠ, ;;" are) and which never appears anywhere in real casual
 // Threads writing this bot is meant to imitate. The likely source is voiceGuide() itself: the
 // prompt's own instructional text is full of em dashes ("—") as a meta-formatting device (see the
-// REGRESSION comments throughout this file's neighbor threadsVoicePolicy.js), and a model can
+// REGRESSION comments throughout this file's neighbor voicePolicy.js), and a model can
 // imitate that punctuation style back into its actual output, surfacing as "—"/"–"/the Hangul
 // "ㅡ" (the same keystroke Korean users reach for as a quick dash substitute). Only strips a dash
 // run used as a standalone token (bounded by whitespace or line start/end) - "이거ㅡㅡ웃김" with the
@@ -351,14 +351,14 @@ function normalizeMediaItems(items){
 }
 function decodeMediaBundle(value){const s=String(value||'');if(!s.startsWith(MEDIA_BUNDLE_PREFIX))return null;try{return normalizeMediaItems(JSON.parse(decodeURIComponent(s.slice(MEDIA_BUNDLE_PREFIX.length))));}catch{return null;}}
 
-// Creates a top-level post container. topic_tag (threadsTopicTag.js) is best-effort: if Threads
+// Creates a top-level post container. topic_tag (topicTag.js) is best-effort: if Threads
 // rejects it, retry once without it so a tag can never be the reason a post fails to publish.
 async function postThreadsContainer(params,timeout){
   try{return await axios.post(`${GRAPH_BASE}/me/threads`,null,{params,timeout});}
   catch(err){
     if(!params.topic_tag||!isTopicTagRejection(err))throw err;
     console.warn(`[Threads][TOPIC_TAG] rejected tag="${params.topic_tag}" → retry without tag reason="${err.response?.data?.error?.message||err.message}"`);
-    const {topic_tag,...rest}=params;
+    const rest={...params};delete rest.topic_tag;
     return axios.post(`${GRAPH_BASE}/me/threads`,null,{params:rest,timeout});
   }
 }

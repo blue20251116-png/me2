@@ -25,7 +25,7 @@ const MAX_LINE_CHARS = 40;
 const MAX_BODY_CHARS = 180;
 const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 // CONNECTOR_ONLY / DANGLING_PUNCTUATION_START / DANGLING_BOUND_NOUN_START live in
-// threadsVoiceLineGuards.js, shared with threadsVoiceLocalRepair.js's repair pass — see that
+// voiceLineGuards.js, shared with voiceLocalRepair.js's repair pass — see that
 // file for what each one catches and why. Keeping one copy means the detector here and the
 // local self-repair in reviewSourceVoice() below can never drift apart again.
 // A generic "you try it too~🙂" sign-off is exactly the formulaic ad-CTA the persona is meant
@@ -164,7 +164,7 @@ function formatVoice(text){return normalizeVoice(text);}
 // 안전하게 보호해줌", "이 콘센트 완전 안전함", "와이파이 완전 안전하게 연결됨"), not a red flag on
 // its own, so it was rejecting a huge fraction of ordinary posts. The real, narrow risk this was
 // meant to catch is a false claim of protection from actual physical harm to a child (choking/
-// swallowing/allergy) - the parenting-mom persona (threadsPersonas.js) explicitly warns against
+// swallowing/allergy) - the parenting-mom persona (personas.js) explicitly warns against
 // exactly that ("이거 완전 안전함" 대신 "이 정도면 안심되는 편"). Narrowed to just those specific
 // hazard phrasings instead of any generic "완전/100% 안전".
 // The cure-verb list also missed 사라지다 ("disappear") and 가라앉다 ("subside") entirely, and its
@@ -189,7 +189,7 @@ function formatVoice(text){return normalizeVoice(text);}
 // than the false positives found earlier this session. Fixing the under-match reopens the
 // over-match risk this session already hit once (narrowing "완전 안전" broke real posts): once
 // "위험이" is allowed, a hedge like "위험이 없는 편이라 안심되는 편" (exactly the softened phrasing
-// the parenting-mom persona in threadsPersonas.js is instructed to prefer, e.g. "안심되는 편")
+// the parenting-mom persona in personas.js is instructed to prefer, e.g. "안심되는 편")
 // would also match on a literal "없" substring. The (?!\s*는\s*(?:편|것|거|셈)) guard excludes only
 // that specific continuing/hedging shape (없는 편/없는 것/없는 것은 아니지만) while still catching
 // every sentence-final absolute form (없어/없음/없다/없네/없죠) AND the noun-modifying absolute
@@ -289,7 +289,7 @@ function missingParagraphBreak(t,lines){
 // "이거 뭔데 이렇게 난리냐;;", "이거 실화냐?!", "이거 뭐야,", "이거 왜 이렇게 맛있냐고??" back to
 // back - the persona prompts themselves seeded these (실화냐/미쳤다 listed as model reactions in 4
 // places, and the curiosity persona was explicitly told to open with "이거 뭔데/이게 대체 뭐길래").
-// Those seeds are removed from threadsPersonas.js; this is the code-side net, same pattern as
+// Those seeds are removed from personas.js; this is the code-side net, same pattern as
 // stripEmoji/missingParagraphBreak: flags the specific worn-out opener shapes and "실화" in any
 // sentence-final form. Deliberately narrow - a first line that merely starts with "이거" followed
 // by something concrete ("이거 사주고 나서 조용한 시간 생김") is left to the prompt, since "이거"

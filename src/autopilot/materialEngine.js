@@ -1,4 +1,4 @@
-const { normalizeVoice, voiceGuide, formatVoice, voiceProblems, assertVoice, reviewSourceVoice } = require('../content/voicePolicy');
+const { normalizeVoice, voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('../content/voicePolicy');
 const { pickPersona } = require('../content/personas');
 const axios = require('axios');
 const { db, getAccount, getSystemApiSettings } = require('../infra/db');
@@ -416,7 +416,7 @@ const SCRUB_PARTICLE_REMAP={'을':'를','이':'가','은':'는','과':'와','이
 // exact labeling the user asked to remove. The comment's ingredient list still legitimately needs
 // a fixed placeholder label (it's a structured "🥘 재료" list, not prose), so `replacement`
 // defaults to '비밀 재료' there - but the body call sites below now pass '이거', matching the same
-// identity-hiding demonstrative pronoun style ("이거"/"이게"/"그거") threadsPersonas.js's
+// identity-hiding demonstrative pronoun style ("이거"/"이게"/"그거") personas.js's
 // CURIOSITY_BLOCK already uses, so a leaked term reads as natural hidden-identity prose instead of
 // a label.
 function scrubSecret(text,secret,product,replacement='비밀 재료'){
@@ -439,7 +439,7 @@ function scrubSecret(text,secret,product,replacement='비밀 재료'){
 // each label greedily ate the newline that followed it, turning "🥘 재료\n계란 2개" into "🥘
 // 재료계란 2개" (label glued onto the first line with no separator) EVERY SINGLE TIME this ran -
 // which is on every recipe-mode commentLead, since repairRecipeComment() below calls this first
-// unconditionally. That self-inflicted corruption then failed recipeQualityPatch.js's badRecipe()
+// unconditionally. That self-inflicted corruption then failed recipeQuality.js's badRecipe()
 // format check (which correctly requires a literal newline), forcing an unnecessary extra AI
 // rewrite round-trip for every recipe post regardless of whether the original was already fine -
 // wasted Anthropic budget on every single recipe autopilot run. Anchored all three to only match

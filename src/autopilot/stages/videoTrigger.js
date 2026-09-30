@@ -6,9 +6,9 @@ async function detectThreadsVideo(postUrl) {
   }
   if (!postUrl) return false;
 
-  let playwright;
+  // Playwright is an optional dependency; bail out quietly when it isn't installed.
   try {
-    playwright = require('playwright');
+    require.resolve('playwright');
   } catch (err) {
     console.warn(`[Autopilot][VIDEO DETECT] playwright unavailable: ${err.message}`);
     return false;

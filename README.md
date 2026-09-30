@@ -5,6 +5,24 @@
 쿠팡파트너스 Open API와도 연동되어 있어 키워드 검색만으로 상품 사진·가격·파트너스 링크를
 자동으로 가져와 글을 채울 수 있습니다.
 
+## 0. 프로젝트 구조
+
+```
+src/
+  index.js            진입점 (npm start) — 환경변수 로드, HTTP 타임아웃, DB 정리 작업, 웹 서버 시작
+  config/paths.js     데이터 위치 (DB·업로드 파일은 항상 프로젝트 루트의 db/ — Railway 볼륨 그대로)
+  web/                Express 앱 (app.js), 서버 시작 (server.js), 공통 미들웨어, routes/ (기능별 API)
+  publish/            예약 발행 스케줄러, 발행 큐, 재시도 정책
+  autopilot/          완전자동화: pipeline.js(전체 흐름) → materialEngine.js(소재→글→상품) + stages/(단계별 검증·보정)
+  content/            문체 정책(voicePolicy), 페르소나(personas), 글 생성기들
+  threads/            Threads API, 주제 태그, 토큰 자동 갱신, 인사이트 수집, 소재 수집
+  integrations/       AI(OpenAI), 쿠팡, 네이버, Pexels/Pixabay, YouTube, 상품 스크래퍼
+  infra/              SQLite, 세션, 브라우저(Playwright) 격리 실행, HTTP 타임아웃
+public/               대시보드 화면
+test/                 자동 테스트 (npm test)
+docs/                 문체 규칙 등 문서
+```
+
 ## 1. 로컬에서 먼저 확인해보기
 
 ```
@@ -72,7 +90,7 @@ npm start
    - 또는 이미 갖고 있는 링크를 **쿠팡파트너스 링크** 입력란에 직접 붙여넣어도 됨
      (이 경우 og:image 스크래핑으로 사진만 보조로 가져옴, API 검색보다 덜 안정적)
 2. 본문 작성 + 발행 예정 시각 입력 → 예약 등록
-3. 서버가 1분마다 예정 시각이 지난 글을 자동 발행 (`scheduler.js`)
+3. 서버가 1분마다 예정 시각이 지난 글을 자동 발행 (`src/publish/scheduler.js`)
 4. **링크가 있는 경우**, 본문 발행 3초 후 자동으로 그 글에 답글(댓글)을 달아
    "쿠팡 파트너스 활동의 일환..." 안내문구 + 링크를 등록합니다 (본문에는 링크가 들어가지 않음)
    - 안내문구 템플릿은 **연결 설정** 탭에서 직접 수정 가능 (`{link}` 자리에 실제 링크 삽입)
@@ -95,8 +113,8 @@ Railway/Render에서 Node 버전을 지정할 수 있으면 22 이상으로 맞�
   (API 검색을 쓰면 이 문제 자체가 없음)
 - 이미지 첨부 시 `image_url`은 외부에서 접근 가능한 공개 URL이어야 함 (직접 업로드 불가, 링크만 가능)
 - Threads 장기 액세스 토큰 유효기간은 60일 — 매일 04:17(KST)에 만료 10일 이내 토큰을 자동 갱신합니다
-  (`threadsTokenRefresh.js`). 이미 만료된 토큰은 갱신이 불가능하므로 "스레드 계정으로 연결하기"를 다시 눌러야 합니다.
-- 발행 시 글 내용에 맞는 스레드 **주제 태그**(육아/운동/요리/살림/뷰티 등, `threadsTopicTag.js`)가 자동으로 붙습니다.
+  (`src/threads/tokenRefresh.js`). 이미 만료된 토큰은 갱신이 불가능하므로 "스레드 계정으로 연결하기"를 다시 눌러야 합니다.
+- 발행 시 글 내용에 맞는 스레드 **주제 태그**(육아/운동/요리/살림/뷰티 등, `src/threads/topicTag.js`)가 자동으로 붙습니다.
   Threads가 태그를 거부하면 태그 없이 자동 재시도하므로 발행이 막히지는 않습니다.
 - 자동발행 슬롯은 07:00~24:00(KST) 사이에만 배치됩니다 (`AUTOPILOT_ACTIVE_START_HOUR/END_HOUR`로 조정).
 - 계정마다 Threads 연결은 처음 한 번만 하면 됩니다 (계정별 OAuth) — 이후 계정 칩을 눌러

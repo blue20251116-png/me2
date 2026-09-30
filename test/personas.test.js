@@ -105,7 +105,7 @@ test('pickPersona for a recipe material only ever returns reaction or housewife-
 
 test('every persona is internally consistent: its own example phrases never trip its own guard rules', () => {
   // Synthetic-sentence check applied to all 5 personas, mirroring the existing check for the
-  // original reaction persona in threadsVoicePolicy.test.js - a persona's own suggested
+  // original reaction persona in voicePolicy.test.js - a persona's own suggested
   // openings/closings must never be flagged by the same guards its posts get validated against.
   for (const persona of PERSONAS) {
     const exampleLines = persona.block.split('\n').filter(line => /\[(?:오프닝|마무리) 패턴 예시/.test(line));

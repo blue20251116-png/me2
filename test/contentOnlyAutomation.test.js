@@ -79,8 +79,8 @@ test('buildRecipeText rejects a high-risk health claim instead of shipping it un
   // Regression: this no-Coupang-key autopilot path (scheduler.js's runContentOnlyAutopilot)
   // saved generated text straight to the DB via formatThreadsBody(), which only runs
   // formatVoice() (whitespace normalization) - never voiceProblems()/assertVoice(). The one
-  // safety net in the repo, finalTextHardGuardPatch.js, only wraps
-  // autopilotMaterialEngine.buildThreadsFirstAutopilot (the separate Coupang-product path),
+  // safety net in the repo, finalTextGuard.js, only wraps
+  // materialEngine.buildThreadsFirstAutopilot (the separate Coupang-product path),
   // so a real high-risk health claim like this sailed straight through completely unchecked.
   assert.throws(
     () => buildRecipeText('이 김치찌개 국물 먹고 염증이 나았어\n진짜 소름', '재료랑 만드는 순서는 댓글에 적어둘게.'),
@@ -98,7 +98,7 @@ test('generateRecipe never rotates into the housewife-recipe persona - it has no
   // Regression: pickPersona({mode:'recipe'}) can return housewife-recipe, whose whole structure
   // is "build up to a hidden secret sauce/ingredient, reveal it in the comment" - that only makes
   // sense when there's a real affiliate secret ingredient to hide, like
-  // autopilotMaterialEngine.js's Coupang-linked recipes have. This no-Coupang-key path's own rule
+  // materialEngine.js's Coupang-linked recipes have. This no-Coupang-key path's own rule
   // says "상품/구매/광고/제휴 이야기는 절대 넣지 않는다", and its recipeCommentText is just a plain,
   // fully-disclosed ingredient/steps list with nothing marked as "the secret one" - so picking
   // housewife-recipe here would write a hook promising a reveal the comment can never deliver.

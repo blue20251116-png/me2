@@ -1,6 +1,6 @@
 'use strict';
 
-// Shared by threadsVoicePolicy.js (detection) and threadsVoiceLocalRepair.js
+// Shared by voicePolicy.js (detection) and voiceLocalRepair.js
 // (repair) so the two stay in sync. These used to be copy-pasted in both
 // files; the repair copy silently fell behind when DANGLING_BOUND_NOUN_START
 // was widened to catch 만큼/정도 with a trailing particle (commit 0df363b),

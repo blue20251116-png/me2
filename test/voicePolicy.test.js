@@ -304,9 +304,9 @@ test('a bound-noun exclamation ("토할" / "뻔!") split across lines is caught 
 });
 
 test('the local repair pass shares the same bound-noun regex as detection, not a stale copy', () => {
-  // Regression: threadsVoiceLocalRepair.js used to keep its own copy of
+  // Regression: voiceLocalRepair.js used to keep its own copy of
   // DANGLING_BOUND_NOUN_START (and the other two line-guard regexes) instead
-  // of importing from threadsVoiceLineGuards.js. When that regex was widened
+  // of importing from voiceLineGuards.js. When that regex was widened
   // to catch 만큼/정도 with a trailing particle (see the test above this
   // one), the repair copy never got the update - so voiceProblems() flagged
   // a "정도로"-led split as broken, but repairConnectorOnlyBreaks() silently
@@ -626,7 +626,7 @@ test('the persona guide never recommends an example that trips any of its own sa
   // REGRESSION-PREVENTION (hourly review, 2026-09-14): this used to call voiceGuide() with no
   // argument, which only exercises DEFAULT_PERSONA_BLOCK (reaction) - GENERIC_CTA_ENDING has since
   // been broadened three separate times this session (-요, formal -세요/-시길/-십시오, 여러분도),
-  // and each of the other 4 persona blocks in threadsPersonas.js (curiosity, housewife-recipe,
+  // and each of the other 4 persona blocks in personas.js (curiosity, housewife-recipe,
   // trainer-expert, parenting-mom) has its own independent "[마무리 패턴 예시]" line that a broader
   // guard could just as easily start matching without this test ever noticing. Checking all 5
   // confirmed no current contradiction, but only checking the default going forward would leave
@@ -710,7 +710,7 @@ test('the unrelated "낫다" comparison sense does not falsely trigger the cure-
 test('absolute claims of protection from real child-safety hazards are caught (choking/swallowing/allergy)', () => {
   // This guard is deliberately narrow, not a blanket "완전/100% 안전" catch - see the next test
   // for why. The real, narrow risk worth code-enforcing is a false claim of protection from
-  // actual physical harm to a child, which the parenting-mom persona (threadsPersonas.js)
+  // actual physical harm to a child, which the parenting-mom persona (personas.js)
   // separately warns against in its own prompt text.
   assert.ok(policy.voiceProblems('이 젖병 삼켜도 100% 안전해요').includes('고위험 효능 주장'));
   assert.ok(policy.voiceProblems('이 이유식 알레르기 걱정 전혀 없음').includes('고위험 효능 주장'));
@@ -731,7 +731,7 @@ test('the child-safety-hazard guard catches the particle/spaced phrasing real se
 });
 
 test('fixing the particle under-match does not reopen a false positive on hedged, non-absolute phrasing', () => {
-  // The parenting-mom persona (threadsPersonas.js) is explicitly instructed to prefer hedged
+  // The parenting-mom persona (personas.js) is explicitly instructed to prefer hedged
   // safety language over absolute claims (e.g. "이거 완전 안전함" 대신 "이 정도면 안심되는 편").
   // Allowing the "위험이" particle above must not start catching that same hedge shape applied
   // to an allergy/choking claim - only the sentence-final absolute form should trigger.

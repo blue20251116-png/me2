@@ -1,9 +1,9 @@
 'use strict';
 const { db } = require('./db');
-// Same crash-at-boot class of bug found and fixed across db.js/bootstrap.js/server.js earlier
+// Same crash-at-boot class of bug found and fixed across db.js/web/app.js/server.js earlier
 // (2026-09-12, the persistent-volume-full incident): this ran completely unguarded at module
-// load, and this module is required very early in the boot chain (openAiBudgetGuardPatch.js,
-// the 5th -r preload) - well before bootstrap.js/server.js. On a full disk this would crash the
+// load, and this module is required very early in the boot chain (aiRequestGuard.js,
+// the 5th -r preload) - well before web/app.js/server.js. On a full disk this would crash the
 // whole process here, before any of those other guards even get a chance to run.
 try {
   db.exec(`CREATE TABLE IF NOT EXISTS automation_state (

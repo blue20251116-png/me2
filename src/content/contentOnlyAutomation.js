@@ -147,8 +147,8 @@ function pickRecipeCommentTeaser() {
 
 // Regression: this no-Coupang-key autopilot path shipped generated text straight to
 // saveAutopilotPost() -> formatThreadsBody(), which only runs formatVoice() (whitespace
-// normalization, no rejection). finalTextHardGuardPatch.js only wraps
-// autopilotMaterialEngine.buildThreadsFirstAutopilot (the Coupang-product path), so this
+// normalization, no rejection). finalTextGuard.js only wraps
+// materialEngine.buildThreadsFirstAutopilot (the Coupang-product path), so this
 // path never ran voiceProblems()'s checks at all - none of them: MAX_LINES/MAX_LINE_CHARS,
 // the dangling-bound-noun line-break guard, GENERIC_CTA_ENDING, or highRiskClaim's health-claim
 // safety check. Confirmed a real high-risk claim ("염증이 나았어") sailed straight through
@@ -216,7 +216,7 @@ async function generateRecipe(accountId, target) {
       // Regression: pickPersona({mode:'recipe'}) can return housewife-recipe, whose entire
       // structure is "build up to a hidden secret sauce/ingredient, reveal it in the comment" -
       // that only makes sense when there's an actual affiliate secret ingredient to hide, like
-      // autopilotMaterialEngine.js's Coupang-linked recipes have (analysis.secretTerm). This
+      // materialEngine.js's Coupang-linked recipes have (analysis.secretTerm). This
       // no-Coupang-key path has no such thing - its own rule right below says "상품/구매/광고/
       // 제휴 이야기는 절대 넣지 않는다", and recipeCommentText is just a plain, fully-disclosed
       // ingredient/steps list with nothing marked as "the secret one". Picking housewife-recipe
@@ -259,11 +259,11 @@ JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","am
   throw new Error('Vision 통과 음식사진이 있는 레시피를 찾지 못했습니다');
 }
 
-// threadsPersonas.js's curiosity block explicitly allows deferring the identity reveal to a
+// personas.js's curiosity block explicitly allows deferring the identity reveal to a
 // comment ("아예 댓글로 넘긴다", worked example ending "정체 궁금하면 댓글에서 확인"). That is a
 // broken promise here specifically: generateDailyStory() returns a plain text-only lifestyle post
 // with no comment field at all (see the return below) - nothing ever gets posted as a follow-up
-// comment for this content type, unlike threadsMaterialWriter.js/autopilotMaterialEngine.js where
+// comment for this content type, unlike materialWriter.js/materialEngine.js where
 // the comment-defer option is legitimate because a real comment does follow. Same fix as
 // aiCaption.js's makeSystemPrompt: require the "reveal within the post" branch instead.
 function buildDailyStorySystemPrompt(personaBlock) {

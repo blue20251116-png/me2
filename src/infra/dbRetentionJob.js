@@ -1,5 +1,4 @@
 'use strict';
-const path = require('path');
 const fs = require('fs');
 const { DatabaseSync } = require('node:sqlite');
 const { DATA_DIR, DB_FILE, UPLOADS_DIR } = require('../config/paths');
