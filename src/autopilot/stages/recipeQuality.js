@@ -66,33 +66,35 @@ async function rewriteRecipe(accountId, result){
   return stripTerminalPeriods(clean(parsed.commentLead));
 }
 
-function wrap(originalBuild) {
-  return async function recipeQualityBuild(accountId, options){
-  let last;
-  for (let attempt=1; attempt<=3; attempt++) {
-    const result = await originalBuild(accountId, options);
-    if (result?.mode !== 'recipe') return result;
-    last = result;
-    if (!badRecipe(result.commentLead, result)) return {...result, commentLead:stripTerminalPeriods(result.commentLead)};
-    const missing = importantSourceIngredients(result).filter(x => !recipeContainsIngredient(result.commentLead, x));
-    console.warn(`[AutopilotV3][RECIPE SOURCE CHECK] 재작성 필요 missing="${missing.join(',')}" attempt=${attempt}/3`);
-    try {
-      const fixed = await rewriteRecipe(accountId, result);
-      if (fixed && !badRecipe(fixed, result)) {
-        console.log(`[AutopilotV3][RECIPE SOURCE CHECK] 원본 일치 검증 통과 length=${fixed.length}`);
-        return {...result, commentLead: fixed};
-      }
-      console.warn('[AutopilotV3][RECIPE SOURCE CHECK] 재작성 결과도 원본 일치 기준 미달 → 새 소재 재시도');
-    } catch (e) {
-      if(e?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED'||e?.__openAiNoRetry||/OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(String(e?.message||'')+' '+String(e?.response?.data?.error?.message||''))){throw e;}
-      console.warn(`[AutopilotV3][RECIPE SOURCE CHECK] 재작성 실패: ${e.response?.data?.error?.message || e.message}`);
+const MAX_RECIPE_ATTEMPTS = 3;
+
+// Checks a generated recipe comment against the source post (all key ingredients present, real
+// steps, no invented secret ingredient) and tries one AI repair. Returns the (possibly repaired)
+// result, the result untouched for non-recipes, or null when the caller should build a new
+// candidate from fresh material.
+async function checkRecipeAgainstSource(accountId, result, attempt = 1) {
+  if (result?.mode !== 'recipe') return result;
+  if (!badRecipe(result.commentLead, result)) return {...result, commentLead:stripTerminalPeriods(result.commentLead)};
+  const missing = importantSourceIngredients(result).filter(x => !recipeContainsIngredient(result.commentLead, x));
+  console.warn(`[AutopilotV3][RECIPE SOURCE CHECK] 재작성 필요 missing="${missing.join(',')}" attempt=${attempt}/${MAX_RECIPE_ATTEMPTS}`);
+  try {
+    const fixed = await rewriteRecipe(accountId, result);
+    if (fixed && !badRecipe(fixed, result)) {
+      console.log(`[AutopilotV3][RECIPE SOURCE CHECK] 원본 일치 검증 통과 length=${fixed.length}`);
+      return {...result, commentLead: fixed};
     }
+    console.warn('[AutopilotV3][RECIPE SOURCE CHECK] 재작성 결과도 원본 일치 기준 미달 → 새 소재 재시도');
+  } catch (e) {
+    if(e?.code==='OPENAI_HOURLY_BUDGET_EXCEEDED'||e?.__openAiNoRetry||/OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(String(e?.message||'')+' '+String(e?.response?.data?.error?.message||''))){throw e;}
+    console.warn(`[AutopilotV3][RECIPE SOURCE CHECK] 재작성 실패: ${e.response?.data?.error?.message || e.message}`);
   }
-  throw new Error(`원본 소재와 일치하는 완결된 레시피를 생성하지 못했습니다: ${clean(last?.topic) || 'recipe'}`);
-  };
+  return null;
 }
 
-console.log('[Autopilot][RECIPE SOURCE CHECK] 원본 핵심재료 보존 + 재료/조리법 일치 + 가짜 비밀재료 금지 활성화');
-module.exports = { badRecipe, importantSourceIngredients, recipeContainsIngredient, wrap };
+function recipeFailure(last) {
+  return new Error(`원본 소재와 일치하는 완결된 레시피를 생성하지 못했습니다: ${clean(last?.topic) || 'recipe'}`);
+}
+
+module.exports = { badRecipe, importantSourceIngredients, recipeContainsIngredient, checkRecipeAgainstSource, recipeFailure, MAX_RECIPE_ATTEMPTS };
 
 

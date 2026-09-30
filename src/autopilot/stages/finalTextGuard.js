@@ -13,14 +13,11 @@ function guardCommentLead(commentLead, mode){
   const comment = formatVoice(commentLead);
   return voiceProblems(comment,{mode,comment:true}).length ? '' : comment;
 }
-function wrap(originalBuild) {
-  return async function finalTextHardGuardBuild(accountId, options){
-    const result = await originalBuild(accountId, options);
-    if (!result) return result;
-    result.text = assertVoice(result.text,{mode:result.mode});
-    result.commentLead = guardCommentLead(result.commentLead, result.mode);
-    return result;
-  };
+// Last gate before a generated post is queued: the body must pass the shared voice policy.
+function applyFinalTextGuard(result){
+  if (!result) return result;
+  result.text = assertVoice(result.text,{mode:result.mode});
+  result.commentLead = guardCommentLead(result.commentLead, result.mode);
+  return result;
 }
-console.log('[Autopilot][TEXT HARD GUARD] source-voice-v2 shared validation; no sentence deletion');
-module.exports = { badStyleReasons, fallbackRewrite, guardCommentLead, wrap };
+module.exports = { badStyleReasons, fallbackRewrite, guardCommentLead, applyFinalTextGuard };

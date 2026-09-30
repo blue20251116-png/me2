@@ -392,9 +392,8 @@ async function findExactSourceProduct(result) {
   };
 }
 
-function wrap(originalBuild) {
-  return async function sourceAffiliateExactProductBuild(accountId, options) {
-    const result = await originalBuild(accountId, options);
+// If the source author's own reply links a Coupang product, use exactly that product.
+async function applySourceExactProduct(result) {
     if (!result) return result;
     try {
       const exact = await findExactSourceProduct(result);
@@ -412,8 +411,6 @@ function wrap(originalBuild) {
       console.warn(`[AutopilotV3][SOURCE AFFILIATE] 원문 댓글 상품 적용 실패 → SOLD-FIRST 기존 상품 유지 reason="${e.response?.data?.message || e.message}"`);
     }
     return result;
-  };
 }
 
-console.log('[Autopilot][SOURCE AFFILIATE EXACT PRODUCT] v3 single-link productId+title ground truth · item/vendor identity · multi-link unique-winner · axios+browser fail-safe');
-module.exports = { resolveWithBrowser, wrap };
+module.exports = { resolveWithBrowser, applySourceExactProduct };

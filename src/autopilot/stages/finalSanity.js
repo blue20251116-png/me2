@@ -28,24 +28,26 @@ function isMaterialBatchExhausted(error) {
   return /^쇼핑 소재 \d+개를 검사했지만 발행 가능한 상품 연결에 실패했습니다/.test(String(error?.message || ''));
 }
 
-function wrap(originalBuild) {
-  async function buildWithFreshMaterialRetry(accountId, options) {
-    let lastError = null;
-    for (let round = 1; round <= MAX_MATERIAL_ROUNDS; round++) {
-      try {
-        if (round > 1) console.log(`[AutopilotV3][YIELD RETRY] 새 소재 묶음 재탐색 round=${round}/${MAX_MATERIAL_ROUNDS}`);
-        return await originalBuild(accountId, options);
-      } catch (error) {
-        lastError = error;
-        if (!isMaterialBatchExhausted(error) || round >= MAX_MATERIAL_ROUNDS) throw error;
-        console.warn(`[AutopilotV3][YIELD RETRY] 소재 묶음 소진 → 새 후보로 1회 추가 시도 reason="${error.message}"`);
-      }
+// When a whole batch of source materials was exhausted without a publishable post, fetch a fresh
+// batch and try again (bounded by MAX_MATERIAL_ROUNDS).
+async function withFreshMaterialRounds(buildOnce) {
+  let lastError = null;
+  for (let round = 1; round <= MAX_MATERIAL_ROUNDS; round++) {
+    try {
+      if (round > 1) console.log(`[AutopilotV3][YIELD RETRY] 새 소재 묶음 재탐색 round=${round}/${MAX_MATERIAL_ROUNDS}`);
+      return await buildOnce();
+    } catch (error) {
+      lastError = error;
+      if (!isMaterialBatchExhausted(error) || round >= MAX_MATERIAL_ROUNDS) throw error;
+      console.warn(`[AutopilotV3][YIELD RETRY] 소재 묶음 소진 → 새 후보로 1회 추가 시도 reason="${error.message}"`);
     }
-    throw lastError;
   }
+  throw lastError;
+}
 
-  return async function finalAutopilotSanityBuild(accountId, options) {
-    const result = await buildWithFreshMaterialRetry(accountId, options);
+// Re-reads the source post: drops a recipe "secret ingredient" the source never mentions, then
+// sanitizes the body text.
+async function recheckSourceAndSanitize(result) {
     if (!result) return result;
     let detail = null;
     if (result.sourceUrl && result.sourceUsername) {
@@ -65,8 +67,6 @@ function wrap(originalBuild) {
     result.text = sanitizeBody(result.text);
     console.log(`[AutopilotV3][FINAL VOICE] v12 yield-retry mode=${result.mode} preview="${result.text.slice(0,160).replace(/\n/g,' / ')}"`);
     return result;
-  };
 }
 
-console.log('[Autopilot][FINAL SANITY] source/affiliate check + bounded fresh-material yield retry');
-module.exports = { sanitizeBody, sourceEvidence, isMaterialBatchExhausted, MAX_MATERIAL_ROUNDS, wrap };
+module.exports = { sanitizeBody, sourceEvidence, isMaterialBatchExhausted, MAX_MATERIAL_ROUNDS, withFreshMaterialRounds, recheckSourceAndSanitize };

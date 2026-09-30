@@ -124,9 +124,9 @@ function failClosed(message, code) {
   return err;
 }
 
-function wrap(originalBuild) {
-  return async function sourceAffiliateOriginalLinkPriorityBuild(accountId, options) {
-  const result = await originalBuild(accountId, options);
+// Fallback resolver for the author's Coupang link (redirect Location → productId). Fails closed
+// when the author linked something we cannot pin to exactly one product.
+async function applySourceLinkPriority(result) {
   if (!result) return result;
 
   if (result.sourceAffiliateProduct && result?.product?.productId) {
@@ -189,8 +189,6 @@ function wrap(originalBuild) {
 
   console.log(`[AutopilotV3][SOURCE LINK PRIORITY][GROUND TRUTH] @${result.sourceUsername} productId=${picked.productId} itemId=${picked.itemId || '-'} vendorItemId=${picked.vendorItemId || '-'} method=${picked.method || '-'} → 작성자 원본 상품 최우선 · SOLD-FIRST 덮어쓰기 차단`);
   return result;
-  };
 }
 
-console.log('[Autopilot][SOURCE LINK PRIORITY] v2 author Coupang productId ground-truth first · redirect Location resolver · unresolved/ambiguous fail-closed · SOLD-FIRST fallback blocked when source link exists');
-module.exports = { wrap };
+module.exports = { applySourceLinkPriority };

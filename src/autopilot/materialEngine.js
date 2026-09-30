@@ -610,22 +610,4 @@ async function buildThreadsFirstAutopilot(accountId,{target}){
   }
   throw new Error(`쇼핑 소재 ${materials.length}개를 검사했지만 발행 가능한 상품 연결에 실패했습니다${lastError?`: ${lastError.message}`:''}`);
 }
-// buildThreadsFirstAutopilot used to get wrapped by 8 separate patch files, each reassigning
-// module.exports.buildThreadsFirstAutopilot at require-time - the final behavior secretly
-// depended on package.json's exact `-r` flag order, since each patch captured "whatever the
-// current version is" as its own "original" at its own load time. Composed explicitly here
-// instead, in that same order (first in the list = wraps the raw function first = innermost
-// layer when actually called; last = outermost layer = what everything else in the codebase
-// calls as buildThreadsFirstAutopilot).
-let __composedBuildThreadsFirstAutopilot = buildThreadsFirstAutopilot;
-__composedBuildThreadsFirstAutopilot = require('./stages/videoTrigger').wrap(__composedBuildThreadsFirstAutopilot);
-__composedBuildThreadsFirstAutopilot = require('./stages/recipeQuality').wrap(__composedBuildThreadsFirstAutopilot);
-__composedBuildThreadsFirstAutopilot = require('./stages/secretAffiliate').wrap(__composedBuildThreadsFirstAutopilot);
-__composedBuildThreadsFirstAutopilot = require('./stages/sourceExactProduct').wrap(__composedBuildThreadsFirstAutopilot);
-__composedBuildThreadsFirstAutopilot = require('./stages/sourceLinkPriority').wrap(__composedBuildThreadsFirstAutopilot);
-__composedBuildThreadsFirstAutopilot = require('./stages/finalSanity').wrap(__composedBuildThreadsFirstAutopilot);
-__composedBuildThreadsFirstAutopilot = require('./stages/finalTextGuard').wrap(__composedBuildThreadsFirstAutopilot);
-__composedBuildThreadsFirstAutopilot = require('./stages/qualityHold').wrap(__composedBuildThreadsFirstAutopilot);
-
-module.exports={buildThreadsFirstAutopilot:__composedBuildThreadsFirstAutopilot,buildThreadsFirstAutopilotRaw:buildThreadsFirstAutopilot,scrubSecret,hasIngredientHeading,hasMethodHeading,normalizeRecipeHeadings};
-
+module.exports={buildThreadsFirstAutopilot,scrubSecret,hasIngredientHeading,hasMethodHeading,normalizeRecipeHeadings};

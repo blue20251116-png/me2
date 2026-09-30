@@ -26,21 +26,4 @@ function qualityHoldError(cause) {
   return err;
 }
 
-function wrap(originalBuild) {
-  return async function emergencyFallbackBuild(accountId, options) {
-    try {
-      return await originalBuild(accountId, options);
-    } catch (e) {
-      if (!isGeminiDown(e)) throw e;
-
-      // 품질 우선: AI 호출 제한 시 예전 productBody()/recipeBody() 고정문구를 발행하지 않는다.
-      // 소재를 사용 처리하지 않고 그대로 보존하여 AI 정상화 후 다시 시도할 수 있게 한다.
-      console.warn('[AutopilotV3][QUALITY HOLD] AI 호출 제한/크레딧 제한 감지 → 고정문구 fallback 발행 차단 · 소재 보존');
-      throw qualityHoldError(e);
-    }
-  };
-}
-
-console.log('[Autopilot][QUALITY HOLD] v3 AI 호출 제한 시 저품질 emergency 고정문구 발행 금지 · 정상화 후 재시도');
-
-module.exports = { isGeminiDown, qualityHoldError, wrap };
+module.exports = { isGeminiDown, qualityHoldError };

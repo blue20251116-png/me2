@@ -8,7 +8,7 @@ const { db, listAllAccountsForSystem, getAccount, getUserById, canPublish, logUs
 const { publishPost, publishCarouselPost, publishReply, getMediaInsights } = require('../threads/threadsApi');
 const coupangApi = require('../integrations/coupangApi');
 const { generateRecipe: generateContentOnlyRecipe } = require('../content/contentOnlyAutomation');
-const { buildThreadsFirstAutopilot } = require('../autopilot/materialEngine');
+const { buildAutopilotPost } = require('../autopilot/pipeline');
 const { importThreadsVideo } = require('../threads/mediaImporter');
 const { getBrowserCircuitState, browserInfraFailure } = require('../infra/isolatedTask');
 const { setState, budgetState } = require('../infra/automationState');
@@ -302,7 +302,7 @@ async function ensureCoupangReady(accountId, account) {
     return true;
   }
 }
-async function runAutopilotOnceInner(account,scheduledAt=null){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target,scheduledAt);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildThreadsFirstAutopilot(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=await chooseSourceMedia(result);
+async function runAutopilotOnceInner(account,scheduledAt=null){const target=AUTOPILOT_TARGETS[Math.floor(Math.random()*AUTOPILOT_TARGETS.length)];if(!hasCoupangKeys(account)){await runContentOnlyAutopilot(account,target,scheduledAt);return;}const cooldown=coupangApi.getApiCooldown?.(account.id);if(cooldown){const e=new Error(`쿠팡 API cooldown 중: ${cooldown.cooldown_until}`);e.code='COUPANG_RATE_LIMIT';e.isCoupangRateLimit=true;throw e;}const result=await buildAutopilotPost(account.id,{target});const affiliateLink=await makeAffiliateLink(account,result);const media=await chooseSourceMedia(result);
 assertHasMedia(media,{accountId:account.id,target,mode:result.mode,topic:result.topic});
 saveAutopilotPost({accountId:account.id,text:result.text,link:affiliateLink,imageUrl:media.imageUrl,extraImageUrl:media.extraImageUrl,videoUrl:media.videoUrl,recipeCommentText:result.commentLead,scheduledAt});const last=result.productSearchTerm||result.secretTerm||result.topic;recordAutopilotLast(account.id,last,target);console.log(`[자동발행 예약][V15 MATERIAL-MIXED-MEDIA] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`);}
 // Prevents one Chromium resource failure from being multiplied across every account in the same

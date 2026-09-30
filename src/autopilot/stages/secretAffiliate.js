@@ -57,9 +57,9 @@ async function findSecretAffiliateProduct(accountId, result){
 
 function appendSecretAffiliateBridge(commentLead, secretTerm){ return stripTerminalPeriods(commentLead); }
 
-function wrap(originalBuild) {
-  return async function strongStyleSecretAffiliateBuild(accountId, options){
-    const result = await originalBuild(accountId, options);
+// Strips formal sentence-final periods and, for recipes, links the hidden "kick" ingredient to a
+// matching Coupang product instead of the generic one.
+async function applySecretAffiliate(accountId, result){
     if (!result) return result;
 
     result.text = stripTerminalPeriods(result.text);
@@ -78,9 +78,7 @@ function wrap(originalBuild) {
       }
     }
     return result;
-  };
 }
 
-console.log('[Autopilot][STRONG STYLE+SECRET AFFILIATE] 종결 마침표 제거 + 레시피 비밀재료 쿠팡 우선연결 + 자연스러운 링크 연결문 활성화');
-module.exports = { wrap };
+module.exports = { applySecretAffiliate };
 

@@ -51,7 +51,7 @@ function harness({ generationError, preflightError, env = {} } = {}) {
       getApiCooldown: () => null, isRateLimitError: () => false, createDeeplink: async () => [],
     },
     '../content/contentOnlyAutomation': { generateRecipe: async () => ({}) },
-    '../autopilot/materialEngine': { buildThreadsFirstAutopilot: async () => ({}) },
+    '../autopilot/pipeline': { buildAutopilotPost: async () => ({}) },
     '../threads/mediaImporter': { importThreadsVideo: async () => ({}) },
     '../infra/isolatedTask': { getBrowserCircuitState: () => ({ open: false }), browserInfraFailure: () => false },
   };
