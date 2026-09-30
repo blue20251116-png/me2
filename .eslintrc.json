@@ -32,6 +32,10 @@
       {
         "checkLoops": false
       }
+    ],
+    "strict": [
+      "error",
+      "global"
     ]
   },
   "overrides": [
@@ -66,6 +70,14 @@
       "globals": {
         "apiFetch": "readonly",
         "loadDashboard": "readonly"
+      }
+    },
+    {
+      "files": [
+        "public/**/*.js"
+      ],
+      "rules": {
+        "strict": "off"
       }
     }
   ]

@@ -1,3 +1,5 @@
+'use strict';
+const { isAiBudgetOrCreditError } = require('../../integrations/aiRequestGuard');
 const { getAccount, getSystemApiSettings } = require('../../infra/db');
 const { callAIJson } = require('../../integrations/aiClient');
 
@@ -13,7 +15,7 @@ function stripTerminalPeriods(text) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
-function getAnthropicKey(accountId) {
+function getAiKey(accountId) {
   const a = getAccount(accountId),
     s = getSystemApiSettings();
   return s.anthropic_api_key || process.env.ANTHROPIC_API_KEY || a?.anthropic_api_key || null;
@@ -123,7 +125,7 @@ function badRecipe(text, result) {
 }
 
 async function rewriteRecipe(accountId, result) {
-  const apiKey = getAnthropicKey(accountId);
+  const apiKey = getAiKey(accountId);
   if (!apiKey) throw new Error('Anthropic API 키가 설정되지 않았습니다');
   const productName = clean(result?.product?.name);
   const src = sourceContext(result);
@@ -163,13 +165,7 @@ async function checkRecipeAgainstSource(accountId, result, attempt = 1) {
     }
     console.warn('[AutopilotV3][RECIPE SOURCE CHECK] 재작성 결과도 원본 일치 기준 미달 → 새 소재 재시도');
   } catch (e) {
-    if (
-      e?.code === 'OPENAI_HOURLY_BUDGET_EXCEEDED' ||
-      e?.__openAiNoRetry ||
-      /OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(
-        String(e?.message || '') + ' ' + String(e?.response?.data?.error?.message || '')
-      )
-    ) {
+    if (isAiBudgetOrCreditError(e)) {
       throw e;
     }
     console.warn(`[AutopilotV3][RECIPE SOURCE CHECK] 재작성 실패: ${e.response?.data?.error?.message || e.message}`);

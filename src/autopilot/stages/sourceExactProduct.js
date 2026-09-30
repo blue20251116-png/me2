@@ -1,3 +1,4 @@
+'use strict';
 const { launchChromium } = require('../../infra/browserLauncher');
 const { runBrowserTask } = require('../../infra/isolatedTask');
 const axios = require('axios');

@@ -1,3 +1,4 @@
+'use strict';
 const crypto = require('crypto');
 
 // bcrypt 대신 Node 내장 crypto.scrypt 사용 — 네이티브 컴파일이 필요 없어서

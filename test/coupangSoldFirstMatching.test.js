@@ -2,28 +2,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
 
-const source = fs.readFileSync(require.resolve('../src/autopilot/materialEngine'), 'utf8');
+// Product matching lives in productMatching.js; the engine wires it to the vision result.
+const source = ['productMatching', 'materialEngine']
+  .map(name => fs.readFileSync(require.resolve(`../src/autopilot/${name}`), 'utf8'))
+  .join('\n');
 // Whitespace-free copy so structural assertions don't depend on code formatting.
 const compact = source.replace(/\s+/g, '');
-
-// findProduct() isn't part of the module's public exports (only
-// buildThreadsFirstAutopilot is), so extract it into a throwaway copy of the
-// file (written alongside the original so its own relative require()s still
-// resolve) for a real behavioral test instead of only checking source text.
-function loadFindProduct() {
-  const tmpFile = path.join(
-    path.dirname(require.resolve('../src/autopilot/materialEngine')),
-    `__engine_findproduct_test_${process.pid}.js`
-  );
-  fs.writeFileSync(tmpFile, source + '\nmodule.exports.findProduct = findProduct;\n');
-  try {
-    return require(tmpFile).findProduct;
-  } finally {
-    fs.unlinkSync(tmpFile);
-  }
-}
+const loadFindProduct = () => require('../src/autopilot/productMatching').findProduct;
 
 test('Coupang matching separates sold identity from search context', () => {
   assert.match(source, /SOLD_FIRST_CONTEXT_WORDS/);

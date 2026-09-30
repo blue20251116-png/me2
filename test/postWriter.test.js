@@ -6,7 +6,7 @@ const {
   hasIngredientHeading,
   hasMethodHeading,
   normalizeRecipeHeadings,
-} = require('../src/autopilot/materialEngine');
+} = require('../src/autopilot/postWriter');
 
 // REGRESSION (found via synthetic testing, hourly review): scrubSecret() used a plain
 // split/join, which replaced the secret ingredient/product term wherever it appeared as a bare

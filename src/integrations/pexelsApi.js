@@ -1,3 +1,4 @@
+'use strict';
 const axios = require('axios');
 
 const FOOD_QUERY_MAP = {

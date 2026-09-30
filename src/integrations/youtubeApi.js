@@ -1,3 +1,4 @@
+'use strict';
 const axios = require('axios');
 
 // YouTube 콘텐츠 소싱 전용 모듈.

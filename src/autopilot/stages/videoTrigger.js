@@ -1,3 +1,4 @@
+'use strict';
 const { launchChromium } = require('../../infra/browserLauncher');
 const { runBrowserTask } = require('../../infra/isolatedTask');
 // Does the source post contain a video? Runs in the isolated browser worker; never throws.

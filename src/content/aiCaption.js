@@ -1,3 +1,4 @@
+'use strict';
 const { getAccount, getSystemApiSettings } = require('../infra/db');
 const { voiceGuide } = require('./voicePolicy');
 const { pickPersona } = require('./personas');
@@ -289,7 +290,7 @@ ${priceText ? `가격: ${priceText}` : ''}${youtubeContext}
     throw new Error('Anthropic API 키가 설정되지 않았습니다 (연결 설정에서 입력)');
   }
 
-  return generateWithAnthropic(anthropicKey, userMessage, persona.block);
+  return generateWithAi(anthropicKey, userMessage, persona.block);
 }
 
 // ----------------------------------------------------
@@ -349,7 +350,7 @@ function splitVariants(text) {
 // ----------------------------------------------------
 // Anthropic
 // ----------------------------------------------------
-async function generateWithAnthropic(apiKey, userMessage, personaBlock) {
+async function generateWithAi(apiKey, userMessage, personaBlock) {
   const text = await callAI(apiKey, {
     system: makeSystemPrompt(personaBlock),
     userContent: userMessage,

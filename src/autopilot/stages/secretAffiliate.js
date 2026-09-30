@@ -1,3 +1,4 @@
+'use strict';
 const coupangApi = require('../../integrations/coupangApi');
 
 function clean(v) {

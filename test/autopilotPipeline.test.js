@@ -69,7 +69,7 @@ function loadPipeline(overrides = {}) {
       },
     },
     './stages/qualityHold': {
-      isGeminiDown: e => !!e.quota,
+      isAiQuotaExhausted: e => !!e.quota,
       qualityHoldError: e => Object.assign(new Error('hold'), { code: 'AI_QUALITY_HOLD', cause: e }),
     },
   };

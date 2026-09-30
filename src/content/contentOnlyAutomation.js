@@ -1,3 +1,4 @@
+'use strict';
 const { getAccount, getSystemApiSettings, getPexelsApiKey, getPixabayApiKey } = require('../infra/db');
 const { searchFoodPhotos: searchPexels } = require('../integrations/pexelsApi');
 const { searchFoodPhotos: searchPixabay } = require('../integrations/pixabayApi');
@@ -31,14 +32,14 @@ const FALLBACK_TOPICS = [
   '떡볶이',
 ];
 
-function getAnthropicKey(accountId) {
+function getAiKey(accountId) {
   const account = getAccount(accountId);
   const shared = getSystemApiSettings();
   return shared.anthropic_api_key || process.env.ANTHROPIC_API_KEY || account?.anthropic_api_key || null;
 }
 
-async function callClaudeText(accountId, system, user, { maxTokens = 1000, json = false, temperature = 0.85 } = {}) {
-  const apiKey = getAnthropicKey(accountId);
+async function callAiText(accountId, system, user, { maxTokens = 1000, json = false, temperature = 0.85 } = {}) {
+  const apiKey = getAiKey(accountId);
   if (!apiKey) throw new Error('Anthropic API 키가 설정되지 않았습니다');
   if (json) return callAIJson(apiKey, { system, userContent: user, maxTokens, temperature, timeout: 30000 });
   return callAI(apiKey, { system, userContent: user, maxTokens, temperature, timeout: 30000 });
@@ -85,7 +86,7 @@ async function humanizeHook(accountId, hook, dishName) {
   let text = String(hook || '').trim();
   if (!text || !looksBloggy(text)) return text;
   try {
-    const d = await callClaudeText(
+    const d = await callAiText(
       accountId,
       `한국 Threads 말투 교정기다. 블로그/광고/AI 문체로 감지된 문장을 실제 사람이 친구한테 툭 말하는 짧은 반말로 바꾼다.
 
@@ -115,7 +116,7 @@ async function buildImageQueries(accountId, dish) {
   };
   push(dish);
   try {
-    const d = await callClaudeText(
+    const d = await callAiText(
       accountId,
       '너는 음식 이미지 검색어 생성기다. 요리명을 Pexels/Pixabay에서 잘 검색되는 짧은 영어 음식명으로 바꾼다. 수식어를 줄이고 음식 자체를 나타내는 2~5단어 검색어를 만든다. 첫 검색어는 최대한 정확하게, 두 번째는 조금 더 넓게 만든다. JSON={"queries":["tomato pasta","pasta"]} 형식만 출력한다.',
       `요리명: ${dish}`,
@@ -129,7 +130,7 @@ async function buildImageQueries(accountId, dish) {
 }
 
 async function visionCheck(accountId, dish, imageUrl) {
-  const apiKey = getAnthropicKey(accountId);
+  const apiKey = getAiKey(accountId);
   if (!apiKey) return false;
   try {
     const d = await callAIJson(apiKey, {
@@ -239,7 +240,7 @@ async function generateRecipe(accountId, target) {
     .sort(() => Math.random() - 0.5)
     .slice(0, 8);
   try {
-    const d = await callClaudeText(
+    const d = await callAiText(
       accountId,
       '한국 Threads용 레시피 주제 기획자다. 실생활에서 쉽게 해먹는 서로 다른 요리 8개를 JSON으로 출력한다. 너무 희귀한 요리는 제외한다. JSON={"topics":["..."]}',
       `타겟: ${target || '전체'}\n오늘 올리기 좋은 레시피 주제 8개`,
@@ -263,7 +264,7 @@ async function generateRecipe(accountId, target) {
       // here would write a hook promising a reveal the comment can never deliver on, so this
       // path always uses the base reaction persona instead of rotating through the recipe pool.
       const persona = REACTION_PERSONA;
-      const r = await callClaudeText(
+      const r = await callAiText(
         accountId,
         `한국 Threads 레시피 에디터다. JSON만 출력한다. 정확한 재료와 계량, 실제 따라할 수 있는 조리 순서 3~6단계를 만든다.
 
@@ -343,7 +344,7 @@ async function generateDailyStory(accountId, target) {
   const persona = pickPersona({ mode: 'lifestyle', text: '' });
   console.log(`[ContentOnly][DailyStory] persona picked="${persona.name}"(${persona.id})`);
   const system = buildDailyStorySystemPrompt(persona.block);
-  let text = await callClaudeText(
+  let text = await callAiText(
     accountId,
     system,
     `타겟: ${target || '전체'}\n오늘 Threads에 올릴 자연스러운 일상글 하나만 작성해.`,

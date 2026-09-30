@@ -1,3 +1,4 @@
+'use strict';
 const { DATA_DIR } = require('../config/paths');
 // Node.js 내장 SQLite 모듈 사용 (Node 22.5+ 필요, 별도 네이티브 빌드 불필요)
 const { DatabaseSync } = require('node:sqlite');

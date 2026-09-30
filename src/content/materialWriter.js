@@ -1,9 +1,10 @@
+'use strict';
 const { voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('./voicePolicy');
 const { pickPersona } = require('./personas');
 const { getAccount, getSystemApiSettings } = require('../infra/db');
 const { callAIJson } = require('../integrations/aiClient');
 
-function getAnthropicKey(accountId) {
+function getAiKey(accountId) {
   const account = getAccount(accountId);
   const shared = getSystemApiSettings();
   return shared.anthropic_api_key || process.env.ANTHROPIC_API_KEY || account?.anthropic_api_key || null;
@@ -100,7 +101,7 @@ async function generateFromThreadsMaterial(
     videoSummary = '',
   }
 ) {
-  const apiKey = getAnthropicKey(accountId);
+  const apiKey = getAiKey(accountId);
   if (!apiKey) throw new Error('관리자 Anthropic API 키가 설정되어 있지 않습니다.');
   const cleanedSource = stripAffiliateNoise(sourceText, { preserveLines: true });
   const cleanedReplies = sanitizeAuthorReplies(authorReplies);

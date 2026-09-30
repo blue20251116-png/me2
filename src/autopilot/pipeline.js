@@ -21,7 +21,7 @@ const { applySourceExactProduct } = require('./stages/sourceExactProduct');
 const { applySourceLinkPriority } = require('./stages/sourceLinkPriority');
 const { withFreshMaterialRounds, recheckSourceAndSanitize } = require('./stages/finalSanity');
 const { applyFinalTextGuard } = require('./stages/finalTextGuard');
-const { isGeminiDown, qualityHoldError } = require('./stages/qualityHold');
+const { isAiQuotaExhausted, qualityHoldError } = require('./stages/qualityHold');
 
 async function buildCandidate(accountId, options) {
   return addSourceVideoSignal(await buildThreadsFirstAutopilot(accountId, options));
@@ -52,7 +52,7 @@ async function buildAutopilotPost(accountId, options) {
     const result = await withFreshMaterialRounds(() => buildLinkedCandidate(accountId, options));
     return applyFinalTextGuard(await recheckSourceAndSanitize(result));
   } catch (e) {
-    if (!isGeminiDown(e)) throw e;
+    if (!isAiQuotaExhausted(e)) throw e;
     // 품질 우선: AI 호출 제한 시 고정문구를 발행하지 않고, 소재를 보존해 정상화 후 다시 시도한다.
     console.warn('[AutopilotV3][QUALITY HOLD] AI 호출 제한/크레딧 제한 감지 → 고정문구 fallback 발행 차단 · 소재 보존');
     throw qualityHoldError(e);

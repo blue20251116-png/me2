@@ -1,3 +1,4 @@
+'use strict';
 const { resolveModelKeys } = require('./aiCaption');
 const { getAccount } = require('../infra/db');
 const { callAI, extractJson, imageBlock } = require('../integrations/aiClient');

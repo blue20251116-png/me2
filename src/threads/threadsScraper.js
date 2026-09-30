@@ -1,6 +1,9 @@
 'use strict';
 // Browser-side Threads scraping. Runs ONLY inside the isolated browser worker
 // (infra/isolatedBrowserWorker.js); the rest of the app calls threads/threadsCollector.js.
+const fs = require('fs');
+const path = require('path');
+const { DATA_DIR } = require('../config/paths');
 const { launchChromium } = require('../infra/browserLauncher');
 const { listBenchmarkAccounts } = require('./benchmarkAccounts');
 const { canonicalPostUrl, isHttpVideoUrl, isTextReadFailure } = require('./postUrls');
@@ -19,18 +22,14 @@ async function openBrowser() {
     headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
   });
-  const __threadsFs = require('fs');
-  const __threadsPath = require('path');
-  const statePath =
-    process.env.THREADS_STORAGE_STATE_PATH ||
-    require('path').join(require('../config/paths').DATA_DIR, 'threads-storage-state.json');
+  const statePath = process.env.THREADS_STORAGE_STATE_PATH || path.join(DATA_DIR, 'threads-storage-state.json');
   let storageState = null;
   try {
-    if (__threadsFs.existsSync(statePath)) storageState = JSON.parse(__threadsFs.readFileSync(statePath, 'utf8'));
+    if (fs.existsSync(statePath)) storageState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
     else if (process.env.THREADS_STORAGE_STATE_JSON) {
       storageState = JSON.parse(process.env.THREADS_STORAGE_STATE_JSON);
-      __threadsFs.mkdirSync(__threadsPath.dirname(statePath), { recursive: true });
-      __threadsFs.writeFileSync(statePath, JSON.stringify(storageState), { mode: 0o600 });
+      fs.mkdirSync(path.dirname(statePath), { recursive: true });
+      fs.writeFileSync(statePath, JSON.stringify(storageState), { mode: 0o600 });
     }
   } catch (e) {
     console.error('[Threads][SESSION] storageState load failed:', e.message);
@@ -48,10 +47,10 @@ async function openBrowser() {
   context.close = async () => {
     if (context.__threadsStateHealthy) {
       try {
-        __threadsFs.mkdirSync(__threadsPath.dirname(statePath), { recursive: true });
+        fs.mkdirSync(path.dirname(statePath), { recursive: true });
         await context.storageState({ path: statePath });
         try {
-          __threadsFs.chmodSync(statePath, 0o600);
+          fs.chmodSync(statePath, 0o600);
         } catch {}
         console.log('[Threads][SESSION] healthy state persisted');
       } catch (e) {

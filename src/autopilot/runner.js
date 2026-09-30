@@ -1,4 +1,5 @@
 'use strict';
+const { isAiBudgetOrCreditError } = require('../integrations/aiRequestGuard');
 // Autopilot controller: every 10 minutes, for each enabled account, keep a small buffer of future
 // scheduled posts filled by running the generation pipeline (or the content-only recipe path for
 // accounts without Coupang keys), attaching media and the affiliate link, and saving the post.
@@ -396,14 +397,11 @@ async function refillAccount(accountId) {
       try {
         // Calls through module.exports (not the bare local reference) so a test can substitute a
         // fake generator to exercise refillAccount's own preflight/retry/circuit logic in
-        // isolation from the real generation pipeline - see autopilotRecovery.test.js.
+        // isolation from the real generation pipeline - see test/autopilotRunner.test.js.
         await module.exports.runAutopilotOnce(account, slot.toISOString());
         setState(accountId, 'ready', 'reserved');
         console.log(`[Autopilot][TIMED PREFILL] RESERVED account #${accountId} scheduled=${slot.toISOString()}`);
       } catch (err) {
-        const msg = String(
-          err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || err || ''
-        );
         const status = Number(err?.response?.status || 0);
         console.error(
           `[Autopilot][TIMED PREFILL] generation failed account #${accountId}:`,
@@ -432,9 +430,7 @@ async function refillAccount(accountId) {
           status === 401 ||
           err?.isContentQualityHold ||
           err?.code === 'CONTENT_QUALITY_HOLD' ||
-          err?.code === 'OPENAI_HOURLY_BUDGET_EXCEEDED' ||
-          err?.__openAiNoRetry ||
-          /no credits remaining|OPENAI_HOURLY_BUDGET_EXCEEDED|credit balance is too low|insufficient_quota/i.test(msg)
+          isAiBudgetOrCreditError(err)
         )
           break;
         console.log(`[Autopilot][TIMED PREFILL] account #${accountId} 실패 1건은 건너뛰고 다음 예약 슬롯 계속 시도`);

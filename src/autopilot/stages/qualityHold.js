@@ -7,14 +7,12 @@
 // phrases - so a real Claude credit-exhaustion error would fail this text check (the __openAiNoRetry
 // flag set upstream by aiRequestGuard.js's isNoCredits() already covers the common case,
 // but this is the independent, defense-in-depth signal this function was designed to also check).
-function isGeminiDown(e) {
+function isAiQuotaExhausted(e) {
   const msg = `${e?.message || ''} ${e?.response?.data?.error?.message || ''}`;
   return !!(
-    e?.isGeminiRateLimit ||
-    e?.code === 'GEMINI_COOLDOWN' ||
     e?.code === 'OPENAI_HOURLY_BUDGET_EXCEEDED' ||
     e?.__openAiNoRetry ||
-    /prepayment credits are depleted|quota exceeded|gemini cooldown|OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota|\b429\b/i.test(
+    /prepayment credits are depleted|quota exceeded|OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota|\b429\b/i.test(
       msg
     )
   );
@@ -28,4 +26,4 @@ function qualityHoldError(cause) {
   return err;
 }
 
-module.exports = { isGeminiDown, qualityHoldError };
+module.exports = { isAiQuotaExhausted, qualityHoldError };
