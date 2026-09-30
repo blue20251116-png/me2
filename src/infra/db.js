@@ -25,8 +25,13 @@ if (process.env.NODE_ENV === 'production') {
 }
 // Boot must survive a full disk (the emergency-cleanup route is how a full volume gets fixed), so
 // every schema statement at load time is guarded; real queries later still surface real errors.
+// busy_timeout first, on its own: it needs no lock, so it always applies. It used to run after
+// journal_mode=WAL in the same batch - when another process held the DB at boot, the WAL switch
+// failed instantly, busy_timeout was never set, and every later write in this process failed with
+// "database is locked" instead of waiting.
+db.exec('PRAGMA busy_timeout=5000;');
 try {
-  db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
+  db.exec('PRAGMA journal_mode=WAL;');
 } catch (e) {
   console.error('[DB][INIT] PRAGMA 설정 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message);
 }
@@ -286,7 +291,11 @@ function encryptPlaintextSecrets() {
       changed++;
     }
   }
-  if (db.prepare('SELECT 1 FROM accounts LIMIT 1').get()) {
+  const placeholders0 = LEGACY_SECRET_SETTING_KEYS.map(() => '?').join(',');
+  const hasLegacyCopies = db
+    .prepare(`SELECT 1 FROM settings WHERE key IN (${placeholders0}) LIMIT 1`)
+    .get(...LEGACY_SECRET_SETTING_KEYS);
+  if (hasLegacyCopies && db.prepare('SELECT 1 FROM accounts LIMIT 1').get()) {
     const placeholders = LEGACY_SECRET_SETTING_KEYS.map(() => '?').join(',');
     changed += Number(
       db.prepare(`DELETE FROM settings WHERE key IN (${placeholders})`).run(...LEGACY_SECRET_SETTING_KEYS).changes || 0
