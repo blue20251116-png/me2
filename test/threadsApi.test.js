@@ -73,14 +73,17 @@ test('sanitizePublishedThreadsText strips pictograph emoji anywhere, keeping tex
   // everywhere (2026-09-21) - that ban was only a prompt instruction with no code-side
   // enforcement, so a model that ignored it published unchanged. This is the same gap class the
   // "ㅡ" dash fix already closed for a different unwanted character.
-  assert.equal(sanitizePublishedThreadsText('쿠션감이 장난 아님\n😭 구름 위를 걷는 기분이랄까'), '쿠션감이 장난 아님\n구름 위를 걷는 기분이랄까');
+  assert.equal(
+    sanitizePublishedThreadsText('쿠션감이 장난 아님\n😭 구름 위를 걷는 기분이랄까'),
+    '쿠션감이 장난 아님\n구름 위를 걷는 기분이랄까'
+  );
   assert.equal(sanitizePublishedThreadsText('이거 완전 좋음🥰 진짜 만족'), '이거 완전 좋음 진짜 만족');
   assert.equal(sanitizePublishedThreadsText('오늘 날씨 맑음🌤️✨'), '오늘 날씨 맑음');
   // Text-only reactions (ㅋㅋ/ㄷㄷ/ㅠㅠ/;;) are not pictograph emoji and must survive untouched.
   assert.equal(sanitizePublishedThreadsText('이거 완전 웃김ㅋㅋㅋ'), '이거 완전 웃김ㅋㅋㅋ');
 });
 
-test('sanitizePublishedThreadsText also strips the period before ㄷㄷ/;; - voiceGuide()\'s own other two sanctioned reaction markers', () => {
+test("sanitizePublishedThreadsText also strips the period before ㄷㄷ/;; - voiceGuide()'s own other two sanctioned reaction markers", () => {
   // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): voiceGuide() explicitly
   // names "ㅋㅋ, ㄷㄷ, ㅠㅠ, ;;" as the sanctioned casual reaction markers, but the lookahead above
   // only ever covered ㅋㅎㅜㅠ~!? - "ㄷ" (ㄷㄷ) and ";" (;;) were both missing, so "실화냐.ㄷㄷ" and

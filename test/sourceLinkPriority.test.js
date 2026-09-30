@@ -8,8 +8,8 @@ const source = fs.readFileSync(require.resolve('../src/autopilot/stages/sourceLi
 test('source affiliate resolver inspects redirect Location before full-page fallback', () => {
   assert.match(source, /maxRedirects:\s*0/);
   assert.match(source, /responseLocation\(first\)/);
-  assert.match(source, /method:'redirect-location'/);
-  assert.match(source, /method:'redirect-error-location'/);
+  assert.match(source, /method:\s*'redirect-location'/);
+  assert.match(source, /method:\s*'redirect-error-location'/);
 });
 
 test('source affiliate resolver still fails closed for unresolved or ambiguous identity', () => {

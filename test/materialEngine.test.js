@@ -1,7 +1,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { scrubSecret, hasIngredientHeading, hasMethodHeading, normalizeRecipeHeadings } = require('../src/autopilot/materialEngine');
+const {
+  scrubSecret,
+  hasIngredientHeading,
+  hasMethodHeading,
+  normalizeRecipeHeadings,
+} = require('../src/autopilot/materialEngine');
 
 // REGRESSION (found via synthetic testing, hourly review): scrubSecret() used a plain
 // split/join, which replaced the secret ingredient/product term wherever it appeared as a bare
@@ -83,6 +88,12 @@ test('normalizeRecipeHeadings does not insert a spurious heading into an unrelat
 });
 
 test('normalizeRecipeHeadings still normalizes bare/colon-variant standalone headers into the canonical emoji form', () => {
-  assert.equal(normalizeRecipeHeadings('재료:\n계란 2개\n\n만드는 법:\n1. 볶는다'), '🥘 재료\n계란 2개\n\n🍳 만드는 법\n1. 볶는다');
-  assert.equal(normalizeRecipeHeadings('재료\n계란 2개\n\n만들기\n1. 볶는다'), '🥘 재료\n계란 2개\n\n🍳 만드는 법\n1. 볶는다');
+  assert.equal(
+    normalizeRecipeHeadings('재료:\n계란 2개\n\n만드는 법:\n1. 볶는다'),
+    '🥘 재료\n계란 2개\n\n🍳 만드는 법\n1. 볶는다'
+  );
+  assert.equal(
+    normalizeRecipeHeadings('재료\n계란 2개\n\n만들기\n1. 볶는다'),
+    '🥘 재료\n계란 2개\n\n🍳 만드는 법\n1. 볶는다'
+  );
 });

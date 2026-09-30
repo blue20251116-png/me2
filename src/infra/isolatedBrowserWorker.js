@@ -5,7 +5,10 @@ require('./httpDeadline').installHttpDeadline();
 
 // Only these module methods may be invoked from the parent. Keys are stable task names.
 const TASKS = {
-  benchmarkAccounts: { path: '../threads/benchmarkAccounts', methods: ['collectBenchmarkMaterials', 'collectPostDetails', 'collectProfilePosts'] },
+  benchmarkAccounts: {
+    path: '../threads/benchmarkAccounts',
+    methods: ['collectBenchmarkMaterials', 'collectPostDetails', 'collectProfilePosts'],
+  },
   mediaImporter: { path: '../threads/mediaImporter', methods: ['importThreadsVideo', 'extractCandidatesWithBrowser'] },
   sourceExactProduct: { path: '../autopilot/stages/sourceExactProduct', methods: ['resolveWithBrowser'] },
   videoTrigger: { path: '../autopilot/stages/videoTrigger', methods: ['detectThreadsVideo'] },

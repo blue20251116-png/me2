@@ -12,10 +12,14 @@ function getAnthropicKey(accountId) {
 function stripAffiliateNoise(value, { preserveLines = true } = {}) {
   let s = String(value || '');
   if (!s.trim()) return '';
-  s = s.replace(/https?:\/\/\S+/gi, ' ')
+  s = s
+    .replace(/https?:\/\/\S+/gi, ' ')
     .replace(/\b(?:link\.coupang\.com|naver\.me|brandconnect\.naver\.com|m\.site\.naver\.com)\/\S*/gi, ' ')
     .replace(/\[?광고\]?\s*/gi, ' ')
-    .replace(/(?:이\s*포스팅은|본\s*포스팅은)?\s*쿠팡\s*파트너스[^\n.!?]*(?:제공받습니다|받습니다|발생합니다)\.?/gi, ' ')
+    .replace(
+      /(?:이\s*포스팅은|본\s*포스팅은)?\s*쿠팡\s*파트너스[^\n.!?]*(?:제공받습니다|받습니다|발생합니다)\.?/gi,
+      ' '
+    )
     .replace(/네이버\s*쇼핑\s*커넥트[^\n.!?]*(?:제공받을\s*수\s*있습니다|받습니다)?\.?/gi, ' ')
     .replace(/^\s*스레드\s*조회\s*[\d.,천만억]+회\s*/gim, '')
     .replace(/^(?:인기순|최신순|전체)\s*/gim, '')
@@ -43,15 +47,28 @@ function stripAffiliateNoise(value, { preserveLines = true } = {}) {
     // which was already tried and rejected for breaking single bare-word usage - distinguishes the
     // two without reopening that rejected approach.
     .replace(/(?<![가-힣])(?:(?:좋아요|답글|리포스트|공유)[\s,·|0-9]*){2,}(?![가-힣])/g, ' ');
-  if (preserveLines) return s.split(/\r?\n/).map(x => x.replace(/[ \t]{2,}/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (preserveLines)
+    return s
+      .split(/\r?\n/)
+      .map(x => x.replace(/[ \t]{2,}/g, ' ').trim())
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   return s.replace(/\s+/g, ' ').trim();
 }
 
 function sanitizeAuthorReplies(value) {
   const raw = stripAffiliateNoise(value, { preserveLines: true });
-  return raw.split(/\n\n+/).map(x => x.trim()).filter(x => x.length >= 2).slice(0, 8).join('\n\n');
+  return raw
+    .split(/\n\n+/)
+    .map(x => x.trim())
+    .filter(x => x.length >= 2)
+    .slice(0, 8)
+    .join('\n\n');
 }
-function sanitizeGeneratedComment(value) { return stripAffiliateNoise(value, { preserveLines: true }).trim(); }
+function sanitizeGeneratedComment(value) {
+  return stripAffiliateNoise(value, { preserveLines: true }).trim();
+}
 // REGRESSION (found via synthetic testing, hourly review): "썰" (to cut/slice) is at least as
 // common in ordinary knife/cutting-board/kitchenware reviews ("이 도마 고기 썰기 편함", "이 칼
 // 진짜 잘 썰림") as in actual recipes - it does not, on its own, indicate the source material is
@@ -65,18 +82,37 @@ function sanitizeGeneratedComment(value) { return stripAffiliateNoise(value, { p
 function detectRecipe(sourceText, authorReplies, requestedMode) {
   if (requestedMode === 'recipe') return true;
   const t = `${sourceText}\n${authorReplies}`.toLowerCase();
-  return /(레시피|재료|양념|소스|계란|두부|고기|밥|면|요리)/.test(t) && /(볶|굽|끓|튀기|찜|삶|섞|큰술|작은술|스푼|ml|\bg\b)/i.test(t);
+  return (
+    /(레시피|재료|양념|소스|계란|두부|고기|밥|면|요리)/.test(t) &&
+    /(볶|굽|끓|튀기|찜|삶|섞|큰술|작은술|스푼|ml|\bg\b)/i.test(t)
+  );
 }
 
-async function generateFromThreadsMaterial(accountId, { keyword, sourceText, authorReplies = '', mode = 'product', visualEvidence = '', imageSummary = '', videoSummary = '' }) {
+async function generateFromThreadsMaterial(
+  accountId,
+  {
+    keyword,
+    sourceText,
+    authorReplies = '',
+    mode = 'product',
+    visualEvidence = '',
+    imageSummary = '',
+    videoSummary = '',
+  }
+) {
   const apiKey = getAnthropicKey(accountId);
   if (!apiKey) throw new Error('관리자 Anthropic API 키가 설정되어 있지 않습니다.');
   const cleanedSource = stripAffiliateNoise(sourceText, { preserveLines: true });
   const cleanedReplies = sanitizeAuthorReplies(authorReplies);
   const isRecipe = detectRecipe(cleanedSource, cleanedReplies, mode);
   const multimodal = [visualEvidence, imageSummary, videoSummary].filter(Boolean).join('\n').slice(0, 6000);
-  const persona = pickPersona({ mode: isRecipe ? 'recipe' : mode, text: `${keyword || ''} ${cleanedSource} ${cleanedReplies}` });
-  console.log(`[Threads][VIRAL WRITER] persona picked="${persona.name}"(${persona.id}) mode=${isRecipe ? 'recipe' : mode}`);
+  const persona = pickPersona({
+    mode: isRecipe ? 'recipe' : mode,
+    text: `${keyword || ''} ${cleanedSource} ${cleanedReplies}`,
+  });
+  console.log(
+    `[Threads][VIRAL WRITER] persona picked="${persona.name}"(${persona.id}) mode=${isRecipe ? 'recipe' : mode}`
+  );
 
   const system = `${voiceGuide(persona.block)}
 [작업]
@@ -91,15 +127,30 @@ ${isRecipe ? '- 레시피에서 핵심 재료를 숨기는 편이 자연스러�
 JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}]}`;
 
   const user = `키워드:${String(keyword || '').trim()}\n[원문]\n${cleanedSource.slice(0, 6000)}\n[작성자 추가설명]\n${cleanedReplies.slice(0, 4000)}\n[사진/영상 이해]\n${multimodal || '(별도 분석 없음)'}\n전체 입력을 이해한 뒤 가장 강한 바이럴 포인트로 써라.`;
-  const parsed = await callAIJson(apiKey, { system, userContent: user, maxTokens: 3000, temperature: .82, timeout: 45000 });
+  const parsed = await callAIJson(apiKey, {
+    system,
+    userContent: user,
+    maxTokens: 3000,
+    temperature: 0.82,
+    timeout: 45000,
+  });
   const items = Array.isArray(parsed.items) ? parsed.items.slice(0, 5) : [];
   const accepted = [];
   for (const x of items) {
     try {
       let text = formatVoice(x?.text || '');
-      text = await reviewSourceVoice(text, { mode: isRecipe ? 'recipe' : 'product', sourceText: cleanedSource, authorReplies: cleanedReplies, visualEvidence: multimodal }, async (system, user) => {
-        return callAIJson(apiKey, { system, userContent: user, maxTokens: 900, temperature: .15, timeout: 30000 });
-      });
+      text = await reviewSourceVoice(
+        text,
+        {
+          mode: isRecipe ? 'recipe' : 'product',
+          sourceText: cleanedSource,
+          authorReplies: cleanedReplies,
+          visualEvidence: multimodal,
+        },
+        async (system, user) => {
+          return callAIJson(apiKey, { system, userContent: user, maxTokens: 900, temperature: 0.15, timeout: 30000 });
+        }
+      );
       text = assertVoice(text, { mode: isRecipe ? 'recipe' : 'product' });
       const comment = sanitizeGeneratedComment(x?.comment || '');
       accepted.push({ text, comment });
@@ -108,8 +159,18 @@ JSON만 출력: {"items":[{"text":"본문","comment":"댓글"}]}`;
       console.warn(`[Threads][VIRAL WRITER] candidate omitted: ${e.message}`);
     }
   }
-  if (!accepted.length) { const e = new Error('Threads 바이럴 글쓰기 검증을 통과한 후보가 없습니다'); e.code = 'CONTENT_STYLE_REJECTED'; throw e; }
-  return { mode: isRecipe ? 'recipe' : 'product', persona: persona.id, items: accepted, texts: accepted.map(x => x.text), comments: accepted.map(x => x.comment) };
+  if (!accepted.length) {
+    const e = new Error('Threads 바이럴 글쓰기 검증을 통과한 후보가 없습니다');
+    e.code = 'CONTENT_STYLE_REJECTED';
+    throw e;
+  }
+  return {
+    mode: isRecipe ? 'recipe' : 'product',
+    persona: persona.id,
+    items: accepted,
+    texts: accepted.map(x => x.text),
+    comments: accepted.map(x => x.comment),
+  };
 }
 
 module.exports = { generateFromThreadsMaterial, detectRecipe, stripAffiliateNoise };

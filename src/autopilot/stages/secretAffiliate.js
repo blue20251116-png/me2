@@ -1,8 +1,16 @@
 const coupangApi = require('../../integrations/coupangApi');
 
-function clean(v){ return String(v || '').replace(/\s+/g, ' ').trim(); }
-function normalize(v){ return clean(v).toLowerCase().replace(/[\s\-_/()[\]{}.,!?~'"“”‘’]/g, ''); }
-function stripTerminalPeriods(text){
+function clean(v) {
+  return String(v || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function normalize(v) {
+  return clean(v)
+    .toLowerCase()
+    .replace(/[\s\-_/()[\]{}.,!?~'"“”‘’]/g, '');
+}
+function stripTerminalPeriods(text) {
   return String(text || '')
     .replace(/\r/g, '')
     .split('\n')
@@ -11,26 +19,37 @@ function stripTerminalPeriods(text){
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
-function isGenericSecret(v){
+function isGenericSecret(v) {
   const t = clean(v);
   if (!t) return true;
   return /^(비밀\s*(?:소스|재료|양념)|소스|양념|재료|핵심\s*재료)$/i.test(t);
 }
-function isSauceLike(v){
-  return /(소스|양념|드레싱|시즈닝|굴소스|간장|고추장|된장|쌈장|액젓|식초|마요|케첩|머스타드|불고기양념|갈비양념)/i.test(String(v || ''));
+function isSauceLike(v) {
+  return /(소스|양념|드레싱|시즈닝|굴소스|간장|고추장|된장|쌈장|액젓|식초|마요|케첩|머스타드|불고기양념|갈비양념)/i.test(
+    String(v || '')
+  );
 }
-function productMatchesCandidate(productName, term, requireSauce){
+function productMatchesCandidate(productName, term, requireSauce) {
   const name = normalize(productName);
-  const tokens = clean(term).split(/\s+/).map(normalize).filter(x => x.length >= 2);
+  const tokens = clean(term)
+    .split(/\s+/)
+    .map(normalize)
+    .filter(x => x.length >= 2);
   if (requireSauce && !isSauceLike(productName)) return false;
   if (!tokens.length) return true;
   return tokens.some(t => name.includes(t)) || (requireSauce && isSauceLike(productName));
 }
-async function findSecretAffiliateProduct(accountId, result){
+async function findSecretAffiliateProduct(accountId, result) {
   const comment = String(result?.commentLead || '');
-  const sauceRequested = /비밀\s*소스/i.test(comment) || isSauceLike(result?.secretTerm) || isSauceLike(result?.visionTarget?.promotedIngredient);
+  const sauceRequested =
+    /비밀\s*소스/i.test(comment) ||
+    isSauceLike(result?.secretTerm) ||
+    isSauceLike(result?.visionTarget?.promotedIngredient);
   const candidates = [];
-  const push = v => { const t = clean(v); if (t && !isGenericSecret(t) && !candidates.includes(t)) candidates.push(t); };
+  const push = v => {
+    const t = clean(v);
+    if (t && !isGenericSecret(t) && !candidates.includes(t)) candidates.push(t);
+  };
   push(result?.secretTerm);
   push(result?.visionTarget?.promotedIngredient);
   if (sauceRequested && clean(result?.topic)) push(`${clean(result.topic)} 소스`);
@@ -48,37 +67,42 @@ async function findSecretAffiliateProduct(accountId, result){
       console.log(`[AutopilotV3][SECRET AFFILIATE] 연결 성공 term="${term}" product="${clean(selected.name)}"`);
       return { product: selected, searchTerm: term };
     } catch (e) {
-      console.warn(`[AutopilotV3][SECRET AFFILIATE] 검색 실패 term="${term}" reason="${e.response?.data?.message || e.message}"`);
+      console.warn(
+        `[AutopilotV3][SECRET AFFILIATE] 검색 실패 term="${term}" reason="${e.response?.data?.message || e.message}"`
+      );
       if (coupangApi.isRateLimitError?.(e)) throw e;
     }
   }
   return null;
 }
 
-function appendSecretAffiliateBridge(commentLead, secretTerm){ return stripTerminalPeriods(commentLead); }
+function appendSecretAffiliateBridge(commentLead, secretTerm) {
+  return stripTerminalPeriods(commentLead);
+}
 
 // Strips formal sentence-final periods and, for recipes, links the hidden "kick" ingredient to a
 // matching Coupang product instead of the generic one.
-async function applySecretAffiliate(accountId, result){
-    if (!result) return result;
+async function applySecretAffiliate(accountId, result) {
+  if (!result) return result;
 
-    result.text = stripTerminalPeriods(result.text);
-    result.commentLead = stripTerminalPeriods(result.commentLead);
+  result.text = stripTerminalPeriods(result.text);
+  result.commentLead = stripTerminalPeriods(result.commentLead);
 
-    if (result.mode === 'recipe') {
-      const replacement = await findSecretAffiliateProduct(accountId, result);
-      if (replacement?.product) {
-        result.product = replacement.product;
-        result.productSearchTerm = replacement.searchTerm;
-        result.secretTerm = replacement.searchTerm;
-        result.commentLead = appendSecretAffiliateBridge(result.commentLead, replacement.searchTerm);
-        console.log(`[AutopilotV3][SECRET AFFILIATE] 댓글 원문 유지 term="${replacement.searchTerm}"`);
-      } else {
-        console.warn(`[AutopilotV3][SECRET AFFILIATE] 비밀재료용 적합 상품을 못 찾아 기존 상품 유지 topic="${clean(result.topic)}"`);
-      }
+  if (result.mode === 'recipe') {
+    const replacement = await findSecretAffiliateProduct(accountId, result);
+    if (replacement?.product) {
+      result.product = replacement.product;
+      result.productSearchTerm = replacement.searchTerm;
+      result.secretTerm = replacement.searchTerm;
+      result.commentLead = appendSecretAffiliateBridge(result.commentLead, replacement.searchTerm);
+      console.log(`[AutopilotV3][SECRET AFFILIATE] 댓글 원문 유지 term="${replacement.searchTerm}"`);
+    } else {
+      console.warn(
+        `[AutopilotV3][SECRET AFFILIATE] 비밀재료용 적합 상품을 못 찾아 기존 상품 유지 topic="${clean(result.topic)}"`
+      );
     }
-    return result;
+  }
+  return result;
 }
 
 module.exports = { applySecretAffiliate };
-

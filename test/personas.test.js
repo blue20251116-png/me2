@@ -30,7 +30,12 @@ test('detectPersonaCategory: posture/alignment fitness material is detected with
   // REGRESSION (found live, 2026-09-13): a real 골반 비틀림 교정(pelvis/posture correction) product
   // post matched none of the old keywords and fell through to 'general', missing the
   // trainer-expert persona pool even though "PT쌤이 알려준 골반 교정" fits it well.
-  for (const text of ['골반 비틀림 교정이 이렇게 쉽다니', '스트레칭 하나로 체형 교정', '자세 교정 밴드 써봤는데', '코어 근력 키우기 좋음']) {
+  for (const text of [
+    '골반 비틀림 교정이 이렇게 쉽다니',
+    '스트레칭 하나로 체형 교정',
+    '자세 교정 밴드 써봤는데',
+    '코어 근력 키우기 좋음',
+  ]) {
     assert.equal(detectPersonaCategory({ mode: 'product', text }), 'fitness');
   }
 });
@@ -55,7 +60,13 @@ test('detectPersonaCategory: colloquial "애기" and common baby-gear nouns are 
   // REGRESSION (found live, 2026-09-13): "애기" is the spelling Korean parents actually type far
   // more often than "아기" on social media, and 분유/카시트/속싸개 are common baby-product nouns that
   // don't contain any other kids keyword as a substring - all of these fell through to 'general'.
-  for (const text of ['애기 옷 이거 완전 편함', '우리 애기가 너무 좋아함', '분유 타는 거 이거 진짜 편함', '카시트 이거 안전벨트 짱', '속싸개 이거 진짜 포근함']) {
+  for (const text of [
+    '애기 옷 이거 완전 편함',
+    '우리 애기가 너무 좋아함',
+    '분유 타는 거 이거 진짜 편함',
+    '카시트 이거 안전벨트 짱',
+    '속싸개 이거 진짜 포근함',
+  ]) {
     assert.equal(detectPersonaCategory({ mode: 'product', text }), 'kids');
   }
 });
@@ -114,8 +125,11 @@ test('every persona is internally consistent: its own example phrases never trip
       const quotedExamples = [...line.matchAll(/"([^"]+)"/g)].map(m => m[1]);
       assert.ok(quotedExamples.length > 0, `${persona.id} example line has no quoted examples: ${line}`);
       for (const example of quotedExamples) {
-        assert.deepEqual(policy.voiceProblems(example), [],
-          `${persona.id}'s own example is flagged by its own guard: "${example}"`);
+        assert.deepEqual(
+          policy.voiceProblems(example),
+          [],
+          `${persona.id}'s own example is flagged by its own guard: "${example}"`
+        );
       }
     }
   }

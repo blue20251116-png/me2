@@ -14,7 +14,9 @@ function isGeminiDown(e) {
     e?.code === 'GEMINI_COOLDOWN' ||
     e?.code === 'OPENAI_HOURLY_BUDGET_EXCEEDED' ||
     e?.__openAiNoRetry ||
-    /prepayment credits are depleted|quota exceeded|gemini cooldown|OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota|\b429\b/i.test(msg)
+    /prepayment credits are depleted|quota exceeded|gemini cooldown|OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota|\b429\b/i.test(
+      msg
+    )
   );
 }
 

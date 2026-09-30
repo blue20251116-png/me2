@@ -53,7 +53,9 @@ let activeBrowsers = 0;
 let cooldownUntil = 0;
 const waiters = [];
 
-function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 function mergeSafeArgs(args = []) {
   const incoming = (Array.isArray(args) ? args : []).filter(arg => arg !== '--single-process');
   return [...new Set([...incoming, ...SAFE_ARGS])];
@@ -63,7 +65,10 @@ async function acquireBrowserSlot() {
   while (true) {
     const remaining = cooldownUntil - Date.now();
     if (remaining > 0) await sleep(remaining);
-    if (activeBrowsers < MAX_BROWSER_CONCURRENCY) { activeBrowsers += 1; return; }
+    if (activeBrowsers < MAX_BROWSER_CONCURRENCY) {
+      activeBrowsers += 1;
+      return;
+    }
     await new Promise(resolve => waiters.push(resolve));
   }
 }
@@ -83,11 +88,27 @@ async function launchChromium(options = {}) {
   const { chromium } = require('playwright');
   await acquireBrowserSlot();
   let released = false;
-  const release = () => { if (!released) { released = true; releaseBrowserSlot(); } };
+  const release = () => {
+    if (!released) {
+      released = true;
+      releaseBrowserSlot();
+    }
+  };
   try {
-    const browser = await chromium.launch({ ...options, headless: options.headless !== false, args: mergeSafeArgs(options.args) });
+    const browser = await chromium.launch({
+      ...options,
+      headless: options.headless !== false,
+      args: mergeSafeArgs(options.args),
+    });
     const originalClose = typeof browser.close === 'function' ? browser.close.bind(browser) : null;
-    if (originalClose) browser.close = async (...args) => { try { return await originalClose(...args); } finally { release(); } };
+    if (originalClose)
+      browser.close = async (...args) => {
+        try {
+          return await originalClose(...args);
+        } finally {
+          release();
+        }
+      };
     if (typeof browser.once === 'function') browser.once('disconnected', release);
     return browser;
   } catch (err) {

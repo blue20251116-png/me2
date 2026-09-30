@@ -24,7 +24,8 @@
 // 착함 / 그치만 / 배송이 좀 느림" went completely unflagged. Deliberately NOT adding "그래도" here
 // for the same reason 그치/그럼/아니 were excluded above: "그래도!" genuinely stands alone as a
 // defiant one-word reply in casual Korean, so it isn't safe to flag as always-incomplete.
-const CONNECTOR_ONLY = /^(?:그리고|근데|그런데|그래서|하지만|그치만|또|또는|혹은|및|그니까|그러니까|그러니깐|게다가|왜냐하면)$/;
+const CONNECTOR_ONLY =
+  /^(?:그리고|근데|그런데|그래서|하지만|그치만|또|또는|혹은|및|그니까|그러니까|그러니깐|게다가|왜냐하면)$/;
 const DANGLING_PUNCTUATION_START = /^[!?~.…]/;
 // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): three more everyday
 // dependent bound nouns were missing entirely, so a model splitting "이 국물은 좀 순한 / 편이라
@@ -61,6 +62,7 @@ const DANGLING_PUNCTUATION_START = /^[!?~.…]/;
 // as the already-listed 터인데/참 - "말한 대로 했더니 좋아짐" split as "말한 / 대로 했더니 좋아짐" or
 // "바쁜 와중에 겨우 씀" split as "바쁜 / 와중에 겨우 씀" leaves the second line meaningless on its
 // own - but both were missing entirely, so either split went completely undetected.
-const DANGLING_BOUND_NOUN_START = /^(?:뻔|만큼(?:이나|만|도|은|는)?|만한|듯(?:이)?|채(?:로)?|김에|바람에|탓에|덕분에|덕에|대신에|때문에|터(?:라|인데|였는데)|뿐|데다|셈|법|리|참|겸|대로(?:는)?|와중에|정도(?:로|까지|는|도|의|만|밖에)?|편(?:이[라야]|이다|이고|인데|이지만|임)?)(?=[!?~.…,\s]|$)/;
+const DANGLING_BOUND_NOUN_START =
+  /^(?:뻔|만큼(?:이나|만|도|은|는)?|만한|듯(?:이)?|채(?:로)?|김에|바람에|탓에|덕분에|덕에|대신에|때문에|터(?:라|인데|였는데)|뿐|데다|셈|법|리|참|겸|대로(?:는)?|와중에|정도(?:로|까지|는|도|의|만|밖에)?|편(?:이[라야]|이다|이고|인데|이지만|임)?)(?=[!?~.…,\s]|$)/;
 
 module.exports = { CONNECTOR_ONLY, DANGLING_PUNCTUATION_START, DANGLING_BOUND_NOUN_START };

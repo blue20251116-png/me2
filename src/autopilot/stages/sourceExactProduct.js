@@ -3,11 +3,18 @@ const axios = require('axios');
 const { collectPostDetails } = require('../../threads/benchmarkAccounts');
 
 function clean(v) {
-  return String(v || '').replace(/\s+/g, ' ').trim();
+  return String(v || '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 function isBlockedTitle(v) {
   const t = clean(v).toLowerCase();
-  return !t || /access denied|forbidden|robot check|captcha|쿠팡 로그인|로그인이 필요|페이지를 찾을 수 없|요청하신 페이지|error 403|403 forbidden/i.test(t);
+  return (
+    !t ||
+    /access denied|forbidden|robot check|captcha|쿠팡 로그인|로그인이 필요|페이지를 찾을 수 없|요청하신 페이지|error 403|403 forbidden/i.test(
+      t
+    )
+  );
 }
 function safeTitle(v) {
   const t = clean(v);
@@ -16,10 +23,15 @@ function safeTitle(v) {
 
 function extractCoupangLinks(authorReplies) {
   const text = Array.isArray(authorReplies) ? authorReplies.join('\n\n') : String(authorReplies || '');
-  const matches = text.match(/https?:\/\/(?:link\.)?coupang\.com\/[^\s<>'"\])}>,]+|https?:\/\/www\.coupang\.com\/vp\/products\/\d+[^\s<>'"\])}>,]*/gi) || [];
+  const matches =
+    text.match(
+      /https?:\/\/(?:link\.)?coupang\.com\/[^\s<>'"\])}>,]+|https?:\/\/www\.coupang\.com\/vp\/products\/\d+[^\s<>'"\])}>,]*/gi
+    ) || [];
   const out = [];
   for (let raw of matches) {
-    raw = String(raw || '').replace(/[.,;:!?]+$/g, '').trim();
+    raw = String(raw || '')
+      .replace(/[.,;:!?]+$/g, '')
+      .trim();
     if (raw && !out.includes(raw)) out.push(raw);
   }
   return out.slice(0, 4);
@@ -56,7 +68,9 @@ function findProductNameInJson(value, depth = 0) {
 }
 
 function titleFromJsonLd(html) {
-  const scripts = [...String(html || '').matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  const scripts = [
+    ...String(html || '').matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi),
+  ];
   for (const m of scripts) {
     const raw = decodeHtml(m?.[1] || '');
     if (!raw) continue;
@@ -71,15 +85,27 @@ function titleFromJsonLd(html) {
 
 function titleFromHtml(html) {
   const s = String(html || '');
-  const og = s.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
-    || s.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
-    || s.match(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i)
-    || s.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:title["']/i);
-  if (og?.[1]) return safeTitle(decodeHtml(og[1]).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim());
+  const og =
+    s.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+    s.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i) ||
+    s.match(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i) ||
+    s.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:title["']/i);
+  if (og?.[1])
+    return safeTitle(
+      decodeHtml(og[1])
+        .replace(/\s*-\s*쿠팡!?\s*$/i, '')
+        .trim()
+    );
   const jsonLd = titleFromJsonLd(s);
   if (jsonLd) return safeTitle(jsonLd.replace(/\s*-\s*쿠팡!?\s*$/i, '').trim());
   const t = s.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return t?.[1] ? safeTitle(decodeHtml(t[1]).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim()) : '';
+  return t?.[1]
+    ? safeTitle(
+        decodeHtml(t[1])
+          .replace(/\s*-\s*쿠팡!?\s*$/i, '')
+          .trim()
+      )
+    : '';
 }
 
 function numericParamFrom(value, key) {
@@ -94,12 +120,14 @@ function numericParamFrom(value, key) {
 }
 function productIdFrom(value) {
   const s = String(value || '');
-  return s.match(/\/vp\/products\/(\d+)/i)?.[1]
-    || numericParamFrom(s, 'productId')
-    || null;
+  return s.match(/\/vp\/products\/(\d+)/i)?.[1] || numericParamFrom(s, 'productId') || null;
 }
-function itemIdFrom(value) { return numericParamFrom(value, 'itemId'); }
-function vendorItemIdFrom(value) { return numericParamFrom(value, 'vendorItemId'); }
+function itemIdFrom(value) {
+  return numericParamFrom(value, 'itemId');
+}
+function vendorItemIdFrom(value) {
+  return numericParamFrom(value, 'vendorItemId');
+}
 
 function canonicalProductUrl(finalUrl, html) {
   const productId = productIdFrom(finalUrl) || productIdFrom(html);
@@ -154,13 +182,54 @@ async function resolveWithAxios(sourceUrl) {
 
 async function browserVisibleTitle(page) {
   const candidates = [];
-  const add = v => { v = safeTitle(clean(v).replace(/\s*-\s*쿠팡!?\s*$/i, '').trim()); if (v && !candidates.includes(v)) candidates.push(v); };
-  add(await page.locator('meta[property="og:title"]').getAttribute('content').catch(() => ''));
-  add(await page.locator('meta[name="twitter:title"]').getAttribute('content').catch(() => ''));
-  add(await page.locator('[data-testid="product-title"]').first().innerText().catch(() => ''));
-  add(await page.locator('.prod-buy-header__title').first().innerText().catch(() => ''));
-  add(await page.locator('[class*="product-title"]').first().innerText().catch(() => ''));
-  add(await page.locator('h1').first().innerText().catch(() => ''));
+  const add = v => {
+    v = safeTitle(
+      clean(v)
+        .replace(/\s*-\s*쿠팡!?\s*$/i, '')
+        .trim()
+    );
+    if (v && !candidates.includes(v)) candidates.push(v);
+  };
+  add(
+    await page
+      .locator('meta[property="og:title"]')
+      .getAttribute('content')
+      .catch(() => '')
+  );
+  add(
+    await page
+      .locator('meta[name="twitter:title"]')
+      .getAttribute('content')
+      .catch(() => '')
+  );
+  add(
+    await page
+      .locator('[data-testid="product-title"]')
+      .first()
+      .innerText()
+      .catch(() => '')
+  );
+  add(
+    await page
+      .locator('.prod-buy-header__title')
+      .first()
+      .innerText()
+      .catch(() => '')
+  );
+  add(
+    await page
+      .locator('[class*="product-title"]')
+      .first()
+      .innerText()
+      .catch(() => '')
+  );
+  add(
+    await page
+      .locator('h1')
+      .first()
+      .innerText()
+      .catch(() => '')
+  );
   const html = await page.content().catch(() => '');
   add(titleFromHtml(html));
   add(await page.title().catch(() => ''));
@@ -169,11 +238,19 @@ async function browserVisibleTitle(page) {
 
 async function resolveWithBrowser(sourceUrl) {
   if (process.env.ME2_BROWSER_WORKER !== '1') {
-    return require('../../infra/isolatedTask').isolatedBrowserTask('sourceExactProduct', 'resolveWithBrowser', [sourceUrl], 90000);
+    return require('../../infra/isolatedTask').isolatedBrowserTask(
+      'sourceExactProduct',
+      'resolveWithBrowser',
+      [sourceUrl],
+      90000
+    );
   }
   let browser;
   try {
-    browser = await launchChromium({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+    browser = await launchChromium({
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    });
     const page = await browser.newPage({
       locale: 'ko-KR',
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
@@ -195,9 +272,14 @@ async function resolveWithBrowser(sourceUrl) {
         html = await page.content().catch(() => '');
         canonical = canonicalProductUrl(finalUrl, html) || canonical;
         title = await browserVisibleTitle(page);
-        if (title) console.log(`[AutopilotV3][SOURCE AFFILIATE] canonical browser title 복구 성공 productId=${canonical.productId || '-'} itemId=${canonical.itemId || '-'} vendorItemId=${canonical.vendorItemId || '-'} title="${clean(title)}"`);
+        if (title)
+          console.log(
+            `[AutopilotV3][SOURCE AFFILIATE] canonical browser title 복구 성공 productId=${canonical.productId || '-'} itemId=${canonical.itemId || '-'} vendorItemId=${canonical.vendorItemId || '-'} title="${clean(title)}"`
+          );
       } catch (e) {
-        console.warn(`[AutopilotV3][SOURCE AFFILIATE] canonical browser 재접근 실패 productId=${canonical.productId || '-'} reason="${e.message}"`);
+        console.warn(
+          `[AutopilotV3][SOURCE AFFILIATE] canonical browser 재접근 실패 productId=${canonical.productId || '-'} reason="${e.message}"`
+        );
       }
     }
 
@@ -209,7 +291,10 @@ async function resolveWithBrowser(sourceUrl) {
       method: 'browser',
     };
   } finally {
-    if (browser) try { await browser.close(); } catch {}
+    if (browser)
+      try {
+        await browser.close();
+      } catch {}
   }
 }
 
@@ -219,7 +304,9 @@ async function resolveSourceLink(sourceUrl) {
     axiosResult = await resolveWithAxios(sourceUrl);
     if (axiosResult?.url && safeTitle(axiosResult.title)) return axiosResult;
     if (axiosResult?.url) {
-      console.log(`[AutopilotV3][SOURCE AFFILIATE] axios URL 해석 성공·title 없음 → browser title fallback productId=${axiosResult.productId || '-'}`);
+      console.log(
+        `[AutopilotV3][SOURCE AFFILIATE] axios URL 해석 성공·title 없음 → browser title fallback productId=${axiosResult.productId || '-'}`
+      );
     }
   } catch (e) {
     console.warn(`[AutopilotV3][SOURCE AFFILIATE] axios 해석 실패 url=${sourceUrl} reason="${e.message}"`);
@@ -229,7 +316,9 @@ async function resolveSourceLink(sourceUrl) {
     const browserResult = await resolveWithBrowser(sourceUrl);
     if (browserResult?.url && safeTitle(browserResult.title)) return browserResult;
     if (browserResult?.url) {
-      console.warn(`[AutopilotV3][SOURCE AFFILIATE] browser/JSON-LD/DOM/canonical까지 title 없음 productId=${browserResult.productId || '-'}`);
+      console.warn(
+        `[AutopilotV3][SOURCE AFFILIATE] browser/JSON-LD/DOM/canonical까지 title 없음 productId=${browserResult.productId || '-'}`
+      );
     }
   } catch (e) {
     console.warn(`[AutopilotV3][SOURCE AFFILIATE] browser 해석 실패 url=${sourceUrl} reason="${e.message}"`);
@@ -248,8 +337,35 @@ function normalize(v) {
 }
 
 const STOP_TOKENS = new Set([
-  '정품','공식','국내','해외','직구','무료배송','로켓','배송','상품','제품','용품','세트','구성','옵션','선택',
-  '1개','2개','3개','1팩','2팩','01','02','white','black','화이트','블랙','직장인','식단','용기'
+  '정품',
+  '공식',
+  '국내',
+  '해외',
+  '직구',
+  '무료배송',
+  '로켓',
+  '배송',
+  '상품',
+  '제품',
+  '용품',
+  '세트',
+  '구성',
+  '옵션',
+  '선택',
+  '1개',
+  '2개',
+  '3개',
+  '1팩',
+  '2팩',
+  '01',
+  '02',
+  'white',
+  'black',
+  '화이트',
+  '블랙',
+  '직장인',
+  '식단',
+  '용기',
 ]);
 
 function tokens(v) {
@@ -257,34 +373,42 @@ function tokens(v) {
     .split(/\s+/)
     .filter(x => x.length >= 2 && !STOP_TOKENS.has(x));
 }
-function unique(arr) { return [...new Set((arr || []).filter(Boolean))]; }
+function unique(arr) {
+  return [...new Set((arr || []).filter(Boolean))];
+}
 
 function matchReferenceToTitle(reference, title) {
   const r = normalize(reference);
   const t = normalize(title);
-  if (!r || !t) return { ok:false, score:0, overlap:[], reason:'empty' };
-  if (t.includes(r) || r.includes(t)) return { ok:true, score:100, overlap:tokens(reference), reason:'normalized-contains' };
+  if (!r || !t) return { ok: false, score: 0, overlap: [], reason: 'empty' };
+  if (t.includes(r) || r.includes(t))
+    return { ok: true, score: 100, overlap: tokens(reference), reason: 'normalized-contains' };
   const rt = unique(tokens(reference));
   const tt = new Set(tokens(title));
   const overlap = rt.filter(x => tt.has(x) || t.includes(x));
-  if (!rt.length) return { ok:false, score:0, overlap, reason:'no-reference-token' };
+  if (!rt.length) return { ok: false, score: 0, overlap, reason: 'no-reference-token' };
   const ratio = overlap.length / rt.length;
   const required = rt.length >= 4 ? 2 : rt.length >= 2 ? Math.min(2, rt.length) : 1;
   const ok = overlap.length >= required || (overlap.length >= 1 && ratio >= 0.6);
-  return { ok, score:Math.round(ratio * 100) + overlap.length * 10, overlap, reason:ok ? 'token-match' : 'token-mismatch' };
+  return {
+    ok,
+    score: Math.round(ratio * 100) + overlap.length * 10,
+    overlap,
+    reason: ok ? 'token-match' : 'token-mismatch',
+  };
 }
 
 function strictSourceProductMatch(candidate, result) {
   const title = safeTitle(candidate?.title);
-  if (!title) return { ok:false, score:0, reason:'title-unavailable', reference:'' };
+  if (!title) return { ok: false, score: 0, reason: 'title-unavailable', reference: '' };
   const references = unique([
     clean(result?.visionTarget?.soldObject),
     ...(Array.isArray(result?.visionTarget?.searchTerms) ? result.visionTarget.searchTerms.map(clean) : []),
     clean(result?.topic),
     clean(result?.product?.name),
   ]).filter(Boolean);
-  if (!references.length) return { ok:false, score:0, reason:'no-evidence', reference:'' };
-  let best = { ok:false, score:0, reason:'no-match', reference:'', overlap:[] };
+  if (!references.length) return { ok: false, score: 0, reason: 'no-evidence', reference: '' };
+  let best = { ok: false, score: 0, reason: 'no-match', reference: '', overlap: [] };
   for (const reference of references) {
     const m = matchReferenceToTitle(reference, title);
     if (m.score > best.score) best = { ...m, reference };
@@ -323,33 +447,43 @@ async function findExactSourceProduct(result) {
   for (let i = 0; i < links.length; i++) {
     const item = await resolveSourceLink(links[i]);
     if (!item?.url) continue;
-    allResolved.push({ ...item, index:i });
+    allResolved.push({ ...item, index: i });
   }
 
   const resolved = dedupeResolvedProducts(allResolved);
   if (!resolved.length) {
-    console.warn(`[AutopilotV3][SOURCE AFFILIATE] @${result.sourceUsername} productId+정상 title까지 확인된 작성자 상품 없음 → SOLD-FIRST 기존 상품 유지`);
+    console.warn(
+      `[AutopilotV3][SOURCE AFFILIATE] @${result.sourceUsername} productId+정상 title까지 확인된 작성자 상품 없음 → SOLD-FIRST 기존 상품 유지`
+    );
     return null;
   }
 
   let picked = null;
   if (links.length === 1 && resolved.length === 1) {
     picked = resolved[0];
-    console.log(`[AutopilotV3][SOURCE AFFILIATE GROUND TRUTH] @${result.sourceUsername} single-link productId=${picked.productId} itemId=${picked.itemId || '-'} vendorItemId=${picked.vendorItemId || '-'} title="${safeTitle(picked.title)}" → 작성자 원본 상품 우선`);
+    console.log(
+      `[AutopilotV3][SOURCE AFFILIATE GROUND TRUTH] @${result.sourceUsername} single-link productId=${picked.productId} itemId=${picked.itemId || '-'} vendorItemId=${picked.vendorItemId || '-'} title="${safeTitle(picked.title)}" → 작성자 원본 상품 우선`
+    );
   } else {
     const matched = [];
     for (const item of resolved) {
       const strict = strictSourceProductMatch(item, result);
       if (!strict.ok) {
-        console.warn(`[AutopilotV3][SOURCE AFFILIATE MATCH REJECT] @${result.sourceUsername} productId=${item.productId || '-'} title="${safeTitle(item.title) || '-'}" reference="${strict.reference || clean(result?.visionTarget?.soldObject) || clean(result?.topic) || '-'}" reason=${strict.reason}`);
+        console.warn(
+          `[AutopilotV3][SOURCE AFFILIATE MATCH REJECT] @${result.sourceUsername} productId=${item.productId || '-'} title="${safeTitle(item.title) || '-'}" reference="${strict.reference || clean(result?.visionTarget?.soldObject) || clean(result?.topic) || '-'}" reason=${strict.reason}`
+        );
         continue;
       }
-      console.log(`[AutopilotV3][SOURCE AFFILIATE MATCH PASS] @${result.sourceUsername} productId=${item.productId || '-'} title="${safeTitle(item.title)}" reference="${strict.reference}" overlap="${(strict.overlap || []).join('/') || '-'}" score=${strict.score}`);
-      matched.push({ ...item, strictScore:strict.score });
+      console.log(
+        `[AutopilotV3][SOURCE AFFILIATE MATCH PASS] @${result.sourceUsername} productId=${item.productId || '-'} title="${safeTitle(item.title)}" reference="${strict.reference}" overlap="${(strict.overlap || []).join('/') || '-'}" score=${strict.score}`
+      );
+      matched.push({ ...item, strictScore: strict.score });
     }
 
     if (!matched.length) {
-      console.warn(`[AutopilotV3][SOURCE AFFILIATE] @${result.sourceUsername} 다중 작성자 링크 중 판매대상과 일치하는 상품 없음 → SOLD-FIRST 기존 상품 유지`);
+      console.warn(
+        `[AutopilotV3][SOURCE AFFILIATE] @${result.sourceUsername} 다중 작성자 링크 중 판매대상과 일치하는 상품 없음 → SOLD-FIRST 기존 상품 유지`
+      );
       return null;
     }
     matched.sort((a, b) => (b.strictScore || 0) - (a.strictScore || 0));
@@ -357,12 +491,16 @@ async function findExactSourceProduct(result) {
       const top = Number(matched[0].strictScore || 0);
       const second = Number(matched[1].strictScore || 0);
       if (top - second < 20) {
-        console.warn(`[AutopilotV3][SOURCE AFFILIATE AMBIGUOUS] @${result.sourceUsername} 다중링크 score=${top}/${second} margin=${top-second} < 20 → 덮어쓰기 금지 · SOLD-FIRST 유지`);
+        console.warn(
+          `[AutopilotV3][SOURCE AFFILIATE AMBIGUOUS] @${result.sourceUsername} 다중링크 score=${top}/${second} margin=${top - second} < 20 → 덮어쓰기 금지 · SOLD-FIRST 유지`
+        );
         return null;
       }
     }
     picked = matched[0];
-    console.log(`[AutopilotV3][SOURCE AFFILIATE WINNER] @${result.sourceUsername} productId=${picked.productId} score=${picked.strictScore} title="${safeTitle(picked.title)}"`);
+    console.log(
+      `[AutopilotV3][SOURCE AFFILIATE WINNER] @${result.sourceUsername} productId=${picked.productId} score=${picked.strictScore} title="${safeTitle(picked.title)}"`
+    );
   }
 
   const parsedTitle = safeTitle(picked?.title);
@@ -394,23 +532,31 @@ async function findExactSourceProduct(result) {
 
 // If the source author's own reply links a Coupang product, use exactly that product.
 async function applySourceExactProduct(result) {
-    if (!result) return result;
-    try {
-      const exact = await findExactSourceProduct(result);
-      if (exact?.product?.url) {
-        result.product = exact.product;
-        result.productSearchTerm = exact.groundTruth ? 'source-author-affiliate-link-ground-truth' : 'source-author-affiliate-link-unique-winner';
-        result.sourceAffiliateProduct = true;
-        result.sourceAffiliateGroundTruth = !!exact.groundTruth;
-        result.sourceAffiliateOriginalUrl = exact.sourceUrl;
-        console.log(`[AutopilotV3][SOURCE AFFILIATE] 작성자 상품 적용 productId=${exact.product.productId || '-'} itemId=${exact.product.itemId || '-'} vendorItemId=${exact.product.vendorItemId || '-'} product="${clean(exact.product.name)}" method=${exact.method} groundTruth=${exact.groundTruth?'yes':'no'}`);
-      } else {
-        console.log(`[AutopilotV3][SOURCE AFFILIATE] 작성자 링크 덮어쓰기 없음 → SOLD-FIRST 상품 유지 product="${clean(result?.product?.name) || '-'}"`);
-      }
-    } catch (e) {
-      console.warn(`[AutopilotV3][SOURCE AFFILIATE] 원문 댓글 상품 적용 실패 → SOLD-FIRST 기존 상품 유지 reason="${e.response?.data?.message || e.message}"`);
+  if (!result) return result;
+  try {
+    const exact = await findExactSourceProduct(result);
+    if (exact?.product?.url) {
+      result.product = exact.product;
+      result.productSearchTerm = exact.groundTruth
+        ? 'source-author-affiliate-link-ground-truth'
+        : 'source-author-affiliate-link-unique-winner';
+      result.sourceAffiliateProduct = true;
+      result.sourceAffiliateGroundTruth = !!exact.groundTruth;
+      result.sourceAffiliateOriginalUrl = exact.sourceUrl;
+      console.log(
+        `[AutopilotV3][SOURCE AFFILIATE] 작성자 상품 적용 productId=${exact.product.productId || '-'} itemId=${exact.product.itemId || '-'} vendorItemId=${exact.product.vendorItemId || '-'} product="${clean(exact.product.name)}" method=${exact.method} groundTruth=${exact.groundTruth ? 'yes' : 'no'}`
+      );
+    } else {
+      console.log(
+        `[AutopilotV3][SOURCE AFFILIATE] 작성자 링크 덮어쓰기 없음 → SOLD-FIRST 상품 유지 product="${clean(result?.product?.name) || '-'}"`
+      );
     }
-    return result;
+  } catch (e) {
+    console.warn(
+      `[AutopilotV3][SOURCE AFFILIATE] 원문 댓글 상품 적용 실패 → SOLD-FIRST 기존 상품 유지 reason="${e.response?.data?.message || e.message}"`
+    );
+  }
+  return result;
 }
 
 module.exports = { resolveWithBrowser, applySourceExactProduct };

@@ -3,26 +3,43 @@ const { PUBLIC_DIR } = require('../../config/paths');
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
-const { db, getUserById, listUsers, approveUser, setUserStatus, extendUserExpiry, getSiteSettings, updateSiteSettings, getSystemApiSettings, updateSystemApiSettings } = require('../../infra/db');
+const {
+  db,
+  getUserById,
+  listUsers,
+  approveUser,
+  setUserStatus,
+  extendUserExpiry,
+  getSiteSettings,
+  updateSiteSettings,
+  getSystemApiSettings,
+  updateSystemApiSettings,
+} = require('../../infra/db');
 const { hashPassword, requireAdmin } = require('../auth');
 
 const router = express.Router();
 
-router.get('/api/admin/automation-health', requireAdmin, (req,res)=>{
-  const { budgetState }=require('../../infra/automationState');
-  const states=db.prepare('SELECT * FROM automation_state ORDER BY account_id').all();
-  const posts=db.prepare("SELECT status,COUNT(*) count FROM posts GROUP BY status").all();
-  const comments=db.prepare("SELECT comment_status status,COUNT(*) count FROM posts WHERE status='posted' GROUP BY comment_status").all();
-  const review=db.prepare("SELECT id,account_id,status,comment_status,error_message,comment_error_message FROM posts WHERE error_message LIKE '%REVIEW%' OR error_message LIKE '%OUTCOME_UNKNOWN%' OR comment_error_message LIKE '%OUTCOME_UNKNOWN%' ORDER BY id DESC LIMIT 50").all();
-  res.set('Cache-Control','no-store');
-  res.json({states,posts,comments,review,budget:budgetState(),uptimeSec:Math.floor(process.uptime())});
+router.get('/api/admin/automation-health', requireAdmin, (req, res) => {
+  const { budgetState } = require('../../infra/automationState');
+  const states = db.prepare('SELECT * FROM automation_state ORDER BY account_id').all();
+  const posts = db.prepare('SELECT status,COUNT(*) count FROM posts GROUP BY status').all();
+  const comments = db
+    .prepare("SELECT comment_status status,COUNT(*) count FROM posts WHERE status='posted' GROUP BY comment_status")
+    .all();
+  const review = db
+    .prepare(
+      "SELECT id,account_id,status,comment_status,error_message,comment_error_message FROM posts WHERE error_message LIKE '%REVIEW%' OR error_message LIKE '%OUTCOME_UNKNOWN%' OR comment_error_message LIKE '%OUTCOME_UNKNOWN%' ORDER BY id DESC LIMIT 50"
+    )
+    .all();
+  res.set('Cache-Control', 'no-store');
+  res.json({ states, posts, comments, review, budget: budgetState(), uptimeSec: Math.floor(process.uptime()) });
 });
 
 router.get('/admin', requireAdmin, (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
 router.get('/admin.html', requireAdmin, (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
 
 router.get('/api/admin/users', requireAdmin, (req, res) => {
-  res.json(listUsers().map((u) => ({ ...u, password_hash: undefined })));
+  res.json(listUsers().map(u => ({ ...u, password_hash: undefined })));
 });
 
 router.post('/api/admin/users/:id/approve', requireAdmin, (req, res) => {
@@ -65,7 +82,6 @@ router.post('/api/admin/site-settings', requireAdmin, (req, res) => {
   updateSiteSettings(req.body || {});
   res.json({ ok: true });
 });
-
 
 // 서비스 전체가 공용으로 사용하는 API 설정 — 관리자 전용.
 // secret 값 자체는 GET 응답으로 절대 돌려주지 않는다.

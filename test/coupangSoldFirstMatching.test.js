@@ -5,13 +5,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const source = fs.readFileSync(require.resolve('../src/autopilot/materialEngine'), 'utf8');
+// Whitespace-free copy so structural assertions don't depend on code formatting.
+const compact = source.replace(/\s+/g, '');
 
 // findProduct() isn't part of the module's public exports (only
 // buildThreadsFirstAutopilot is), so extract it into a throwaway copy of the
 // file (written alongside the original so its own relative require()s still
 // resolve) for a real behavioral test instead of only checking source text.
 function loadFindProduct() {
-  const tmpFile = path.join(path.dirname(require.resolve('../src/autopilot/materialEngine')), `__engine_findproduct_test_${process.pid}.js`);
+  const tmpFile = path.join(
+    path.dirname(require.resolve('../src/autopilot/materialEngine')),
+    `__engine_findproduct_test_${process.pid}.js`
+  );
   fs.writeFileSync(tmpFile, source + '\nmodule.exports.findProduct = findProduct;\n');
   try {
     return require(tmpFile).findProduct;
@@ -23,20 +28,20 @@ function loadFindProduct() {
 test('Coupang matching separates sold identity from search context', () => {
   assert.match(source, /SOLD_FIRST_CONTEXT_WORDS/);
   assert.match(source, /function soldFirstIdentityWords/);
-  assert.match(source, /findProduct\(accountId,terms,identityTerm\)/);
-  assert.match(source, /soldFirstCandidateMatch\(term,x\?\.name,identityTerm\)/);
-  assert.match(source, /const soldIdentity=clean\(vision\?\.soldObject\|\|analysis\?\.topic\|\|''\)/);
+  assert.match(compact, /findProduct\(accountId,terms,identityTerm\)/);
+  assert.match(compact, /soldFirstCandidateMatch\(term,x\?\.name,identityTerm\)/);
+  assert.match(compact, /constsoldIdentity=clean\(vision\?\.soldObject\|\|analysis\?\.topic\|\|''\)/);
 });
 
 test('generic discovery words do not become required identity tokens', () => {
-  for (const word of ['추천','인기','가성비','주방','요리','생활용품','청소','식단']) {
+  for (const word of ['추천', '인기', '가성비', '주방', '요리', '생활용품', '청소', '식단']) {
     assert.match(source, new RegExp(`['"]${word}['"]`));
   }
   assert.match(source, /!SOLD_FIRST_CONTEXT_WORDS\.has\(x\)/);
 });
 
 test('country identity remains fail-closed', () => {
-  assert.match(source, /const countryOk=countries\.every/);
+  assert.match(compact, /constcountryOk=countries\.every/);
   assert.match(source, /identity-country-mismatch/);
   assert.match(source, /continue;/);
   assert.match(source, /\[AutopilotV3\]\[COUPANG MATCH REJECT\]/);

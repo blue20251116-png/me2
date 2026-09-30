@@ -5,8 +5,17 @@
 const RETENTION_SECONDS = 3 * 24 * 60 * 60;
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const TIMESTAMP_CANDIDATES = Object.freeze([
-  'created_at', 'createdAt', 'timestamp', 'created', 'updated_at', 'updatedAt',
-  'expires_at', 'expiresAt', 'cached_at', 'cachedAt', 'time',
+  'created_at',
+  'createdAt',
+  'timestamp',
+  'created',
+  'updated_at',
+  'updatedAt',
+  'expires_at',
+  'expiresAt',
+  'cached_at',
+  'cachedAt',
+  'time',
 ]);
 
 const SIMPLE_RETENTION = Object.freeze({
@@ -27,11 +36,14 @@ function tableExists(db, table) {
 }
 
 function tableColumns(db, table) {
-  return db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all().map((row) => String(row.name));
+  return db
+    .prepare(`PRAGMA table_info(${quoteIdentifier(table)})`)
+    .all()
+    .map(row => String(row.name));
 }
 
 function findTimestampColumn(columns) {
-  return TIMESTAMP_CANDIDATES.find((candidate) => columns.includes(candidate)) || null;
+  return TIMESTAMP_CANDIDATES.find(candidate => columns.includes(candidate)) || null;
 }
 
 function deleteExpiredRows(db, table, timestampColumn, retentionSeconds) {
@@ -55,12 +67,19 @@ function deleteOldFailedPosts(db) {
   if (!columns.includes('status') || !columns.includes('created_at')) return { deleted: 0, skipped: 'columns_missing' };
 
   // Only terminal failures are disposable. Never delete pending/posted posts here.
-  const ids = db.prepare(`SELECT id FROM posts
-    WHERE status='failed' AND datetime(created_at) < datetime('now', '-${RETENTION_SECONDS} seconds')`).all().map(r => Number(r.id));
+  const ids = db
+    .prepare(
+      `SELECT id FROM posts
+    WHERE status='failed' AND datetime(created_at) < datetime('now', '-${RETENTION_SECONDS} seconds')`
+    )
+    .all()
+    .map(r => Number(r.id));
   if (!ids.length) return { deleted: 0 };
 
   const delInsight = tableExists(db, 'insights') ? db.prepare('DELETE FROM insights WHERE post_id=?') : null;
-  const delHistory = tableExists(db, 'insight_history') ? db.prepare('DELETE FROM insight_history WHERE post_id=?') : null;
+  const delHistory = tableExists(db, 'insight_history')
+    ? db.prepare('DELETE FROM insight_history WHERE post_id=?')
+    : null;
   const delPost = db.prepare("DELETE FROM posts WHERE id=? AND status='failed'");
   let deleted = 0;
   db.exec('BEGIN IMMEDIATE');
@@ -72,7 +91,9 @@ function deleteOldFailedPosts(db) {
     }
     db.exec('COMMIT');
   } catch (error) {
-    try { db.exec('ROLLBACK'); } catch {}
+    try {
+      db.exec('ROLLBACK');
+    } catch {}
     throw error;
   }
   return { deleted };
@@ -85,11 +106,22 @@ function deleteOldFailedPosts(db) {
 // accounts that is the dominant growth. server.js's /admin/emergency-cleanup only runs when a human
 // presses its button. A file is only needed until Threads fetches it at publish time, so anything
 // older than the window that no pending/publishing post still points at is safe to remove.
-const UPLOADS_RETENTION_MS = Math.max(60 * 60 * 1000, Number(process.env.UPLOADS_RETENTION_HOURS || 24) * 60 * 60 * 1000);
+const UPLOADS_RETENTION_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.UPLOADS_RETENTION_HOURS || 24) * 60 * 60 * 1000
+);
 
 function safeDecode(value) {
   let out = String(value || '');
-  for (let i = 0; i < 2; i++) { try { const next = decodeURIComponent(out); if (next === out) break; out = next; } catch { break; } }
+  for (let i = 0; i < 2; i++) {
+    try {
+      const next = decodeURIComponent(out);
+      if (next === out) break;
+      out = next;
+    } catch {
+      break;
+    }
+  }
   return out;
 }
 
@@ -99,29 +131,63 @@ function safeDecode(value) {
 function referencedUploadsBlob(db) {
   if (!tableExists(db, 'posts')) return null;
   const columns = tableColumns(db, 'posts');
-  const mediaColumns = ['image_url', 'extra_image_url', 'video_url'].filter((c) => columns.includes(c));
+  const mediaColumns = ['image_url', 'extra_image_url', 'video_url'].filter(c => columns.includes(c));
   if (!columns.includes('status') || !mediaColumns.length) return null;
-  const rows = db.prepare(`SELECT ${mediaColumns.map(quoteIdentifier).join(',')} FROM posts WHERE status IN ('pending','publishing')`).all();
-  return rows.flatMap((row) => mediaColumns.map((c) => row[c])).filter(Boolean).map(safeDecode).join('\n');
+  const rows = db
+    .prepare(
+      `SELECT ${mediaColumns.map(quoteIdentifier).join(',')} FROM posts WHERE status IN ('pending','publishing')`
+    )
+    .all();
+  return rows
+    .flatMap(row => mediaColumns.map(c => row[c]))
+    .filter(Boolean)
+    .map(safeDecode)
+    .join('\n');
 }
 
-function cleanupUploads(db, uploadsDir, { maxAgeMs = UPLOADS_RETENTION_MS, now = Date.now(), fs = require('fs'), path = require('path') } = {}) {
+function cleanupUploads(
+  db,
+  uploadsDir,
+  { maxAgeMs = UPLOADS_RETENTION_MS, now = Date.now(), fs = require('fs'), path = require('path') } = {}
+) {
   const result = { deleted: 0, freedBytes: 0, keptReferenced: 0, errors: 0 };
   if (!uploadsDir || !fs.existsSync(uploadsDir)) return { ...result, skipped: 'uploads_missing' };
   const referenced = referencedUploadsBlob(db);
   if (referenced === null) return { ...result, skipped: 'posts_unreadable' };
   const cutoff = now - maxAgeMs;
-  const walk = (dir) => {
+  const walk = dir => {
     let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { result.errors++; return; }
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      result.errors++;
+      return;
+    }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) { walk(full); continue; }
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
       let stat;
-      try { stat = fs.statSync(full); } catch { result.errors++; continue; }
+      try {
+        stat = fs.statSync(full);
+      } catch {
+        result.errors++;
+        continue;
+      }
       if (stat.mtimeMs >= cutoff) continue;
-      if (referenced.includes(entry.name)) { result.keptReferenced++; continue; }
-      try { fs.unlinkSync(full); result.deleted++; result.freedBytes += stat.size; } catch { result.errors++; }
+      if (referenced.includes(entry.name)) {
+        result.keptReferenced++;
+        continue;
+      }
+      try {
+        fs.unlinkSync(full);
+        result.deleted++;
+        result.freedBytes += stat.size;
+      } catch {
+        result.errors++;
+      }
     }
   };
   walk(uploadsDir);
@@ -137,7 +203,9 @@ function runRetentionCleanup(db, logger = console, options = {}) {
   if (options.uploadsDir) {
     try {
       result.uploads = cleanupUploads(db, options.uploadsDir, options.uploads || {});
-      logger.log?.(`[DB][RETENTION] uploads deleted=${result.uploads.deleted} freedMB=${(result.uploads.freedBytes / 1048576).toFixed(1)} keptReferenced=${result.uploads.keptReferenced}${result.uploads.skipped ? ` skipped=${result.uploads.skipped}` : ''}`);
+      logger.log?.(
+        `[DB][RETENTION] uploads deleted=${result.uploads.deleted} freedMB=${(result.uploads.freedBytes / 1048576).toFixed(1)} keptReferenced=${result.uploads.keptReferenced}${result.uploads.skipped ? ` skipped=${result.uploads.skipped}` : ''}`
+      );
     } catch (error) {
       logger.error?.('[DB][RETENTION] uploads cleanup failed:', error);
     }
@@ -173,13 +241,18 @@ function runRetentionCleanup(db, logger = console, options = {}) {
     result.vacuumed = true;
   }
 
-  logger.log?.(`[DB][RETENTION] complete deleted=${totalDeleted} details=${JSON.stringify(result.deleted)} vacuumed=${result.vacuumed}`);
+  logger.log?.(
+    `[DB][RETENTION] complete deleted=${totalDeleted} details=${JSON.stringify(result.deleted)} vacuumed=${result.vacuumed}`
+  );
   return result;
 }
 
 function startRetentionCleanup(db, options = {}) {
   const logger = options.logger || console;
-  const intervalMs = Math.max(60_000, Number(options.intervalMs || process.env.DB_RETENTION_INTERVAL_MS || DEFAULT_INTERVAL_MS));
+  const intervalMs = Math.max(
+    60_000,
+    Number(options.intervalMs || process.env.DB_RETENTION_INTERVAL_MS || DEFAULT_INTERVAL_MS)
+  );
   let running = false;
 
   const run = () => {

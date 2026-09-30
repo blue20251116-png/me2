@@ -33,11 +33,18 @@ test('assertHasMedia passes silently when an image or video is present', () => {
 
 test('assertHasMedia throws a CONTENT_QUALITY_HOLD when there is no media at all', () => {
   assert.throws(
-    () => assertHasMedia({ imageUrl: null, videoUrl: null }, { accountId: 1, target: '전체', mode: 'product', topic: '테스트' }),
-    (err) => err.code === 'CONTENT_QUALITY_HOLD' && err.isContentQualityHold === true
+    () =>
+      assertHasMedia(
+        { imageUrl: null, videoUrl: null },
+        { accountId: 1, target: '전체', mode: 'product', topic: '테스트' }
+      ),
+    err => err.code === 'CONTENT_QUALITY_HOLD' && err.isContentQualityHold === true
   );
 });
 
 test('assertHasMedia tolerates a missing context object (still throws the right error)', () => {
-  assert.throws(() => assertHasMedia({}), (err) => err.code === 'CONTENT_QUALITY_HOLD');
+  assert.throws(
+    () => assertHasMedia({}),
+    err => err.code === 'CONTENT_QUALITY_HOLD'
+  );
 });

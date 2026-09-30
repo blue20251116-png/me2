@@ -1,7 +1,14 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS, retryAfterMs } = require('../src/integrations/aiRequestGuard');
+const {
+  truncateString,
+  capContent,
+  countTextChars,
+  capRequestText,
+  MAX_TEXT_CHARS,
+  retryAfterMs,
+} = require('../src/integrations/aiRequestGuard');
 
 const { AI_CHAT_URL } = require('../src/integrations/aiRequestGuard');
 
@@ -13,7 +20,13 @@ function freshPatchWith(fakePost) {
   const guardPath = require.resolve('../src/integrations/aiRequestGuard');
   delete require.cache[guardPath];
   const guard = require(guardPath);
-  return { guard, restore() { axios.post = originalPost; delete require.cache[guardPath]; } };
+  return {
+    guard,
+    restore() {
+      axios.post = originalPost;
+      delete require.cache[guardPath];
+    },
+  };
 }
 
 // The in-flight dedupe used to live in a separate file (openAiRequestDedupePatch.js) that wrapped
@@ -22,14 +35,21 @@ function freshPatchWith(fakePost) {
 test('identical concurrent Anthropic requests share one upstream call', async () => {
   let calls = 0;
   let release;
-  const gate = new Promise(resolve => { release = resolve; });
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
   const ctx = freshPatchWith(async () => {
     calls += 1;
     await gate;
     return { data: { content: [{ type: 'text', text: 'ok' }] } };
   });
   try {
-    const body = { model: 'claude-sonnet-4-6', temperature: 0.2, max_tokens: 100, messages: [{ role: 'user', content: 'same' }] };
+    const body = {
+      model: 'claude-sonnet-4-6',
+      temperature: 0.2,
+      max_tokens: 100,
+      messages: [{ role: 'user', content: 'same' }],
+    };
     const config = { headers: { 'x-api-key': 'key-a' } };
     const a = ctx.guard.guardedPost(AI_CHAT_URL, body, config);
     const b = ctx.guard.guardedPost(AI_CHAT_URL, body, config);
@@ -38,20 +58,35 @@ test('identical concurrent Anthropic requests share one upstream call', async ()
     release();
     await Promise.all([a, b]);
     assert.equal(calls, 1);
-  } finally { ctx.restore(); }
+  } finally {
+    ctx.restore();
+  }
 });
 
 test('different Anthropic prompts are not coalesced', async () => {
   let calls = 0;
-  const ctx = freshPatchWith(async () => { calls += 1; return { data: {} }; });
+  const ctx = freshPatchWith(async () => {
+    calls += 1;
+    return { data: {} };
+  });
   try {
     const config = { headers: { 'x-api-key': 'key-a' } };
     await Promise.all([
-      ctx.guard.guardedPost(AI_CHAT_URL, { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'a' }] }, config),
-      ctx.guard.guardedPost(AI_CHAT_URL, { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'b' }] }, config),
+      ctx.guard.guardedPost(
+        AI_CHAT_URL,
+        { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'a' }] },
+        config
+      ),
+      ctx.guard.guardedPost(
+        AI_CHAT_URL,
+        { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'b' }] },
+        config
+      ),
     ]);
     assert.equal(calls, 2);
-  } finally { ctx.restore(); }
+  } finally {
+    ctx.restore();
+  }
 });
 
 // REGRESSION (found during the OpenAI->Claude migration, 2026-09-13): Anthropic auth uses the
@@ -60,7 +95,10 @@ test('different Anthropic prompts are not coalesced', async () => {
 // in-flight call regardless of which account's key was used.
 test('identical-content requests from two different accounts (different x-api-key) are not coalesced', async () => {
   let calls = 0;
-  const ctx = freshPatchWith(async () => { calls += 1; return { data: {} }; });
+  const ctx = freshPatchWith(async () => {
+    calls += 1;
+    return { data: {} };
+  });
   try {
     const body = { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'same' }] };
     await Promise.all([
@@ -68,19 +106,26 @@ test('identical-content requests from two different accounts (different x-api-ke
       ctx.guard.guardedPost(AI_CHAT_URL, body, { headers: { 'x-api-key': 'key-b' } }),
     ]);
     assert.equal(calls, 2);
-  } finally { ctx.restore(); }
+  } finally {
+    ctx.restore();
+  }
 });
 
 test('non-Anthropic requests bypass dedupe and the budget guard entirely', async () => {
   let calls = 0;
-  const ctx = freshPatchWith(async () => { calls += 1; return { data: {} }; });
+  const ctx = freshPatchWith(async () => {
+    calls += 1;
+    return { data: {} };
+  });
   try {
     await Promise.all([
       ctx.guard.guardedPost('https://example.com/api', { same: true }, {}),
       ctx.guard.guardedPost('https://example.com/api', { same: true }, {}),
     ]);
     assert.equal(calls, 2);
-  } finally { ctx.restore(); }
+  } finally {
+    ctx.restore();
+  }
 });
 
 // REGRESSION (found via synthetic testing, hourly review): truncateString()'s head/tail had
@@ -117,7 +162,10 @@ test('capContent keeps the cumulative truncated output within the requested budg
   const state = { used: 0 };
   const capped = fields.map(f => capContent(f, state));
   const totalOut = capped.reduce((n, s) => n + s.length, 0);
-  assert.ok(totalOut <= 18000 + 300, `total capped output ${totalOut} should stay close to the 18000-char budget, not balloon past it`);
+  assert.ok(
+    totalOut <= 18000 + 300,
+    `total capped output ${totalOut} should stay close to the 18000-char budget, not balloon past it`
+  );
 });
 
 test('countTextChars ignores the url string itself when summing text length', () => {

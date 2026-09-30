@@ -70,7 +70,12 @@ router.get('/api/dashboard', requireAccount, (req, res) => {
   const accountId = req.account.id;
   // "Today" and the hourly chart are KST, not server-local time (Railway runs in UTC, which made
   // "today" run 09:00-09:00 KST and shifted every hourly bar by 9 hours).
-  const kstDayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const kstDayKey = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
   const startOfDay = new Date(`${kstDayKey}T00:00:00+09:00`);
   const kstHour = iso => (new Date(iso).getUTCHours() + 9) % 24;
   const startIso = startOfDay.toISOString();
@@ -83,9 +88,7 @@ router.get('/api/dashboard', requireAccount, (req, res) => {
     .get(accountId, startIso, endOfDay).c;
 
   const postedToday = db
-    .prepare(
-      `SELECT * FROM posts WHERE account_id = ? AND status = 'posted' AND posted_at >= ? AND posted_at < ?`
-    )
+    .prepare(`SELECT * FROM posts WHERE account_id = ? AND status = 'posted' AND posted_at >= ? AND posted_at < ?`)
     .all(accountId, startIso, endOfDay);
 
   const totalScheduled = db
@@ -94,7 +97,7 @@ router.get('/api/dashboard', requireAccount, (req, res) => {
     )
     .get(accountId, startIso, endOfDay).c;
 
-  const postIds = postedToday.map((p) => p.id);
+  const postIds = postedToday.map(p => p.id);
   let totalViews = 0;
   const insightsByPost = {};
   if (postIds.length) {
@@ -133,7 +136,7 @@ router.get('/api/dashboard', requireAccount, (req, res) => {
     totalViews,
     nextPost: next || null,
     hourly,
-    postedToday: postedToday.map((p) => ({ ...p, insights: insightsByPost[p.id] || null })),
+    postedToday: postedToday.map(p => ({ ...p, insights: insightsByPost[p.id] || null })),
   });
 });
 

@@ -2,7 +2,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText, buildDailyStorySystemPrompt, looksBloggy } = require('../src/content/contentOnlyAutomation');
+const {
+  RECIPE_COMMENT_TEASERS,
+  pickRecipeCommentTeaser,
+  buildRecipeText,
+  buildDailyStorySystemPrompt,
+  looksBloggy,
+} = require('../src/content/contentOnlyAutomation');
 const { PERSONAS } = require('../src/content/personas');
 
 test('looksBloggy catches common AI-blog food clichés missing from the explicit list', () => {
@@ -72,7 +78,10 @@ test('daily story prompt blocks the curiosity persona from deferring its reveal 
   const prompt = buildDailyStorySystemPrompt(curiosity.block);
   assert.ok(prompt.includes(curiosity.block), 'the persona block itself must be present');
   assert.ok(prompt.includes('댓글로 넘기지'), 'a note blocking the comment-defer option must be present');
-  assert.ok(prompt.indexOf(curiosity.block) < prompt.indexOf('댓글로 넘기지'), 'the note must come after the persona block it overrides');
+  assert.ok(
+    prompt.indexOf(curiosity.block) < prompt.indexOf('댓글로 넘기지'),
+    'the note must come after the persona block it overrides'
+  );
 });
 
 test('buildRecipeText rejects a high-risk health claim instead of shipping it unguarded', () => {
@@ -110,5 +119,9 @@ test('generateRecipe never rotates into the housewife-recipe persona - it has no
   const loopBody = src.slice(loopStart, src.indexOf('generateDailyStory'));
   assert.ok(loopStart >= 0, 'recipe generation loop not found');
   assert.match(loopBody, /const persona\s*=\s*REACTION_PERSONA/);
-  assert.doesNotMatch(loopBody, /const persona\s*=\s*pickPersona\(/, 'the recipe loop must not rotate through pickPersona (would risk housewife-recipe)');
+  assert.doesNotMatch(
+    loopBody,
+    /const persona\s*=\s*pickPersona\(/,
+    'the recipe loop must not rotate through pickPersona (would risk housewife-recipe)'
+  );
 });

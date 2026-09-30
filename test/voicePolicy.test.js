@@ -54,14 +54,22 @@ test('voiceProblems catches a real post where every single line is its own blank
   // all code-enforced, not prompt-only. Requires 4+ paragraph groups where EVERY group is exactly
   // 1 line - a strict, unambiguous shape that a normal post mixing a 1-line hook/closer with
   // 2-3-line body groups (the wellFormatted fixture below) never trips.
-  const realPost = '이거 왜 이렇게 맛있냐고??\n\n말차의 진한 향이 빵과 크림을 감싸고,\n\n한 입 베어물면 식감이 사라지는 게 실화냐고...\n\n완전 미쳤다 진짜 이런 케이크 처음 먹어봤는데,\n\n주말 간식으로 완전 강추!\n\n품절되기 전에 꼭 먹어봐야겠다\n\n이거 알던 사람 손??';
+  const realPost =
+    '이거 왜 이렇게 맛있냐고??\n\n말차의 진한 향이 빵과 크림을 감싸고,\n\n한 입 베어물면 식감이 사라지는 게 실화냐고...\n\n완전 미쳤다 진짜 이런 케이크 처음 먹어봤는데,\n\n주말 간식으로 완전 강추!\n\n품절되기 전에 꼭 먹어봐야겠다\n\n이거 알던 사람 손??';
   assert.ok(policy.voiceProblems(realPost).includes('문단 과다 분절'));
   // A post with only a few groups, or one that mixes 1-line and multi-line groups, must stay
   // unflagged - the opening-hook-then-blank-line pattern is explicitly encouraged, not a bug.
-  const wellFormatted = '옷은 많은데\n막상 나가려면 입을 게 없음ㅋㅋ\n\n이런 코트 하나 보고 있는데\n가을 오면 바로 입을 듯\n\n색감 진짜 예쁘더라\n이번 주에 주문할 듯';
-  assert.deepEqual(policy.voiceProblems(wellFormatted).filter(r => r === '문단 과다 분절'), []);
+  const wellFormatted =
+    '옷은 많은데\n막상 나가려면 입을 게 없음ㅋㅋ\n\n이런 코트 하나 보고 있는데\n가을 오면 바로 입을 듯\n\n색감 진짜 예쁘더라\n이번 주에 주문할 듯';
+  assert.deepEqual(
+    policy.voiceProblems(wellFormatted).filter(r => r === '문단 과다 분절'),
+    []
+  );
   const shortHookThenBody = '이거 실화냐??\n\n말차 향이 진하고 크림이 부드러워서 계속 손이 감\n\n주말 간식으로 강추';
-  assert.deepEqual(policy.voiceProblems(shortHookThenBody).filter(r => r === '문단 과다 분절'), []);
+  assert.deepEqual(
+    policy.voiceProblems(shortHookThenBody).filter(r => r === '문단 과다 분절'),
+    []
+  );
 });
 
 test('every persona carries a shared baseline curiosity-gap hook, not just the dedicated curiosity persona', () => {
@@ -104,7 +112,11 @@ test('every persona carries the shared real-viral-post technique list (numbers/t
   for (const persona of PERSONAS) {
     const guide = policy.voiceGuide(persona.block);
     assert.match(guide, /숫자로 찍히는 구체적 디테일/, `${persona.id} is missing the quantified-detail technique`);
-    assert.match(guide, /나 아닌 다른 사람의 반응으로 검증한다/, `${persona.id} is missing the third-party-reaction technique`);
+    assert.match(
+      guide,
+      /나 아닌 다른 사람의 반응으로 검증한다/,
+      `${persona.id} is missing the third-party-reaction technique`
+    );
     assert.match(guide, /코믹한 자기 비하나 엉뚱한 남 탓/, `${persona.id} is missing the comic self-blame technique`);
     assert.match(guide, /실제 질문으로 남긴다/, `${persona.id} is missing the genuine open-question ending`);
     assert.match(guide, /지금도 계속되고 있다는 인상/, `${persona.id} is missing the ongoing-story tease`);
@@ -122,8 +134,16 @@ test('every persona carries the shared "reach depends on early replies" directiv
   const { PERSONAS } = require('../src/content/personas');
   for (const persona of PERSONAS) {
     const guide = policy.voiceGuide(persona.block);
-    assert.match(guide, /노출이 안 되는 가장 큰 원인은 발행 직후 댓글이 안 달리는 것이다/, `${persona.id} is missing the reach-via-replies directive`);
-    assert.match(guide, /거의 매번 쓴다/, `${persona.id} is missing the "use almost every time" elevation of the open-question ending`);
+    assert.match(
+      guide,
+      /노출이 안 되는 가장 큰 원인은 발행 직후 댓글이 안 달리는 것이다/,
+      `${persona.id} is missing the reach-via-replies directive`
+    );
+    assert.match(
+      guide,
+      /거의 매번 쓴다/,
+      `${persona.id} is missing the "use almost every time" elevation of the open-question ending`
+    );
   }
 });
 
@@ -152,12 +172,13 @@ test('hard format is a line-count ceiling - there is no per-line character limit
   assert.ok(count(naturalLongLine) > 24, 'fixture must exceed the old low cap to be a meaningful check');
   assert.deepEqual(policy.voiceProblems(naturalLongLine), []);
 
-  const wayLongerThanTheOldCap = '이 세제 하나 사고 나서부터는 진짜 매번 손빨래하던 얼룩진 옷들이 거짓말처럼 깨끗해져서 신세계임';
+  const wayLongerThanTheOldCap =
+    '이 세제 하나 사고 나서부터는 진짜 매번 손빨래하던 얼룩진 옷들이 거짓말처럼 깨끗해져서 신세계임';
   assert.ok(count(wayLongerThanTheOldCap) > 40, 'fixture must exceed the old removed cap to be a meaningful check');
   assert.deepEqual(policy.voiceProblems(wayLongerThanTheOldCap), []);
   assert.equal(policy.assertVoice(wayLongerThanTheOldCap), wayLongerThanTheOldCap);
 
-  const tooManyLines = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}줄`).join('\n');
+  const tooManyLines = Array.from({ length: policy.MAX_LINES + 1 }, (_, i) => `${i}줄`).join('\n');
   assert.ok(policy.voiceProblems(tooManyLines).includes(`${policy.MAX_LINES}줄 초과`));
   assert.throws(() => policy.assertVoice(tooManyLines), { code: 'CONTENT_STYLE_REJECTED' });
 
@@ -166,15 +187,17 @@ test('hard format is a line-count ceiling - there is no per-line character limit
   // past that target, not the target itself - a post that finishes a sentence a bit over
   // 120 must NOT be flagged, matching this file's own "don't cut a complete sentence to hit
   // a count" principle for MAX_LINE_CHARS above.
-  const finishesJustOverTarget = '이 정리함 진짜 미쳤다 방 어질러놓는 게 습관이었는데 이거 하나로 다 정리되니까 너무 신기함 진짜 인정 이건 무조건 사야됨 없어서 못 살 뻔했잖아 진짜 이거 알려준 친구한테 감사인사 백만번 하고 싶은 심정임 진짜로 완전 강추';
+  const finishesJustOverTarget =
+    '이 정리함 진짜 미쳤다 방 어질러놓는 게 습관이었는데 이거 하나로 다 정리되니까 너무 신기함 진짜 인정 이건 무조건 사야됨 없어서 못 살 뻔했잖아 진짜 이거 알려준 친구한테 감사인사 백만번 하고 싶은 심정임 진짜로 완전 강추';
   assert.ok(
-    Array.from(finishesJustOverTarget).length > 120 && Array.from(finishesJustOverTarget).length <= policy.MAX_BODY_CHARS,
+    Array.from(finishesJustOverTarget).length > 120 &&
+      Array.from(finishesJustOverTarget).length <= policy.MAX_BODY_CHARS,
     `fixture must land between the 120-char target and MAX_BODY_CHARS: ${Array.from(finishesJustOverTarget).length}`
   );
   assert.deepEqual(policy.voiceProblems(finishesJustOverTarget), []);
   assert.equal(policy.bodyTooLong(finishesJustOverTarget), false);
 
-  const paddedPastTheCeiling = Array.from({length: policy.MAX_BODY_CHARS + 20}, () => '가').join('');
+  const paddedPastTheCeiling = Array.from({ length: policy.MAX_BODY_CHARS + 20 }, () => '가').join('');
   assert.ok(policy.bodyTooLong(paddedPastTheCeiling));
   assert.ok(policy.voiceProblems(paddedPastTheCeiling).includes('본문 길이 초과'));
   assert.throws(() => policy.assertVoice(paddedPastTheCeiling), { code: 'CONTENT_STYLE_REJECTED' });
@@ -185,9 +208,18 @@ test('hard format is a line-count ceiling - there is no per-line character limit
   // the ceiling, but content + newlines (13 extra chars) must not - the exact case bodyTooLong()
   // exists to get right.
   const contentOnly175 = '짧은문장'.repeat(50).slice(0, 175);
-  const linesOf175 = Array.from({length: policy.MAX_LINES}, (_, i) => contentOnly175.slice(i * 13, (i + 1) * 13)).join('\n');
-  assert.equal(Array.from(linesOf175.replace(/\n/g, '')).length, 175, 'fixture content must stay under MAX_BODY_CHARS on its own');
-  assert.ok(linesOf175.length > policy.MAX_BODY_CHARS, 'fixture must exceed MAX_BODY_CHARS only when newlines are counted');
+  const linesOf175 = Array.from({ length: policy.MAX_LINES }, (_, i) =>
+    contentOnly175.slice(i * 13, (i + 1) * 13)
+  ).join('\n');
+  assert.equal(
+    Array.from(linesOf175.replace(/\n/g, '')).length,
+    175,
+    'fixture content must stay under MAX_BODY_CHARS on its own'
+  );
+  assert.ok(
+    linesOf175.length > policy.MAX_BODY_CHARS,
+    'fixture must exceed MAX_BODY_CHARS only when newlines are counted'
+  );
   assert.equal(policy.bodyTooLong(linesOf175), false, 'newlines must not count toward body length');
 
   assert.equal(count('가나다😀'), 4, 'emoji must count as one Unicode code point');
@@ -201,11 +233,11 @@ test('formatVoice never truncates or hard-wraps generated copy, however long a s
 });
 
 test('blank-line paragraph breaks are allowed and count toward the line boundary', () => {
-  const text = ['첫줄 생각 하나','','둘째 생각 하나','','셋째 생각 하나'].join('\n');
+  const text = ['첫줄 생각 하나', '', '둘째 생각 하나', '', '셋째 생각 하나'].join('\n');
   assertThreadsShape(policy.assertVoice(text));
   assert.deepEqual(policy.voiceProblems(text), []);
 
-  const parts = Array.from({length: policy.MAX_LINES}, (_, i) => (i % 2 === 0 ? `${i}번째 줄` : ''));
+  const parts = Array.from({ length: policy.MAX_LINES }, (_, i) => (i % 2 === 0 ? `${i}번째 줄` : ''));
   if (!parts[parts.length - 1]) parts[parts.length - 1] = '마지막 줄'; // must not end on a blank line
   const atTheBoundary = parts.join('\n');
   assert.equal(atTheBoundary.split('\n').length, policy.MAX_LINES);
@@ -401,11 +433,7 @@ test('the bound noun 터 is caught as a dangling split in its 터인데/터였�
   // undetected, so a split like "나가려던" / "터인데 비가 옴" was shipped as two lines even though
   // the second line is grammatically incomplete without "터인데" attaching to the line before it.
   const { repairConnectorOnlyBreaks } = require('../src/content/voiceLocalRepair');
-  const broken = [
-    '나가려던\n터인데 비가 옴',
-    '이미 산\n터였는데 세일함',
-    '막 도착한\n터라 정신없음',
-  ];
+  const broken = ['나가려던\n터인데 비가 옴', '이미 산\n터였는데 세일함', '막 도착한\n터라 정신없음'];
   for (const text of broken) {
     assert.ok(policy.incompleteLineReasons(text).length > 0, `should flag: ${text}`);
     const fixed = repairConnectorOnlyBreaks(text, policy.MAX_LINE_CHARS);
@@ -461,12 +489,19 @@ test('runtime review repairs a too-many-lines post instead of discarding the mat
   // this test's trigger, but length alone no longer gates rejection - too-many-lines still does,
   // so that's what exercises the same repair path here now.
   let calls = 0;
-  const original = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번째 줄`).join('\n');
-  assert.ok(policy.voiceProblems(original).includes(`${policy.MAX_LINES}줄 초과`), 'fixture must actually trigger a rejection to exercise the repair path');
-  const out = await policy.reviewSourceVoice(original, { mode: 'product', sourceText: '집게형 실리콘 뒤집개 영상' }, async () => {
-    calls++;
-    return { text: '집게랑 뒤집개가 합쳐짐\n요리할 때 진짜 편함' };
-  });
+  const original = Array.from({ length: policy.MAX_LINES + 1 }, (_, i) => `${i}번째 줄`).join('\n');
+  assert.ok(
+    policy.voiceProblems(original).includes(`${policy.MAX_LINES}줄 초과`),
+    'fixture must actually trigger a rejection to exercise the repair path'
+  );
+  const out = await policy.reviewSourceVoice(
+    original,
+    { mode: 'product', sourceText: '집게형 실리콘 뒤집개 영상' },
+    async () => {
+      calls++;
+      return { text: '집게랑 뒤집개가 합쳐짐\n요리할 때 진짜 편함' };
+    }
+  );
   assert.equal(calls, 1);
   assert.equal(out, '집게랑 뒤집개가 합쳐짐\n요리할 때 진짜 편함');
   assertThreadsShape(out);
@@ -474,10 +509,10 @@ test('runtime review repairs a too-many-lines post instead of discarding the mat
 
 test('runtime review retries one more time when first format repair still fails', async () => {
   let calls = 0;
-  const tooManyLines = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번째 줄`).join('\n');
+  const tooManyLines = Array.from({ length: policy.MAX_LINES + 1 }, (_, i) => `${i}번째 줄`).join('\n');
   const out = await policy.reviewSourceVoice(tooManyLines, { mode: 'product' }, async () => {
     calls++;
-    if (calls === 1) return { text: Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번`).join('\n') };
+    if (calls === 1) return { text: Array.from({ length: policy.MAX_LINES + 1 }, (_, i) => `${i}번`).join('\n') };
     return { text: '이건 진짜 신기함\n써보면 바로 이해됨' };
   });
   assert.equal(calls, 2);
@@ -486,11 +521,11 @@ test('runtime review retries one more time when first format repair still fails'
 
 test('runtime review is bounded and rejects after two failed repairs', async () => {
   let calls = 0;
-  const tooManyLines = Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번째 줄`).join('\n');
+  const tooManyLines = Array.from({ length: policy.MAX_LINES + 1 }, (_, i) => `${i}번째 줄`).join('\n');
   await assert.rejects(
     policy.reviewSourceVoice(tooManyLines, { mode: 'product' }, async () => {
       calls++;
-      return { text: Array.from({length: policy.MAX_LINES + 1}, (_, i) => `${i}번`).join('\n') };
+      return { text: Array.from({ length: policy.MAX_LINES + 1 }, (_, i) => `${i}번`).join('\n') };
     }),
     { code: 'CONTENT_STYLE_REJECTED' }
   );
@@ -514,7 +549,14 @@ test('the ad-CTA guard catches "너도 <verb>봐" for verbs other than 해/써, 
   // exactly those verb stems - so the identical formulaic CTA slipped through untouched for
   // every other verb this bot's product categories actually use: 발라봐 (skincare), 만들어봐/
   // 먹어봐 (food/recipe), 사봐 (a general purchase nudge), 들어봐 (media).
-  for (const verbEnding of ['너도 발라봐~😊', '너도 만들어봐~', '너도 사봐!', '너도 먹어봐~', '너도 들어봐', '너도 발라보길']) {
+  for (const verbEnding of [
+    '너도 발라봐~😊',
+    '너도 만들어봐~',
+    '너도 사봐!',
+    '너도 먹어봐~',
+    '너도 들어봐',
+    '너도 발라보길',
+  ]) {
     const post = '이거 진짜 좋았음\n' + verbEnding;
     assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${verbEnding}"`);
   }
@@ -534,16 +576,30 @@ test('the ad-CTA guard catches "~보길 바람/바래요/바랍니다" - the sam
   // literal last word before the guard fired - "너희도 한번 써보길 바람" slipped through completely
   // untouched simply because a wish-verb ("바람"/"바래요"/"바랍니다") came after "보길", even though
   // it is the exact same formulaic recommend-and-hope CTA shape.
-  for (const variant of ['너희도 한번 써보길 바람', '너도 한번 해보길 바람', '다들 써보길 바래요', '당신도 한번 도전해보길 바랍니다']) {
+  for (const variant of [
+    '너희도 한번 써보길 바람',
+    '너도 한번 해보길 바람',
+    '다들 써보길 바래요',
+    '당신도 한번 도전해보길 바랍니다',
+  ]) {
     const post = '이거 진짜 좋았음\n' + variant;
     assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
   }
 });
 
 test('the wish-verb CTA extension does not flag ordinary well-wishes that do not recommend trying the product', () => {
-  assert.deepEqual(policy.voiceProblems('이거 완전 신세계였음\n다들 좋아할 듯').filter(r => r === '뻔한 CTA 마무리'), []);
-  assert.deepEqual(policy.voiceProblems('요즘 다들 힘들텐데\n너도 좋아하는 스타일이길 바람').filter(r => r === '뻔한 CTA 마무리'), []);
-  assert.deepEqual(policy.voiceProblems('날씨 추운데\n다들 건강 챙기길 바람').filter(r => r === '뻔한 CTA 마무리'), []);
+  assert.deepEqual(
+    policy.voiceProblems('이거 완전 신세계였음\n다들 좋아할 듯').filter(r => r === '뻔한 CTA 마무리'),
+    []
+  );
+  assert.deepEqual(
+    policy.voiceProblems('요즘 다들 힘들텐데\n너도 좋아하는 스타일이길 바람').filter(r => r === '뻔한 CTA 마무리'),
+    []
+  );
+  assert.deepEqual(
+    policy.voiceProblems('날씨 추운데\n다들 건강 챙기길 바람').filter(r => r === '뻔한 CTA 마무리'),
+    []
+  );
 });
 
 test('the ad-CTA guard catches the plain polite "-요" ending after 봐, not just the bare form', () => {
@@ -573,7 +629,12 @@ test('the ad-CTA guard catches "여러분도", a common audience address form mi
   // common a formal-plural way to address an audience on social media as the already-covered
   // 다들/모두, but was still missing, so "여러분도 한번 써보세요" reproduced the exact same banned
   // CTA shape completely untouched.
-  for (const variant of ['여러분도 한번 써보세요', '여러분도 꼭 써봐요~', '여러분도 한번 써봐', '여러분도 써보길 바람']) {
+  for (const variant of [
+    '여러분도 한번 써보세요',
+    '여러분도 꼭 써봐요~',
+    '여러분도 한번 써봐',
+    '여러분도 써보길 바람',
+  ]) {
     const post = '이거 진짜 좋았음\n' + variant;
     assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
   }
@@ -584,16 +645,31 @@ test('the ad-CTA guard catches "보시기"/"보시기를", the uncontracted form
   // 보시기를, already paired with the 바랍니다/바래요/바람 trailing group - but the uncontracted
   // "보시기"/"보시기를" form is at least as common a formal invitation ending ("너도 꼭 사용해보시기
   // 바랍니다") and was missing entirely, so it sailed through unflagged.
-  for (const variant of ['너도 꼭 사용해보시기 바랍니다', '여러분도 꼭 드셔보시기를 바랍니다', '다들 한번 써보시기 바람']) {
+  for (const variant of [
+    '너도 꼭 사용해보시기 바랍니다',
+    '여러분도 꼭 드셔보시기를 바랍니다',
+    '다들 한번 써보시기 바람',
+  ]) {
     const post = '이거 진짜 좋았음\n' + variant;
     assert.ok(policy.voiceProblems(post).includes('뻔한 CTA 마무리'), `should catch: "${variant}"`);
   }
 });
 
 test('the generalized ad-CTA guard does not flag ordinary sentences that merely contain "너도"', () => {
-  for (const safe of ['이거 너도 볼래?', '너도 알다시피 이게 국내산이야', '이건 나만 아는 거 아니고 너도 알아둬', '다들 이렇게 사나요?', '다들 힘내자', '여러분도 이런 경험 있으신가요?']) {
+  for (const safe of [
+    '이거 너도 볼래?',
+    '너도 알다시피 이게 국내산이야',
+    '이건 나만 아는 거 아니고 너도 알아둬',
+    '다들 이렇게 사나요?',
+    '다들 힘내자',
+    '여러분도 이런 경험 있으신가요?',
+  ]) {
     const post = '완전 신기했음\n' + safe;
-    assert.deepEqual(policy.voiceProblems(post).filter(r => r === '뻔한 CTA 마무리'), [], `should not catch: "${safe}"`);
+    assert.deepEqual(
+      policy.voiceProblems(post).filter(r => r === '뻔한 CTA 마무리'),
+      [],
+      `should not catch: "${safe}"`
+    );
   }
 });
 
@@ -614,7 +690,11 @@ test('the ad-CTA guard still does not flag ordinary "보다"(to look) sentences 
   // 써보세요") apart from someone just saying "look at this" ("저기 좀 보세요", "이 사진 좀 봐").
   for (const safe of ['저기 좀 보세요', '이 사진 좀 봐', '와 대박 저것 좀 봐봐']) {
     const post = '완전 신기했음\n' + safe;
-    assert.deepEqual(policy.voiceProblems(post).filter(r => r === '뻔한 CTA 마무리'), [], `should not catch: "${safe}"`);
+    assert.deepEqual(
+      policy.voiceProblems(post).filter(r => r === '뻔한 CTA 마무리'),
+      [],
+      `should not catch: "${safe}"`
+    );
   }
 });
 
@@ -640,25 +720,26 @@ test('the persona guide never recommends an example that trips any of its own sa
   for (const persona of PERSONAS) {
     const guide = policy.voiceGuide(persona.block);
     const exampleLines = guide.split('\n').filter(line => /\[(?:오프닝|마무리) 패턴 예시/.test(line));
-    assert.ok(exampleLines.length >= 2, `expected both opening and closing pattern-example lines for persona "${persona.id}"`);
+    assert.ok(
+      exampleLines.length >= 2,
+      `expected both opening and closing pattern-example lines for persona "${persona.id}"`
+    );
     for (const line of exampleLines) {
       const quotedExamples = [...line.matchAll(/"([^"]+)"/g)].map(m => m[1]);
       for (const example of quotedExamples) {
-        assert.deepEqual(policy.voiceProblems(example), [],
-          `persona "${persona.id}"'s recommended example trips a safety check it also enforces: "${example}"`);
+        assert.deepEqual(
+          policy.voiceProblems(example),
+          [],
+          `persona "${persona.id}"'s recommended example trips a safety check it also enforces: "${example}"`
+        );
       }
     }
   }
 });
 
 test('old style blacklist is gone while safety checks remain', () => {
-  for (const expressive of [
-    '여러분은 어때?',
-    '대박임 ㅋㅋ',
-    '강력 추천',
-    '원문에서는 이렇대',
-    'ㅋㅋㅋㅋㅋㅋ',
-  ]) assert.deepEqual(policy.voiceProblems(expressive), []);
+  for (const expressive of ['여러분은 어때?', '대박임 ㅋㅋ', '강력 추천', '원문에서는 이렇대', 'ㅋㅋㅋㅋㅋㅋ'])
+    assert.deepEqual(policy.voiceProblems(expressive), []);
 
   assert.ok(policy.voiceProblems('한 달 만에 12kg 빠졌어').includes('고위험 효능 주장'));
   assert.ok(policy.voiceProblems('이거 먹으면 암이 치료돼').includes('고위험 효능 주장'));
@@ -864,7 +945,7 @@ test('the 아토피/습진/비염 addition does not flag the softened "있는 �
   assert.deepEqual(policy.voiceProblems('비염 있는 우리 애한테도 괜찮은 편이었음'), []);
 });
 
-test('highRiskClaim also covers 탈모/여드름, the conditions this bot\'s haircare/skincare product posts are most likely to generate a cure claim about', () => {
+test("highRiskClaim also covers 탈모/여드름, the conditions this bot's haircare/skincare product posts are most likely to generate a cure claim about", () => {
   // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 탈모(hair loss)/
   // 여드름(acne) are unambiguous condition names with no unrelated everyday meaning, same shape
   // as the already-listed 아토피/습진/비염 - but were missing entirely, so "이 샴푸 쓰고 탈모 완전
@@ -927,8 +1008,10 @@ test('a real published post with a hard line break after every line and zero par
   // model actually did this. Two real published posts came back as a flat wall of one-liners -
   // a hard line break after every single line, not one blank line anywhere - and voiceProblems()
   // passed both silently.
-  const realPost1 = '골반 비틀림 교정이\n이렇게 쉽다니! ㅋㅋ\n이거 해보니까\n힙라인이 확 달라짐 ㄷㄷ\n1주일 만에 효과가\n보이더라? ㅠㅠ\n이거 따라해봐!\n소리 질렀음;;\n효과 진짜 대박임\n링크는 댓글에!';
-  const realPost2 = '이거 진짜 대박임! 😍\n협탁 위가 깔끔해지면서\n동시 충전까지 가능해\n보조배터리처럼 쏙 넣어 다니기\n편한 것도 완전 좋음\n이런 거 있으면 삶의 질\n확실히 올라가니까,\n앱등이들은 무조건 사야 해! 🔥';
+  const realPost1 =
+    '골반 비틀림 교정이\n이렇게 쉽다니! ㅋㅋ\n이거 해보니까\n힙라인이 확 달라짐 ㄷㄷ\n1주일 만에 효과가\n보이더라? ㅠㅠ\n이거 따라해봐!\n소리 질렀음;;\n효과 진짜 대박임\n링크는 댓글에!';
+  const realPost2 =
+    '이거 진짜 대박임! 😍\n협탁 위가 깔끔해지면서\n동시 충전까지 가능해\n보조배터리처럼 쏙 넣어 다니기\n편한 것도 완전 좋음\n이런 거 있으면 삶의 질\n확실히 올라가니까,\n앱등이들은 무조건 사야 해! 🔥';
   assert.ok(policy.voiceProblems(realPost1).includes('문단 구분 없음'));
   assert.ok(policy.voiceProblems(realPost2).includes('문단 구분 없음'));
 });
@@ -939,8 +1022,12 @@ test('the paragraph-break guard does not force a blank line into a short, single
 });
 
 test('the paragraph-break guard passes a post that already groups thoughts with a blank line', () => {
-  const wellFormatted = '옷은 많은데\n막상 나가려면 입을 게 없음ㅋㅋ\n\n이런 코트 하나 보고 있는데\n가을 오면 바로 입을 듯\n\n색감 진짜 예쁘더라\n이번 주에 주문할 듯';
-  assert.deepEqual(policy.voiceProblems(wellFormatted).filter(r => r === '문단 구분 없음'), []);
+  const wellFormatted =
+    '옷은 많은데\n막상 나가려면 입을 게 없음ㅋㅋ\n\n이런 코트 하나 보고 있는데\n가을 오면 바로 입을 듯\n\n색감 진짜 예쁘더라\n이번 주에 주문할 듯';
+  assert.deepEqual(
+    policy.voiceProblems(wellFormatted).filter(r => r === '문단 구분 없음'),
+    []
+  );
 });
 
 test('the paragraph-break guard catches a real 5-line post with no blank line, below the old 6-line threshold', () => {
@@ -949,7 +1036,8 @@ test('the paragraph-break guard catches a real 5-line post with no blank line, b
   // reaction), with zero blank line anywhere - it stayed under the old lines.length>=6 threshold
   // and sailed through unflagged, even though it clearly spans multiple thoughts, not a genuine
   // short single-thought post.
-  const post = '이거 뭐야, 남편이 아이방에서 2시간째 안 나오고 있어ㅋㅋ\n바둑알 1도 필요 없고, 손만 대면 불이 들어오는 오목판이야\n스마트폰 쥐어주는 것보다 100배 나을 듯...\n이거 집중력 향상에도 진짜 좋대??\n이렇게 재밌는 걸 이제야 알다니 미쳤다...';
+  const post =
+    '이거 뭐야, 남편이 아이방에서 2시간째 안 나오고 있어ㅋㅋ\n바둑알 1도 필요 없고, 손만 대면 불이 들어오는 오목판이야\n스마트폰 쥐어주는 것보다 100배 나을 듯...\n이거 집중력 향상에도 진짜 좋대??\n이렇게 재밌는 걸 이제야 알다니 미쳤다...';
   assert.ok(policy.voiceProblems(post).includes('문단 구분 없음'));
 });
 
@@ -960,8 +1048,10 @@ test('the paragraph-break guard catches a real post written as one unbroken line
   // text" problem the line-count check exists to catch, just expressed as one long line instead
   // of many short ones. Both real examples ran multiple complete thoughts together with several
   // strong sentence-ending marks (?/!/;;/..) and no separation at all.
-  const post2 = '이거 뭔데 이렇게 난리냐;; 진짜 바삭함이 미쳤다는데? 춘천 조선전집에서 모둠전 먹어봤어? 1번 손님으로 들어갔는데, 이건 진짜 완전 정답이었음 양도 많고, 뭐 하나 빠지는 게 없더라 여기가 이제 내 최애 전집이 됐어 춘천 가면 무조건 오픈런으로 가야 하는 집이야 ㅋㅋ';
-  const post3 = '이거 실화냐?! 김신영템이라는 거품 변기 클리너 써봤는데, 비주얼이 미쳤음ㅋㅋ 거품이 완전 쫀쫀해서 묵은 때가 그냥 녹아내림 변기 청소가 이렇게 한방에 끝나다니, 진짜 속이 다 시원해.. 거품 멍 때리는 것도 은근 꿀잼이라 시간 가는 줄 모르겠음 이거 하나면 변기 청소 끝! 품절되기 전에 꼭 써봐야겠다!';
+  const post2 =
+    '이거 뭔데 이렇게 난리냐;; 진짜 바삭함이 미쳤다는데? 춘천 조선전집에서 모둠전 먹어봤어? 1번 손님으로 들어갔는데, 이건 진짜 완전 정답이었음 양도 많고, 뭐 하나 빠지는 게 없더라 여기가 이제 내 최애 전집이 됐어 춘천 가면 무조건 오픈런으로 가야 하는 집이야 ㅋㅋ';
+  const post3 =
+    '이거 실화냐?! 김신영템이라는 거품 변기 클리너 써봤는데, 비주얼이 미쳤음ㅋㅋ 거품이 완전 쫀쫀해서 묵은 때가 그냥 녹아내림 변기 청소가 이렇게 한방에 끝나다니, 진짜 속이 다 시원해.. 거품 멍 때리는 것도 은근 꿀잼이라 시간 가는 줄 모르겠음 이거 하나면 변기 청소 끝! 품절되기 전에 꼭 써봐야겠다!';
   assert.ok(policy.voiceProblems(post2).includes('문단 구분 없음'));
   assert.ok(policy.voiceProblems(post3).includes('문단 구분 없음'));
 });
@@ -971,24 +1061,46 @@ test('the paragraph-break guard does not flag a single long line that is genuine
   // voiceGuide() explicitly allows one complete sentence to run long on one line, and the new
   // one-line trigger requires 2+ separate strong endings to distinguish "one long thought" from
   // "several thoughts crammed together with no breaks."
-  const oneLongSentence = '이 세제 하나 사고 나서부터는 진짜 매번 손빨래하던 얼룩진 옷들이 거짓말처럼 깨끗해져서 완전 신세계임';
-  assert.deepEqual(policy.voiceProblems(oneLongSentence).filter(r => r === '문단 구분 없음'), []);
+  const oneLongSentence =
+    '이 세제 하나 사고 나서부터는 진짜 매번 손빨래하던 얼룩진 옷들이 거짓말처럼 깨끗해져서 완전 신세계임';
+  assert.deepEqual(
+    policy.voiceProblems(oneLongSentence).filter(r => r === '문단 구분 없음'),
+    []
+  );
   const oneDramaticEnding = '이거 진짜 실화냐?? 이렇게까지 좋아질 줄은 진짜 상상도 못했는데 완전 인생템 등극함??';
-  assert.deepEqual(policy.voiceProblems(oneDramaticEnding).filter(r => r === '문단 구분 없음'), []);
+  assert.deepEqual(
+    policy.voiceProblems(oneDramaticEnding).filter(r => r === '문단 구분 없음'),
+    []
+  );
 });
 
 test('voiceProblems flags the worn-out "이거 실화냐 / 이거 뭔데" opener clichés seen on real posts', () => {
   // User feedback (2026-09-24): "이거실화냐? 이말투 너무 반복적으로 사용하고 스레드 바이럴 sns
   // 페르소나가 아닌거같아". Five real posts on one account opened with these back to back.
-  for (const t of ['이거 실화냐? HOKA 처음 신어봤는데', '이거 뭔데 이렇게 난리냐;;', '이거 실화냐?! 김신영템이라는', '이거 뭐야, 남편이 아이방에서', '이거 왜 이렇게 맛있냐고??']) {
+  for (const t of [
+    '이거 실화냐? HOKA 처음 신어봤는데',
+    '이거 뭔데 이렇게 난리냐;;',
+    '이거 실화냐?! 김신영템이라는',
+    '이거 뭐야, 남편이 아이방에서',
+    '이거 왜 이렇게 맛있냐고??',
+  ]) {
     assert.ok(policy.voiceProblems(t).includes('상투적 표현'), `should flag: ${t}`);
   }
   assert.ok(policy.voiceProblems('우리 딸 굽은 등 보고\n진짜 실화임').includes('상투적 표현'));
 });
 
 test('the cliché guard does not flag concrete situation-first openers, including a plain "이거" start', () => {
-  for (const t of ['우리 딸램 굽은 등 보고 식겁했잖아;;', '시어머니가 밥할 때마다 계란을 같이 넣으시는데', '이거 사주고 나서 조용한 시간 생김ㅋㅋ', '식빵 그냥 주면 거들떠도 안 봄;;']) {
-    assert.deepEqual(policy.voiceProblems(t).filter(r => r === '상투적 표현'), [], `false positive: ${t}`);
+  for (const t of [
+    '우리 딸램 굽은 등 보고 식겁했잖아;;',
+    '시어머니가 밥할 때마다 계란을 같이 넣으시는데',
+    '이거 사주고 나서 조용한 시간 생김ㅋㅋ',
+    '식빵 그냥 주면 거들떠도 안 봄;;',
+  ]) {
+    assert.deepEqual(
+      policy.voiceProblems(t).filter(r => r === '상투적 표현'),
+      [],
+      `false positive: ${t}`
+    );
   }
 });
 

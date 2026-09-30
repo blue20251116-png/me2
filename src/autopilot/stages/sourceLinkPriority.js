@@ -4,15 +4,22 @@ const axios = require('axios');
 const { collectPostDetails } = require('../../threads/benchmarkAccounts');
 
 function clean(v) {
-  return String(v || '').replace(/\s+/g, ' ').trim();
+  return String(v || '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function extractCoupangLinks(authorReplies) {
   const text = Array.isArray(authorReplies) ? authorReplies.join('\n\n') : String(authorReplies || '');
-  const matches = text.match(/https?:\/\/(?:link\.)?coupang\.com\/[^\s<>'"\])}>,]+|https?:\/\/www\.coupang\.com\/vp\/products\/\d+[^\s<>'"\])}>,]*/gi) || [];
+  const matches =
+    text.match(
+      /https?:\/\/(?:link\.)?coupang\.com\/[^\s<>'"\])}>,]+|https?:\/\/www\.coupang\.com\/vp\/products\/\d+[^\s<>'"\])}>,]*/gi
+    ) || [];
   const out = [];
   for (let raw of matches) {
-    raw = String(raw || '').replace(/[.,;:!?]+$/g, '').trim();
+    raw = String(raw || '')
+      .replace(/[.,;:!?]+$/g, '')
+      .trim();
     if (raw && !out.includes(raw)) out.push(raw);
   }
   return out.slice(0, 4);
@@ -30,12 +37,14 @@ function numericParamFrom(value, key) {
 
 function productIdFrom(value) {
   const s = String(value || '');
-  return s.match(/\/vp\/products\/(\d+)/i)?.[1]
-    || numericParamFrom(s, 'productId')
-    || null;
+  return s.match(/\/vp\/products\/(\d+)/i)?.[1] || numericParamFrom(s, 'productId') || null;
 }
-function itemIdFrom(value) { return numericParamFrom(value, 'itemId'); }
-function vendorItemIdFrom(value) { return numericParamFrom(value, 'vendorItemId'); }
+function itemIdFrom(value) {
+  return numericParamFrom(value, 'itemId');
+}
+function vendorItemIdFrom(value) {
+  return numericParamFrom(value, 'vendorItemId');
+}
 
 function canonicalFrom(...values) {
   const sources = values.map(v => String(v || '')).filter(Boolean);
@@ -60,17 +69,13 @@ function responseLocation(res) {
 }
 
 function responseFinalUrl(res, fallback) {
-  return clean(
-    res?.request?.res?.responseUrl
-    || res?.request?._redirectable?._currentUrl
-    || fallback
-  );
+  return clean(res?.request?.res?.responseUrl || res?.request?._redirectable?._currentUrl || fallback);
 }
 
 async function resolveOriginalProductId(sourceUrl) {
   try {
     const direct = canonicalFrom(sourceUrl);
-    if (direct) return { ...direct, sourceUrl, finalUrl:sourceUrl, method:'direct' };
+    if (direct) return { ...direct, sourceUrl, finalUrl: sourceUrl, method: 'direct' };
 
     // First inspect the affiliate redirect itself. Some Coupang short links expose
     // the canonical product URL in Location even when the eventual product page
@@ -89,11 +94,18 @@ async function resolveOriginalProductId(sourceUrl) {
       });
       firstLocation = responseLocation(first);
       const fromHeader = canonicalFrom(firstLocation, sourceUrl);
-      if (fromHeader) return { ...fromHeader, sourceUrl, finalUrl:firstLocation || sourceUrl, method:'redirect-location' };
+      if (fromHeader)
+        return { ...fromHeader, sourceUrl, finalUrl: firstLocation || sourceUrl, method: 'redirect-location' };
     } catch (e) {
       firstLocation = clean(e?.response?.headers?.location || e?.response?.headers?.Location || '');
       const fromErrorHeader = canonicalFrom(firstLocation, sourceUrl);
-      if (fromErrorHeader) return { ...fromErrorHeader, sourceUrl, finalUrl:firstLocation || sourceUrl, method:'redirect-error-location' };
+      if (fromErrorHeader)
+        return {
+          ...fromErrorHeader,
+          sourceUrl,
+          finalUrl: firstLocation || sourceUrl,
+          method: 'redirect-error-location',
+        };
     }
 
     const res = await axios.get(sourceUrl, {
@@ -110,9 +122,11 @@ async function resolveOriginalProductId(sourceUrl) {
     const location = responseLocation(res) || firstLocation;
     const html = typeof res.data === 'string' ? res.data : '';
     const canonical = canonicalFrom(finalUrl, location, html, sourceUrl);
-    return canonical ? { ...canonical, sourceUrl, finalUrl, method:'axios-productId' } : null;
+    return canonical ? { ...canonical, sourceUrl, finalUrl, method: 'axios-productId' } : null;
   } catch (e) {
-    console.warn(`[AutopilotV3][SOURCE LINK PRIORITY] 원본 링크 productId 해석 실패 url=${sourceUrl} reason="${e.message}"`);
+    console.warn(
+      `[AutopilotV3][SOURCE LINK PRIORITY] 원본 링크 productId 해석 실패 url=${sourceUrl} reason="${e.message}"`
+    );
     return null;
   }
 }
@@ -153,21 +167,28 @@ async function applySourceLinkPriority(result) {
   const unique = [...byProductId.values()];
 
   if (!unique.length) {
-    console.warn(`[AutopilotV3][SOURCE LINK PRIORITY][REJECT] @${result.sourceUsername} 작성자 쿠팡 링크=${links.length} productId 확정=0 → SOLD-FIRST 금지 · 다음 소재`);
-    throw failClosed(`작성자 쿠팡 원본 링크의 실제 productId를 확인하지 못했습니다: @${result.sourceUsername}`, 'SOURCE_AFFILIATE_PRODUCT_ID_UNRESOLVED');
+    console.warn(
+      `[AutopilotV3][SOURCE LINK PRIORITY][REJECT] @${result.sourceUsername} 작성자 쿠팡 링크=${links.length} productId 확정=0 → SOLD-FIRST 금지 · 다음 소재`
+    );
+    throw failClosed(
+      `작성자 쿠팡 원본 링크의 실제 productId를 확인하지 못했습니다: @${result.sourceUsername}`,
+      'SOURCE_AFFILIATE_PRODUCT_ID_UNRESOLVED'
+    );
   }
 
   if (unique.length > 1) {
-    console.warn(`[AutopilotV3][SOURCE LINK PRIORITY][AMBIGUOUS] @${result.sourceUsername} productIds=${unique.map(x=>x.productId).join(',')} → SOLD-FIRST 금지 · 다음 소재`);
-    throw failClosed(`작성자 쿠팡 원본 링크가 서로 다른 여러 상품을 가리킵니다: @${result.sourceUsername}`, 'SOURCE_AFFILIATE_MULTIPLE_PRODUCTS');
+    console.warn(
+      `[AutopilotV3][SOURCE LINK PRIORITY][AMBIGUOUS] @${result.sourceUsername} productIds=${unique.map(x => x.productId).join(',')} → SOLD-FIRST 금지 · 다음 소재`
+    );
+    throw failClosed(
+      `작성자 쿠팡 원본 링크가 서로 다른 여러 상품을 가리킵니다: @${result.sourceUsername}`,
+      'SOURCE_AFFILIATE_MULTIPLE_PRODUCTS'
+    );
   }
 
   const picked = unique[0];
   const fallbackName = clean(
-    result?.visionTarget?.soldObject
-    || result?.topic
-    || result?.product?.name
-    || '원본 작성자 상품'
+    result?.visionTarget?.soldObject || result?.topic || result?.product?.name || '원본 작성자 상품'
   );
 
   result.product = {
@@ -187,7 +208,9 @@ async function applySourceLinkPriority(result) {
   result.sourceAffiliateGroundTruth = true;
   result.sourceAffiliateOriginalUrl = picked.sourceUrl;
 
-  console.log(`[AutopilotV3][SOURCE LINK PRIORITY][GROUND TRUTH] @${result.sourceUsername} productId=${picked.productId} itemId=${picked.itemId || '-'} vendorItemId=${picked.vendorItemId || '-'} method=${picked.method || '-'} → 작성자 원본 상품 최우선 · SOLD-FIRST 덮어쓰기 차단`);
+  console.log(
+    `[AutopilotV3][SOURCE LINK PRIORITY][GROUND TRUTH] @${result.sourceUsername} productId=${picked.productId} itemId=${picked.itemId || '-'} vendorItemId=${picked.vendorItemId || '-'} method=${picked.method || '-'} → 작성자 원본 상품 최우선 · SOLD-FIRST 덮어쓰기 차단`
+  );
   return result;
 }
 

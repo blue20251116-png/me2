@@ -15,9 +15,13 @@ const router = express.Router();
 // situation the emergency-cleanup route below exists to recover from, so the old healthz was
 // blocking access to its own fix. This now always returns 200 and just reports dbOk for
 // diagnostics; DB-dependent routes still fail on their own if the DB is actually down.
-router.get('/healthz', (req,res)=>{
+router.get('/healthz', (req, res) => {
   let dbOk = true;
-  try { db.prepare('SELECT 1').get(); } catch { dbOk = false; }
+  try {
+    db.prepare('SELECT 1').get();
+  } catch {
+    dbOk = false;
+  }
   res.json({ ok: true, dbOk });
 });
 
@@ -40,24 +44,43 @@ function emergencyCleanupKeyValid(req) {
 function emergencyCleanupScan({ olderThanDays = 3, wipeAll = false, confirm = false } = {}) {
   const emergencyUploadsDir = UPLOADS_DIR;
   const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
-  let scanned = 0, matched = 0, deleted = 0, freedBytes = 0;
+  let scanned = 0,
+    matched = 0,
+    deleted = 0,
+    freedBytes = 0;
   const errors = [];
   function walk(dir) {
     let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-    catch (e) { errors.push(`${dir}: ${e.message}`); return; }
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      errors.push(`${dir}: ${e.message}`);
+      return;
+    }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) { walk(full); continue; }
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
       scanned++;
       let stat;
-      try { stat = fs.statSync(full); } catch (e) { errors.push(`${full}: ${e.message}`); continue; }
+      try {
+        stat = fs.statSync(full);
+      } catch (e) {
+        errors.push(`${full}: ${e.message}`);
+        continue;
+      }
       if (!wipeAll && stat.mtimeMs >= cutoff) continue;
       matched++;
       freedBytes += stat.size;
       if (confirm) {
-        try { fs.unlinkSync(full); deleted++; }
-        catch (e) { errors.push(`${full}: ${e.message}`); }
+        try {
+          fs.unlinkSync(full);
+          deleted++;
+        } catch (e) {
+          errors.push(`${full}: ${e.message}`);
+        }
       }
     }
   }
@@ -73,7 +96,11 @@ router.get('/admin/emergency-cleanup', (req, res) => {
   // so the browser form-encoded it a second time and the POST received "%EC%82%AD..." instead of
   // the key - any non-ASCII (e.g. Korean) CLEANUP_KEY previewed fine but the delete button always
   // answered "key가 올바르지 않습니다".
-  const key = String(req.query.key).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const key = String(req.query.key)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
   res.type('html').send(`<!doctype html><meta charset="utf-8">
 <body style="font-family:sans-serif;padding:16px;font-size:16px;line-height:1.6">
 <h3>업로드 파일 정리 (미리보기)</h3>

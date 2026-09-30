@@ -14,7 +14,9 @@ function setup() {
   const uploads = path.join(dir, 'uploads');
   fs.mkdirSync(path.join(uploads, 'videos', '3'), { recursive: true });
   const db = new DatabaseSync(':memory:');
-  db.exec("CREATE TABLE posts (id INTEGER PRIMARY KEY, status TEXT, image_url TEXT, extra_image_url TEXT, video_url TEXT, created_at TEXT DEFAULT (datetime('now')))");
+  db.exec(
+    "CREATE TABLE posts (id INTEGER PRIMARY KEY, status TEXT, image_url TEXT, extra_image_url TEXT, video_url TEXT, created_at TEXT DEFAULT (datetime('now')))"
+  );
   return { dir, uploads, db };
 }
 function writeFile(file, ageHours, bytes = 1000) {
@@ -45,7 +47,9 @@ test('cleanupUploads never deletes a file a pending or publishing post still poi
   writeFile(path.join(uploads, 'bundle-image.jpg'), 72);
   writeFile(path.join(uploads, 'publishing.jpg'), 72);
   writeFile(path.join(uploads, 'already-posted.mp4'), 72);
-  const bundle = '__THREADS_MEDIA_BUNDLE__' + encodeURIComponent(JSON.stringify([{ type: 'IMAGE', url: 'https://app.example/uploads/bundle-image.jpg' }]));
+  const bundle =
+    '__THREADS_MEDIA_BUNDLE__' +
+    encodeURIComponent(JSON.stringify([{ type: 'IMAGE', url: 'https://app.example/uploads/bundle-image.jpg' }]));
   const ins = db.prepare('INSERT INTO posts(status,image_url,video_url) VALUES(?,?,?)');
   ins.run('pending', null, 'https://app.example/uploads/queued-video.mp4');
   ins.run('pending', bundle, null);
@@ -76,14 +80,23 @@ test('runRetentionCleanup frees upload files first, even when the SQLite step fa
   writeFile(path.join(uploads, 'old.mp4'), 72);
   const failingDb = new Proxy(db, {
     get(target, prop) {
-      if (prop === 'exec') return () => { throw new Error('database or disk is full'); };
+      if (prop === 'exec')
+        return () => {
+          throw new Error('database or disk is full');
+        };
       const v = target[prop];
       return typeof v === 'function' ? v.bind(target) : v;
     },
   });
-  db.exec("CREATE TABLE invocation_logs (id INTEGER PRIMARY KEY, created_at TEXT)");
+  db.exec('CREATE TABLE invocation_logs (id INTEGER PRIMARY KEY, created_at TEXT)');
   db.exec("INSERT INTO invocation_logs(created_at) VALUES (datetime('now','-10 days'))");
   const quiet = { log() {}, warn() {}, error() {} };
-  assert.throws(() => runRetentionCleanup(failingDb, quiet, { uploadsDir: uploads, uploads: { maxAgeMs: 24 * HOUR } }), /disk is full/);
-  assert.ok(!fs.existsSync(path.join(uploads, 'old.mp4')), 'upload file should already be gone before the SQLite step failed');
+  assert.throws(
+    () => runRetentionCleanup(failingDb, quiet, { uploadsDir: uploads, uploads: { maxAgeMs: 24 * HOUR } }),
+    /disk is full/
+  );
+  assert.ok(
+    !fs.existsSync(path.join(uploads, 'old.mp4')),
+    'upload file should already be gone before the SQLite step failed'
+  );
 });

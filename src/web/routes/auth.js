@@ -2,7 +2,16 @@
 const { PUBLIC_DIR } = require('../../config/paths');
 const express = require('express');
 const path = require('path');
-const { createUser, getUserByEmail, getUserById, getTodayUsage, countAccountsForUser, getSiteSettings, hasAdmin, createInitialAdmin } = require('../../infra/db');
+const {
+  createUser,
+  getUserByEmail,
+  getUserById,
+  getTodayUsage,
+  countAccountsForUser,
+  getSiteSettings,
+  hasAdmin,
+  createInitialAdmin,
+} = require('../../infra/db');
 const { hashPassword, verifyPassword } = require('../auth');
 
 const router = express.Router();
@@ -27,7 +36,7 @@ router.post('/api/auth/setup-admin', (req, res, next) => {
     req.session.regenerate(err => {
       if (err) return next(err);
       req.session.userId = Number(id);
-      req.session.save(err => err ? next(err) : res.json({ ok: true, role: 'admin' }));
+      req.session.save(err => (err ? next(err) : res.json({ ok: true, role: 'admin' })));
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -57,7 +66,12 @@ router.post('/api/auth/login', require('../loginRateLimit'), (req, res, next) =>
   // Signup used to store the email exactly as typed while setup-admin lowercased it, so
   // "User@x.com" signups could not log in as "user@x.com". Legacy mixed-case rows still match
   // on the exact form as a fallback.
-  const user = getUserByEmail(String(email || '').trim().toLowerCase()) || (typeof email === 'string' && email ? getUserByEmail(email) : undefined);
+  const user =
+    getUserByEmail(
+      String(email || '')
+        .trim()
+        .toLowerCase()
+    ) || (typeof email === 'string' && email ? getUserByEmail(email) : undefined);
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: '이메일 또는 비밀번호가 올바르지 않습니다' });
   }
@@ -66,10 +80,10 @@ router.post('/api/auth/login', require('../loginRateLimit'), (req, res, next) =>
   if (effectiveStatus !== 'active') {
     return res.status(403).json({ error: '로그인할 수 없는 계정 상태입니다', status: effectiveStatus });
   }
-  req.session.regenerate(err=>{
-    if(err)return next(err);
-    req.session.userId=user.id;
-    req.session.save(err=>err?next(err):res.json({ok:true,role:user.role}));
+  req.session.regenerate(err => {
+    if (err) return next(err);
+    req.session.userId = user.id;
+    req.session.save(err => (err ? next(err) : res.json({ ok: true, role: user.role })));
   });
 });
 

@@ -1,7 +1,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { extractJson, imageBlock, imageBlockFromDataUri, looksLikeAnthropicKey } = require('../src/integrations/aiClient');
+const {
+  extractJson,
+  imageBlock,
+  imageBlockFromDataUri,
+  looksLikeAnthropicKey,
+} = require('../src/integrations/aiClient');
 
 test('extractJson parses a clean JSON object with no wrapping', () => {
   assert.deepEqual(extractJson('{"text":"hi"}'), { text: 'hi' });
@@ -25,7 +30,10 @@ test('extractJson returns the full wrapping object, not just an array value nest
 
 test('extractJson still correctly parses a bare top-level array when that really is the schema (frameVision.js)', () => {
   const wrapped = 'Sure, here is the analysis:\n[{"frameId":"a","score":90},{"frameId":"b","score":40}]';
-  assert.deepEqual(extractJson(wrapped), [{ frameId: 'a', score: 90 }, { frameId: 'b', score: 40 }]);
+  assert.deepEqual(extractJson(wrapped), [
+    { frameId: 'a', score: 90 },
+    { frameId: 'b', score: 40 },
+  ]);
 });
 
 test('extractJson handles a plain object wrapped in prose with no nested array', () => {

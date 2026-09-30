@@ -22,9 +22,15 @@ const MAX_TEXT_CHARS = Math.max(6000, Number(process.env.OPENAI_MAX_TEXT_CHARS |
 const analysisCache = new Map();
 const MAX_CACHE = 1000;
 
-function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-function isAiChatUrl(url) { return String(url || '') === AI_CHAT_URL; }
-function errorMessage(e) { return String(e?.response?.data?.error?.message || e?.message || ''); }
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+function isAiChatUrl(url) {
+  return String(url || '') === AI_CHAT_URL;
+}
+function errorMessage(e) {
+  return String(e?.response?.data?.error?.message || e?.message || '');
+}
 function isTpm429(e) {
   if (Number(e?.response?.status || 0) !== 429) return false;
   const type = String(e?.response?.data?.error?.type || '');
@@ -82,7 +88,9 @@ function assertHourlyBudget() {
   e.code = 'OPENAI_HOURLY_BUDGET_EXCEEDED';
   e.__openAiNoRetry = true;
   e.retryAt = state.retryAt;
-  console.warn(`[AI][HARD BUDGET] hourly cap reached ${state.used}/${state.limit} retryAt=${new Date(state.retryAt).toISOString()}`);
+  console.warn(
+    `[AI][HARD BUDGET] hourly cap reached ${state.used}/${state.limit} retryAt=${new Date(state.retryAt).toISOString()}`
+  );
   throw e;
 }
 function countTextChars(value) {
@@ -170,8 +178,12 @@ function countImages(data) {
 function classifyPurpose(data) {
   const text = [
     typeof data?.system === 'string' ? data.system : '',
-    Array.isArray(data?.messages) ? data.messages.map(m => typeof m?.content === 'string' ? m.content : '').join('\n') : '',
-  ].join('\n').slice(0, 12000);
+    Array.isArray(data?.messages)
+      ? data.messages.map(m => (typeof m?.content === 'string' ? m.content : '')).join('\n')
+      : '',
+  ]
+    .join('\n')
+    .slice(0, 12000);
   if (/YouTube.*검색|검색할 핵심 키워드|YouTube 검색 키워드/i.test(text)) return 'youtube_keyword';
   if (/쿠팡.*검색.*키워드|상품 키워드.*제안|검색 키워드 5개/i.test(text)) return 'product_keyword';
   if (/이미지|사진|vision|보이는 상품|영상 프레임/i.test(text)) return 'vision_analysis';
@@ -183,25 +195,33 @@ function logUsage(response, data, attempt = 1) {
   const usage = response?.data?.usage || {};
   const prompt = Number(usage.prompt_tokens || usage.input_tokens || 0);
   const completion = Number(usage.completion_tokens || usage.output_tokens || 0);
-  const total = Number(usage.total_tokens || (prompt + completion) || 0);
+  const total = Number(usage.total_tokens || prompt + completion || 0);
   const cached = Number(
     usage.prompt_tokens_details?.cached_tokens ||
-    usage.input_tokens_details?.cached_tokens ||
-    usage.cache_read_input_tokens ||
-    0
+      usage.input_tokens_details?.cached_tokens ||
+      usage.cache_read_input_tokens ||
+      0
   );
   const uncached = Math.max(0, prompt - cached);
   const chars = countTextChars({ system: data?.system, messages: data?.messages });
   const purpose = classifyPurpose(data);
   const images = countImages(data);
   const model = String(response?.data?.model || data?.model || 'unknown');
-  console.log(`[AI][USAGE] purpose=${purpose} model=${model} attempt=${attempt} input=${prompt} cached=${cached} uncached=${uncached} output=${completion} total=${total} textChars=${chars} images=${images}`);
+  console.log(
+    `[AI][USAGE] purpose=${purpose} model=${model} attempt=${attempt} input=${prompt} cached=${cached} uncached=${uncached} output=${completion} total=${total} textChars=${chars} images=${images}`
+  );
 }
 
 async function runGuardedRequest(url, rawData, config) {
   // A response timeout alone does not bound DNS/connect/TLS stalls.
   const timeout = Number(config?.timeout) > 0 ? Math.min(Number(config.timeout), 60000) : 60000;
-  config = { ...config, timeout, signal: config?.signal ? AbortSignal.any([config.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) };
+  config = {
+    ...config,
+    timeout,
+    signal: config?.signal
+      ? AbortSignal.any([config.signal, AbortSignal.timeout(timeout)])
+      : AbortSignal.timeout(timeout),
+  };
   const data = capRequestText(rawData);
   let key = null;
   if (isCacheableAnalysis(data)) {
@@ -280,16 +300,27 @@ function guardedPost(url, data, config) {
   const key = requestKey(data, config);
   const existing = inFlight.get(key);
   if (existing) {
-    console.log(`[AI][IN-FLIGHT DEDUPE] key=${key.slice(0,10)} reused=yes`);
+    console.log(`[AI][IN-FLIGHT DEDUPE] key=${key.slice(0, 10)} reused=yes`);
     return existing;
   }
 
-  const task = queue.then(() => runGuardedRequest(url, data, config)).finally(() => {
-    if (inFlight.get(key) === task) inFlight.delete(key);
-  });
+  const task = queue
+    .then(() => runGuardedRequest(url, data, config))
+    .finally(() => {
+      if (inFlight.get(key) === task) inFlight.delete(key);
+    });
   queue = task.catch(() => {});
   inFlight.set(key, task);
   return task;
 }
 
-module.exports = { guardedPost, truncateString, capContent, countTextChars, capRequestText, MAX_TEXT_CHARS, retryAfterMs, AI_CHAT_URL };
+module.exports = {
+  guardedPost,
+  truncateString,
+  capContent,
+  countTextChars,
+  capRequestText,
+  MAX_TEXT_CHARS,
+  retryAfterMs,
+  AI_CHAT_URL,
+};

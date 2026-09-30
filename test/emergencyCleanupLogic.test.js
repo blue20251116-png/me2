@@ -13,21 +13,44 @@ const os = require('os');
 // files and unrelated directories are left alone.
 function walkAndMaybeDelete(dir, { olderThanDays = 3, wipeAll = false, confirm = false } = {}) {
   const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
-  let scanned = 0, matched = 0, deleted = 0, freedBytes = 0;
+  let scanned = 0,
+    matched = 0,
+    deleted = 0,
+    freedBytes = 0;
   const errors = [];
   function walk(d) {
     let entries;
-    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { errors.push(e.message); return; }
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true });
+    } catch (e) {
+      errors.push(e.message);
+      return;
+    }
     for (const entry of entries) {
       const full = path.join(d, entry.name);
-      if (entry.isDirectory()) { walk(full); continue; }
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
       scanned++;
       let stat;
-      try { stat = fs.statSync(full); } catch (e) { errors.push(e.message); continue; }
+      try {
+        stat = fs.statSync(full);
+      } catch (e) {
+        errors.push(e.message);
+        continue;
+      }
       if (!wipeAll && stat.mtimeMs >= cutoff) continue;
       matched++;
       freedBytes += stat.size;
-      if (confirm) { try { fs.unlinkSync(full); deleted++; } catch (e) { errors.push(e.message); } }
+      if (confirm) {
+        try {
+          fs.unlinkSync(full);
+          deleted++;
+        } catch (e) {
+          errors.push(e.message);
+        }
+      }
     }
   }
   walk(dir);
@@ -41,7 +64,11 @@ function makeFixture() {
   fs.writeFileSync(path.join(tmp, 'new.jpg'), 'y'.repeat(2000));
   fs.mkdirSync(path.join(tmp, 'videos', '5'), { recursive: true });
   fs.writeFileSync(path.join(tmp, 'videos', '5', 'old.mp4'), 'z'.repeat(3000));
-  fs.utimesSync(path.join(tmp, 'videos', '5', 'old.mp4'), new Date(Date.now() - 10 * 86400000), new Date(Date.now() - 10 * 86400000));
+  fs.utimesSync(
+    path.join(tmp, 'videos', '5', 'old.mp4'),
+    new Date(Date.now() - 10 * 86400000),
+    new Date(Date.now() - 10 * 86400000)
+  );
   return tmp;
 }
 
@@ -76,12 +103,24 @@ test('wipeAll=true deletes every file regardless of age', () => {
 // "%EC%82%AD..." instead of the key itself.
 test('delete-button form carries the raw (HTML-escaped) key, not a URL-encoded copy', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'routes', 'system.js'), 'utf8');
-  const route = src.slice(src.indexOf("router.get('/admin/emergency-cleanup'"), src.indexOf("router.post('/admin/emergency-cleanup'"));
+  const route = src.slice(
+    src.indexOf("router.get('/admin/emergency-cleanup'"),
+    src.indexOf("router.post('/admin/emergency-cleanup'")
+  );
   assert.doesNotMatch(route, /encodeURIComponent\(String\(req\.query\.key\)\)/);
   const key = '삭제해도조아1234';
-  const escapeHtml = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escapeHtml = v =>
+    String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   // A browser un-escapes the attribute, then form-encodes it; the server's urlencoded parser decodes it.
-  const submitted = new URLSearchParams(new URLSearchParams({ key: escapeHtml(key).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&') }).toString()).get('key');
+  const submitted = new URLSearchParams(
+    new URLSearchParams({
+      key: escapeHtml(key)
+        .replace(/&quot;/g, '"')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&'),
+    }).toString()
+  ).get('key');
   assert.equal(submitted, key);
-  assert.match(route, /const key = String\(req\.query\.key\)\.replace\(\/&\/g, '&amp;'\)/);
+  assert.match(route, /const key = String\(req\.query\.key\)\s*\.replace\(\/&\/g, '&amp;'\)/);
 });

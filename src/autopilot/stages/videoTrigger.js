@@ -1,8 +1,17 @@
 const { launchChromium } = require('../../infra/browserLauncher');
 async function detectThreadsVideo(postUrl) {
   if (process.env.ME2_BROWSER_WORKER !== '1') {
-    try { return await require('../../infra/isolatedTask').isolatedBrowserTask('videoTrigger', 'detectThreadsVideo', [postUrl], 45000); }
-    catch (err) { console.warn(`[Autopilot][VIDEO DETECT] ${err.code || err.message}`); return false; }
+    try {
+      return await require('../../infra/isolatedTask').isolatedBrowserTask(
+        'videoTrigger',
+        'detectThreadsVideo',
+        [postUrl],
+        45000
+      );
+    } catch (err) {
+      console.warn(`[Autopilot][VIDEO DETECT] ${err.code || err.message}`);
+      return false;
+    }
   }
   if (!postUrl) return false;
 
@@ -34,11 +43,18 @@ async function detectThreadsVideo(postUrl) {
 
     const detected = await page.evaluate(() => {
       if (document.querySelector('video')) return true;
-      if (document.querySelector('meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"], meta[name="twitter:player:stream"]')) return true;
+      if (
+        document.querySelector(
+          'meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"], meta[name="twitter:player:stream"]'
+        )
+      )
+        return true;
 
       const html = document.documentElement?.innerHTML || '';
-      return /"(?:video_url|playable_url|playable_url_quality_hd|browser_native_hd_url)"\s*:/i.test(html)
-        || /https?:\\?\/\\?\/[^"'<>\s]+?\.mp4/i.test(html);
+      return (
+        /"(?:video_url|playable_url|playable_url_quality_hd|browser_native_hd_url)"\s*:/i.test(html) ||
+        /https?:\\?\/\\?\/[^"'<>\s]+?\.mp4/i.test(html)
+      );
     });
 
     await context.close();
@@ -48,7 +64,9 @@ async function detectThreadsVideo(postUrl) {
     return false;
   } finally {
     if (browser) {
-      try { await browser.close(); } catch {}
+      try {
+        await browser.close();
+      } catch {}
     }
   }
 }
@@ -56,16 +74,16 @@ async function detectThreadsVideo(postUrl) {
 // If the source post has a video the scraper could not resolve to a playable URL, mark it so the
 // scheduler runs the real video importer (which re-opens sourceUrl to find the mp4).
 async function addSourceVideoSignal(result) {
-  const existingVideos = Array.isArray(result?.sourceVideos)
-    ? result.sourceVideos.filter(Boolean)
-    : [];
+  const existingVideos = Array.isArray(result?.sourceVideos) ? result.sourceVideos.filter(Boolean) : [];
 
   if (existingVideos.length || !result?.sourceUrl) {
     return result;
   }
 
   const hasVideo = await detectThreadsVideo(result.sourceUrl);
-  console.log(`[Autopilot][VIDEO DETECT] source=${result.sourceUrl} detected=${hasVideo ? 'yes' : 'no'} playableUrls=${existingVideos.length}`);
+  console.log(
+    `[Autopilot][VIDEO DETECT] source=${result.sourceUrl} detected=${hasVideo ? 'yes' : 'no'} playableUrls=${existingVideos.length}`
+  );
 
   if (!hasVideo) return result;
 
@@ -78,6 +96,5 @@ async function addSourceVideoSignal(result) {
     sourceHasVideo: true,
   };
 }
-
 
 module.exports = { detectThreadsVideo, addSourceVideoSignal };

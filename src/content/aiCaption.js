@@ -240,17 +240,16 @@ ${voiceGuide(personaBlock)}
 async function generateCaption(accountId, { productName, price, youtubeSource }) {
   const account = getAccount(accountId);
 
-  const priceText = price
-    ? `${Number(price).toLocaleString('ko-KR')}원`
-    : '';
+  const priceText = price ? `${Number(price).toLocaleString('ko-KR')}원` : '';
 
   const { currentDate, currentSeason } = getKoreaContext();
 
   // youtubeSource가 있을 때만 참고 소재로 프롬프트에 추가한다 — 없으면 기존 프롬프트와 100% 동일하게 동작.
   // 영상 제목/설명은 "아이디어 참고자료"로만 쓰고, 그대로 베끼거나 없는 사실을 지어내지 않도록
   // 명확히 제한한다.
-  const youtubeContext = youtubeSource && youtubeSource.title
-    ? `
+  const youtubeContext =
+    youtubeSource && youtubeSource.title
+      ? `
 
 참고용 콘텐츠 소재 (YouTube 영상 — 아이디어 참고용일 뿐, 절대 그대로 베끼지 말 것):
 영상 제목: ${youtubeSource.title}
@@ -264,7 +263,7 @@ ${youtubeSource.description ? `영상 설명: ${String(youtubeSource.description
 - 영상에 연예인/유명인이 등장하더라도, 그 사람이 이 상품을 추천했다거나 매일 사용한다고
   임의로 지어내지 않는다 — 확인 가능한 것은 "이런 상황/장면이 나온다" 정도까지만이다
 - 상품 설명부터 바로 시작하는 광고문 형태로 쓰지 않는다`
-    : '';
+      : '';
 
   const userMessage = `
 현재 날짜: ${currentDate}
@@ -301,17 +300,25 @@ ${priceText ? `가격: ${priceText}` : ''}${youtubeContext}
 // 규칙 1이 금지하는 "확정적인 현재 날씨 단정" 표현만 좁게 잡아서, 정상적인
 // "다음 계절 대비" 문구(예: "가을 오면 입을 코트 미리 저장해둠")까지 오탐하지 않게 한다.
 const WEATHER_CLAIM_PATTERNS = [
-  /너무\s*추워/, /너무\s*더워/, /엄청\s*추운/, /엄청\s*더운/,
-  /한파/, /폭염/, /눈이\s*(엄청\s*)?와서/, /비가\s*(엄청\s*)?와서/,
-  /추운\s*아침/, /더운\s*아침/, /옷장이\s*고장/,
+  /너무\s*추워/,
+  /너무\s*더워/,
+  /엄청\s*추운/,
+  /엄청\s*더운/,
+  /한파/,
+  /폭염/,
+  /눈이\s*(엄청\s*)?와서/,
+  /비가\s*(엄청\s*)?와서/,
+  /추운\s*아침/,
+  /더운\s*아침/,
+  /옷장이\s*고장/,
 ];
 
 function violatesWeatherClaim(text) {
-  return WEATHER_CLAIM_PATTERNS.some((re) => re.test(text));
+  return WEATHER_CLAIM_PATTERNS.some(re => re.test(text));
 }
 
 function filterWeatherMismatch(variants) {
-  const safe = variants.filter((v) => !violatesWeatherClaim(v));
+  const safe = variants.filter(v => !violatesWeatherClaim(v));
   if (safe.length) return safe;
   // 5개 다 걸리는 극히 드문 경우엔, 발행이 아예 안 막히도록 원본을 그대로 반환하고 로그만 남긴다
   console.error('[캡션 필터] 생성된 글 전부에서 날씨 단정 표현이 감지됨 — 필터링 없이 원본 반환');
@@ -332,7 +339,7 @@ function stripLeadingOrdinalLabel(text) {
 function splitVariants(text) {
   const variants = text
     .split(/\n\s*---\s*\n/)
-    .map((v) => stripLeadingOrdinalLabel(v.trim()).trim())
+    .map(v => stripLeadingOrdinalLabel(v.trim()).trim())
     .filter(Boolean);
 
   const parsed = variants.length ? variants.slice(0, 5) : [stripLeadingOrdinalLabel(text.trim()).trim()];
@@ -382,7 +389,7 @@ function makeKeywordSystemPrompt() {
 function parseKeywordList(text) {
   const list = text
     .split('\n')
-    .map((line) => line.replace(/^[\d\.\-\*\s]+/, '').trim())
+    .map(line => line.replace(/^[\d\.\-\*\s]+/, '').trim())
     .filter(Boolean);
   if (!list.length) throw new Error('키워드 후보를 받지 못했습니다');
   return list.slice(0, 5);
@@ -446,7 +453,7 @@ async function suggestYoutubeSearchKeywords(accountId, productName) {
   if (!text) throw new Error('키워드 후보를 받지 못했습니다');
   return text
     .split('\n')
-    .map((line) => line.replace(/^[\d\.\-\*\s]+/, '').trim())
+    .map(line => line.replace(/^[\d\.\-\*\s]+/, '').trim())
     .filter(Boolean)
     .slice(0, 3);
 }

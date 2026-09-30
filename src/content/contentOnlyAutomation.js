@@ -7,9 +7,28 @@ const { callAI, callAIJson, imageBlock } = require('../integrations/aiClient');
 const REACTION_PERSONA = PERSONAS.find(p => p.id === 'reaction');
 
 const FALLBACK_TOPICS = [
-  '김치찌개','된장찌개','계란볶음밥','김치볶음밥','비빔국수','제육볶음','두부조림','감자조림',
-  '어묵볶음','오이무침','콩나물무침','순두부찌개','파스타','비빔밥','카레','마파두부',
-  '닭갈비','잔치국수','메밀국수','두부강정','감자채볶음','떡볶이'
+  '김치찌개',
+  '된장찌개',
+  '계란볶음밥',
+  '김치볶음밥',
+  '비빔국수',
+  '제육볶음',
+  '두부조림',
+  '감자조림',
+  '어묵볶음',
+  '오이무침',
+  '콩나물무침',
+  '순두부찌개',
+  '파스타',
+  '비빔밥',
+  '카레',
+  '마파두부',
+  '닭갈비',
+  '잔치국수',
+  '메밀국수',
+  '두부강정',
+  '감자채볶음',
+  '떡볶이',
 ];
 
 function getAnthropicKey(accountId) {
@@ -66,7 +85,8 @@ async function humanizeHook(accountId, hook, dishName) {
   let text = String(hook || '').trim();
   if (!text || !looksBloggy(text)) return text;
   try {
-    const d = await callClaudeText(accountId,
+    const d = await callClaudeText(
+      accountId,
       `한국 Threads 말투 교정기다. 블로그/광고/AI 문체로 감지된 문장을 실제 사람이 친구한테 툭 말하는 짧은 반말로 바꾼다.
 
 ${voiceGuide()}
@@ -89,7 +109,7 @@ JSON={"text":""}만 출력한다.`,
 
 async function buildImageQueries(accountId, dish) {
   const queries = [];
-  const push = (q) => {
+  const push = q => {
     const v = String(q || '').trim();
     if (v && !queries.some(x => x.toLowerCase() === v.toLowerCase())) queries.push(v);
   };
@@ -113,18 +133,26 @@ async function visionCheck(accountId, dish, imageUrl) {
   if (!apiKey) return false;
   try {
     const d = await callAIJson(apiKey, {
-      system: '음식 사진 검수기다. 목표 음식과 완전히 동일하거나 일반 사용자가 봤을 때 같은 종류의 완성요리로 자연스럽게 받아들일 수 있으면 accept=true. 조리 전 재료, 포장제품, 완전히 다른 음식, 음식이 아닌 이미지는 false. 토핑/그릇/고명/재료 배치 차이는 허용한다. JSON={"accept":true/false,"confidence":0-100,"reason":"짧은 이유"}',
+      system:
+        '음식 사진 검수기다. 목표 음식과 완전히 동일하거나 일반 사용자가 봤을 때 같은 종류의 완성요리로 자연스럽게 받아들일 수 있으면 accept=true. 조리 전 재료, 포장제품, 완전히 다른 음식, 음식이 아닌 이미지는 false. 토핑/그릇/고명/재료 배치 차이는 허용한다. JSON={"accept":true/false,"confidence":0-100,"reason":"짧은 이유"}',
       userContent: [
-        { type: 'text', text: `목표 음식: ${dish}\n이 사진이 Threads 레시피 대표사진으로 써도 자연스러운 같은 종류의 완성요리인지 판정해.` },
+        {
+          type: 'text',
+          text: `목표 음식: ${dish}\n이 사진이 Threads 레시피 대표사진으로 써도 자연스러운 같은 종류의 완성요리인지 판정해.`,
+        },
         imageBlock(imageUrl),
       ],
-      temperature: 0, maxTokens: 170, timeout: 30000,
+      temperature: 0,
+      maxTokens: 170,
+      timeout: 30000,
     });
     const confidence = Number(d.confidence || 0);
     const reason = String(d.reason || '');
     const hardReject = /다른 음식|조리 전|생재료|포장|제품 사진|음식이 아님|완성요리가 아님/i.test(reason);
-    const ok = d.accept === true && (confidence >= 70) && !hardReject;
-    console.log(`[ContentOnly][Vision] ${ok ? '승인' : '거절'} dish="${dish}" confidence=${confidence} reason="${reason}"`);
+    const ok = d.accept === true && confidence >= 70 && !hardReject;
+    console.log(
+      `[ContentOnly][Vision] ${ok ? '승인' : '거절'} dish="${dish}" confidence=${confidence} reason="${reason}"`
+    );
     return ok;
   } catch (e) {
     console.log(`[ContentOnly][Vision] 실패 dish="${dish}": ${e.message}`);
@@ -182,7 +210,9 @@ async function pickPhotos(accountId, dish) {
         const before = approved.length;
         await collectApproved(accountId, dish, photos, approved);
         if (approved.length > before) sources.add('Pexels');
-      } catch (e) { console.log(`[ContentOnly][Pexels] 실패 query="${query}": ${e.message}`); }
+      } catch (e) {
+        console.log(`[ContentOnly][Pexels] 실패 query="${query}": ${e.message}`);
+      }
     }
   }
 
@@ -195,7 +225,9 @@ async function pickPhotos(accountId, dish) {
         const before = approved.length;
         await collectApproved(accountId, dish, photos, approved);
         if (approved.length > before) sources.add('Pixabay');
-      } catch (e) { console.log(`[ContentOnly][Pixabay] 실패 query="${query}": ${e.message}`); }
+      } catch (e) {
+        console.log(`[ContentOnly][Pixabay] 실패 query="${query}": ${e.message}`);
+      }
     }
   }
 
@@ -203,13 +235,21 @@ async function pickPhotos(accountId, dish) {
 }
 
 async function generateRecipe(accountId, target) {
-  let topics = FALLBACK_TOPICS.slice().sort(() => Math.random() - 0.5).slice(0, 8);
+  let topics = FALLBACK_TOPICS.slice()
+    .sort(() => Math.random() - 0.5)
+    .slice(0, 8);
   try {
-    const d = await callClaudeText(accountId,
+    const d = await callClaudeText(
+      accountId,
       '한국 Threads용 레시피 주제 기획자다. 실생활에서 쉽게 해먹는 서로 다른 요리 8개를 JSON으로 출력한다. 너무 희귀한 요리는 제외한다. JSON={"topics":["..."]}',
-      `타겟: ${target || '전체'}\n오늘 올리기 좋은 레시피 주제 8개`, { maxTokens: 400, json: true });
-    if (Array.isArray(d.topics) && d.topics.length) topics = [...new Set(d.topics.map(x => String(x).trim()).filter(Boolean))].slice(0, 8);
-  } catch (e) { console.log(`[ContentOnly][Topic] AI 실패, 폴백 사용: ${e.message}`); }
+      `타겟: ${target || '전체'}\n오늘 올리기 좋은 레시피 주제 8개`,
+      { maxTokens: 400, json: true }
+    );
+    if (Array.isArray(d.topics) && d.topics.length)
+      topics = [...new Set(d.topics.map(x => String(x).trim()).filter(Boolean))].slice(0, 8);
+  } catch (e) {
+    console.log(`[ContentOnly][Topic] AI 실패, 폴백 사용: ${e.message}`);
+  }
 
   for (const topic of topics.slice(0, 6)) {
     try {
@@ -223,7 +263,8 @@ async function generateRecipe(accountId, target) {
       // here would write a hook promising a reveal the comment can never deliver on, so this
       // path always uses the base reaction persona instead of rotating through the recipe pool.
       const persona = REACTION_PERSONA;
-      const r = await callClaudeText(accountId,
+      const r = await callClaudeText(
+        accountId,
         `한국 Threads 레시피 에디터다. JSON만 출력한다. 정확한 재료와 계량, 실제 따라할 수 있는 조리 순서 3~6단계를 만든다.
 
 ${voiceGuide(persona.block)}
@@ -233,13 +274,25 @@ ${voiceGuide(persona.block)}
 - 상품/구매/광고/제휴 이야기는 절대 넣지 않는다.
 - 가짜 개인경험은 만들지 않는다.
 JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","amount":""}],"steps":[""]}`,
-        `주제: ${topic}`, { maxTokens: 1100, json: true, temperature: 0.75 });
+        `주제: ${topic}`,
+        { maxTokens: 1100, json: true, temperature: 0.75 }
+      );
       const dishName = String(r.dishName || topic).trim();
-      const ingredients = Array.isArray(r.ingredients) ? r.ingredients.filter(x => x?.name && x?.amount).slice(0, 10) : [];
-      const steps = Array.isArray(r.steps) ? r.steps.map(x => String(x || '').trim()).filter(Boolean).slice(0, 6) : [];
+      const ingredients = Array.isArray(r.ingredients)
+        ? r.ingredients.filter(x => x?.name && x?.amount).slice(0, 10)
+        : [];
+      const steps = Array.isArray(r.steps)
+        ? r.steps
+            .map(x => String(x || '').trim())
+            .filter(Boolean)
+            .slice(0, 6)
+        : [];
       if (!ingredients.length || !steps.length) throw new Error('레시피 내용 부족');
       const img = await pickPhotos(accountId, dishName);
-      if (!img.photos.length) { console.log(`[ContentOnly][Recipe] 이미지 없음 → 다음 주제: ${dishName}`); continue; }
+      if (!img.photos.length) {
+        console.log(`[ContentOnly][Recipe] 이미지 없음 → 다음 주제: ${dishName}`);
+        continue;
+      }
       let hook = String(r.hook || `${dishName} 이거 생각보다 간단하네ㅋㅋ`).trim();
       hook = await humanizeHook(accountId, hook, dishName);
       const text = buildRecipeText(hook, pickRecipeCommentTeaser());
@@ -248,13 +301,20 @@ JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","am
       const recipeCommentText = `✅ ${dishName} (${String(r.servings || '2인분').trim()} 기준)\n\n${ing}\n\n✅ 만드는 법\n${cooking}`;
       console.log(`[ContentOnly][Recipe] 선택 dish="${dishName}" images=${img.photos.length}`);
       return {
-        text, recipeCommentText, link: null,
+        text,
+        recipeCommentText,
+        link: null,
         imageUrl: img.photos[0].imageUrl,
         extraImageUrl: img.photos[1]?.imageUrl || null,
         imageSourceLabel: `${img.source || 'Stock'}+Vision 요리사진 ${img.photos.length}장`,
-        keyword: dishName, trendNote: '쿠팡 API 없음 · 순수 레시피형', target, persona: persona.id,
+        keyword: dishName,
+        trendNote: '쿠팡 API 없음 · 순수 레시피형',
+        target,
+        persona: persona.id,
       };
-    } catch (e) { console.log(`[ContentOnly][Recipe] 후보 실패 "${topic}": ${e.message}`); }
+    } catch (e) {
+      console.log(`[ContentOnly][Recipe] 후보 실패 "${topic}": ${e.message}`);
+    }
   }
   throw new Error('Vision 통과 음식사진이 있는 레시피를 찾지 못했습니다');
 }
@@ -283,11 +343,33 @@ async function generateDailyStory(accountId, target) {
   const persona = pickPersona({ mode: 'lifestyle', text: '' });
   console.log(`[ContentOnly][DailyStory] persona picked="${persona.name}"(${persona.id})`);
   const system = buildDailyStorySystemPrompt(persona.block);
-  let text = await callClaudeText(accountId, system, `타겟: ${target || '전체'}\n오늘 Threads에 올릴 자연스러운 일상글 하나만 작성해.`, { maxTokens: 350, temperature: 1.0 });
+  let text = await callClaudeText(
+    accountId,
+    system,
+    `타겟: ${target || '전체'}\n오늘 Threads에 올릴 자연스러운 일상글 하나만 작성해.`,
+    { maxTokens: 350, temperature: 1.0 }
+  );
   text = text.replace(/^["'“”]+|["'“”]+$/g, '').trim();
   if (looksBloggy(text)) text = await humanizeHook(accountId, text, '일상');
   text = assertVoice(text, { mode: 'lifestyle' });
-  return { text, link: null, imageUrl: null, extraImageUrl: null, keyword: '일상', trendNote: '쿠팡 API 없음 · 순수 일상형', target, persona: persona.id };
+  return {
+    text,
+    link: null,
+    imageUrl: null,
+    extraImageUrl: null,
+    keyword: '일상',
+    trendNote: '쿠팡 API 없음 · 순수 일상형',
+    target,
+    persona: persona.id,
+  };
 }
 
-module.exports = { generateRecipe, generateDailyStory, RECIPE_COMMENT_TEASERS, pickRecipeCommentTeaser, buildRecipeText, buildDailyStorySystemPrompt, looksBloggy };
+module.exports = {
+  generateRecipe,
+  generateDailyStory,
+  RECIPE_COMMENT_TEASERS,
+  pickRecipeCommentTeaser,
+  buildRecipeText,
+  buildDailyStorySystemPrompt,
+  looksBloggy,
+};

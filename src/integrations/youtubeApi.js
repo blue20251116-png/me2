@@ -64,7 +64,7 @@ async function searchVideos({ apiKey, keyword, order = 'relevance', maxResults =
     timeout: 10000,
   });
 
-  const videoIds = (searchRes.data?.items || []).map((it) => it.id?.videoId).filter(Boolean);
+  const videoIds = (searchRes.data?.items || []).map(it => it.id?.videoId).filter(Boolean);
   if (!videoIds.length) return [];
 
   const videosRes = await axios.get(VIDEOS_URL, {
@@ -79,11 +79,11 @@ async function searchVideos({ apiKey, keyword, order = 'relevance', maxResults =
   const items = videosRes.data?.items || [];
 
   // search 결과 순서(정렬 기준 반영)를 그대로 유지하기 위해 videoIds 순서대로 정렬해서 반환
-  const byId = new Map(items.map((v) => [v.id, v]));
+  const byId = new Map(items.map(v => [v.id, v]));
   return videoIds
-    .map((id) => byId.get(id))
+    .map(id => byId.get(id))
     .filter(Boolean)
-    .map((v) => {
+    .map(v => {
       const durationSeconds = parseISODurationToSeconds(v.contentDetails?.duration);
       return {
         id: v.id,

@@ -46,7 +46,7 @@ test('makeSystemPrompt still works with no persona argument (default reaction pe
 // the post" branch instead, for this tool specifically (the shared curiosity persona text itself
 // is untouched, since the comment-defer option IS valid for tools that post a real follow-up
 // comment, like materialWriter.js).
-test('makeSystemPrompt resolves the curiosity persona\'s comment-defer option against this tool\'s no-comment-inducing-phrase rule', () => {
+test("makeSystemPrompt resolves the curiosity persona's comment-defer option against this tool's no-comment-inducing-phrase rule", () => {
   const curiosity = PERSONAS.find(p => p.id === 'curiosity');
   const prompt = makeSystemPrompt(curiosity.block);
 

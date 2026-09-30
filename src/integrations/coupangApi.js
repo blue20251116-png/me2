@@ -42,7 +42,9 @@ CREATE INDEX IF NOT EXISTS idx_coupang_api_call_log_key_time ON coupang_api_call
   console.error('[CoupangApi][INIT] 테이블 생성 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message);
 }
 
-function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function hasCredentials(accountOrId) {
   const account = typeof accountOrId === 'object' ? accountOrId : getAccount(accountOrId);
@@ -50,7 +52,10 @@ function hasCredentials(accountOrId) {
 }
 
 function normalizedCoupangCredentials(account) {
-  return { accessKey: String(account?.coupang_access_key || '').trim(), secretKey: String(account?.coupang_secret_key || '').trim() };
+  return {
+    accessKey: String(account?.coupang_access_key || '').trim(),
+    secretKey: String(account?.coupang_secret_key || '').trim(),
+  };
 }
 function accessKeyHash(account) {
   const { accessKey } = normalizedCoupangCredentials(account);
@@ -66,8 +71,14 @@ async function reserveApiSlot(account) {
     const cutoff = now - RATE_WINDOW_MS;
     db.prepare('DELETE FROM coupang_api_call_log WHERE called_at_ms<=?').run(cutoff - 5000);
 
-    const globalRows = db.prepare('SELECT called_at_ms FROM coupang_api_call_log WHERE called_at_ms>? ORDER BY called_at_ms ASC').all(cutoff);
-    const keyRows = db.prepare('SELECT called_at_ms FROM coupang_api_call_log WHERE access_key_hash=? AND called_at_ms>? ORDER BY called_at_ms ASC').all(keyHash, cutoff);
+    const globalRows = db
+      .prepare('SELECT called_at_ms FROM coupang_api_call_log WHERE called_at_ms>? ORDER BY called_at_ms ASC')
+      .all(cutoff);
+    const keyRows = db
+      .prepare(
+        'SELECT called_at_ms FROM coupang_api_call_log WHERE access_key_hash=? AND called_at_ms>? ORDER BY called_at_ms ASC'
+      )
+      .all(keyHash, cutoff);
 
     let waitMs = 0;
     if (globalRows.length >= GLOBAL_CALLS_PER_MINUTE) {
@@ -83,7 +94,9 @@ async function reserveApiSlot(account) {
     }
 
     const safeWait = Math.max(100, Math.min(waitMs, RATE_WINDOW_MS));
-    console.log(`[Coupang][LOCAL THROTTLE] global<=${GLOBAL_CALLS_PER_MINUTE}/min key<=${PER_KEY_CALLS_PER_MINUTE}/min wait=${safeWait}ms`);
+    console.log(
+      `[Coupang][LOCAL THROTTLE] global<=${GLOBAL_CALLS_PER_MINUTE}/min key<=${PER_KEY_CALLS_PER_MINUTE}/min wait=${safeWait}ms`
+    );
     await sleep(safeWait);
   }
 }
@@ -96,7 +109,7 @@ function buildAuthHeader(account, method, pathWithQuery) {
   }
   const [path, query = ''] = pathWithQuery.split('?');
   const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
+  const pad = n => String(n).padStart(2, '0');
   const signedDate =
     String(now.getUTCFullYear()).slice(2) +
     pad(now.getUTCMonth() + 1) +
@@ -129,18 +142,24 @@ function parseRetryTime(message) {
 
 function setCooldown(accountId, reason, explicitUntil) {
   const until = explicitUntil || new Date(Date.now() + DEFAULT_RATE_LIMIT_COOLDOWN_MS).toISOString();
-  db.prepare(`INSERT INTO coupang_api_state(account_id,cooldown_until,cooldown_reason,updated_at)
+  db.prepare(
+    `INSERT INTO coupang_api_state(account_id,cooldown_until,cooldown_reason,updated_at)
     VALUES(?,?,?,datetime('now'))
     ON CONFLICT(account_id) DO UPDATE SET
       cooldown_until=excluded.cooldown_until,
       cooldown_reason=excluded.cooldown_reason,
-      updated_at=datetime('now')`).run(accountId, until, String(reason || '쿠팡 API 호출 제한'));
-  console.error(`[Coupang][COOLDOWN] account=${accountId} until=${until} reason="${String(reason || '').slice(0, 220)}"`);
+      updated_at=datetime('now')`
+  ).run(accountId, until, String(reason || '쿠팡 API 호출 제한'));
+  console.error(
+    `[Coupang][COOLDOWN] account=${accountId} until=${until} reason="${String(reason || '').slice(0, 220)}"`
+  );
   return until;
 }
 
 function getCooldown(accountId) {
-  const row = db.prepare('SELECT cooldown_until,cooldown_reason FROM coupang_api_state WHERE account_id=?').get(accountId);
+  const row = db
+    .prepare('SELECT cooldown_until,cooldown_reason FROM coupang_api_state WHERE account_id=?')
+    .get(accountId);
   if (!row?.cooldown_until) return null;
   if (Date.parse(row.cooldown_until) <= Date.now()) {
     db.prepare('DELETE FROM coupang_api_state WHERE account_id=?').run(accountId);
@@ -160,37 +179,48 @@ function assertNotCoolingDown(accountId) {
 }
 
 function cacheGet(accountId, cacheKey) {
-  const row = db.prepare('SELECT payload,expires_at FROM coupang_api_cache WHERE account_id=? AND cache_key=?').get(accountId, cacheKey);
+  const row = db
+    .prepare('SELECT payload,expires_at FROM coupang_api_cache WHERE account_id=? AND cache_key=?')
+    .get(accountId, cacheKey);
   if (!row) return null;
   if (Date.parse(row.expires_at) <= Date.now()) {
     db.prepare('DELETE FROM coupang_api_cache WHERE account_id=? AND cache_key=?').run(accountId, cacheKey);
     return null;
   }
-  try { return JSON.parse(row.payload); } catch { return null; }
+  try {
+    return JSON.parse(row.payload);
+  } catch {
+    return null;
+  }
 }
 
 function cacheSet(accountId, cacheKey, payload, ttlMs) {
   const expiresAt = new Date(Date.now() + ttlMs).toISOString();
-  db.prepare(`INSERT INTO coupang_api_cache(account_id,cache_key,payload,expires_at,created_at)
+  db.prepare(
+    `INSERT INTO coupang_api_cache(account_id,cache_key,payload,expires_at,created_at)
     VALUES(?,?,?,?,datetime('now'))
     ON CONFLICT(account_id,cache_key) DO UPDATE SET
       payload=excluded.payload,
       expires_at=excluded.expires_at,
-      created_at=datetime('now')`).run(accountId, cacheKey, JSON.stringify(payload || []), expiresAt);
+      created_at=datetime('now')`
+  ).run(accountId, cacheKey, JSON.stringify(payload || []), expiresAt);
 }
 
 function isRateLimitPayload(data, httpStatus) {
   const rCode = String(data?.rCode ?? '');
   const msg = String(data?.rMessage || data?.message || '');
-  return httpStatus === 429 ||
+  return (
+    httpStatus === 429 ||
     (httpStatus === 403 && /사용 횟수|rate|limit|초과/i.test(msg)) ||
-    (rCode === '403' && /사용 횟수|rate|limit|초과/i.test(msg));
+    (rCode === '403' && /사용 횟수|rate|limit|초과/i.test(msg))
+  );
 }
 
 function assertPartnersSuccess(accountId, data, label, httpStatus) {
   const rCode = data?.rCode;
   if (isRateLimitPayload(data, httpStatus)) {
-    const msg = `${label} 실패: rCode=${rCode ?? httpStatus} ${data?.rMessage || data?.message || 'API 호출 제한'}`.trim();
+    const msg =
+      `${label} 실패: rCode=${rCode ?? httpStatus} ${data?.rMessage || data?.message || 'API 호출 제한'}`.trim();
     const until = setCooldown(accountId, msg, parseRetryTime(msg));
     throw makeRateLimitError(msg, until);
   }
@@ -232,14 +262,17 @@ async function signedGet(accountId, pathWithQuery, label) {
     const status = err.response?.status;
     const data = err.response?.data;
     if (isRateLimitPayload(data, status)) {
-      const msg = `${label} 실패: rCode=${data?.rCode ?? status} ${data?.rMessage || data?.message || err.message}`.trim();
+      const msg =
+        `${label} 실패: rCode=${data?.rCode ?? status} ${data?.rMessage || data?.message || err.message}`.trim();
       const until = setCooldown(accountId, msg, parseRetryTime(msg));
       throw makeRateLimitError(msg, until);
     }
     if (Number(err.response?.status || 0) === 401) {
       const { accessKey, secretKey } = normalizedCoupangCredentials(account);
       const fp = crypto.createHash('sha256').update(accessKey).digest('hex').slice(0, 8);
-      console.error(`[Coupang][AUTH INVALID] account=${accountId} accessLen=${accessKey.length} secretLen=${secretKey.length} accessFp=${fp} reason="${err.response?.data?.message || err.message}"`);
+      console.error(
+        `[Coupang][AUTH INVALID] account=${accountId} accessLen=${accessKey.length} secretLen=${secretKey.length} accessFp=${fp} reason="${err.response?.data?.message || err.message}"`
+      );
     }
     throw err;
   }
@@ -268,10 +301,14 @@ async function searchProducts(accountId, keyword, limit = 10) {
   const data = await signedGet(accountId, `${path}?${params.toString()}`, '쿠팡 상품검색');
   const rawList = Array.isArray(data?.data?.productData) ? data.data.productData.map(mapProduct) : [];
   // 상품검색 URL을 canonical 상품 URL로 변환 후 딥링크 단축 사용
-  const list = rawList.map((product) => {
+  const list = rawList.map(product => {
     const productId = String(product?.productId || '').trim();
     if (!/^\d+$/.test(productId)) return product;
-    return { ...product, originalProductUrl: product.url || null, url: `https://www.coupang.com/vp/products/${productId}` };
+    return {
+      ...product,
+      originalProductUrl: product.url || null,
+      url: `https://www.coupang.com/vp/products/${productId}`,
+    };
   });
   cacheSet(accountId, cacheKey, list, list.length ? SEARCH_CACHE_MS : EMPTY_CACHE_MS);
   return list;
@@ -282,7 +319,7 @@ async function createDeeplink(accountId, urls) {
   if (!account) throw new Error(`쿠팡 계정을 찾을 수 없습니다: accountId=${accountId}`);
   const input = Array.isArray(urls) ? urls : [urls];
   if (!hasCredentials(account)) {
-    return input.map((url) => ({ originalUrl: url, shortenUrl: url, landingUrl: url, passthrough: true }));
+    return input.map(url => ({ originalUrl: url, shortenUrl: url, landingUrl: url, passthrough: true }));
   }
 
   assertNotCoolingDown(accountId);
@@ -295,7 +332,11 @@ async function createDeeplink(accountId, urls) {
       timeout: 10000,
     });
     assertPartnersSuccess(accountId, res.data, '쿠팡 딥링크', res.status);
-    return (res.data?.data || []).map((d) => ({ originalUrl: d.originalUrl, shortenUrl: d.shortenUrl, landingUrl: d.landingUrl }));
+    return (res.data?.data || []).map(d => ({
+      originalUrl: d.originalUrl,
+      shortenUrl: d.shortenUrl,
+      landingUrl: d.landingUrl,
+    }));
   } catch (err) {
     err.service = 'coupang';
     if (err.isCoupangRateLimit) throw err;
@@ -324,15 +365,27 @@ async function getGoldboxProducts(accountId, limit = 20) {
   const path = `${PARTNERS_BASE}/products/goldbox`;
   const q = params.toString();
   const data = await signedGet(accountId, q ? `${path}?${q}` : path, '쿠팡 골드박스');
-  const list = Array.isArray(data?.data) ? data.data.map((p) => ({ ...mapProduct(p), discountRate: p.discountRate || null })) : [];
+  const list = Array.isArray(data?.data)
+    ? data.data.map(p => ({ ...mapProduct(p), discountRate: p.discountRate || null }))
+    : [];
   cacheSet(accountId, cacheKey, list, list.length ? SEARCH_CACHE_MS : EMPTY_CACHE_MS);
   return list.slice(0, Math.max(1, Number(limit) || 20));
 }
 
 const BEST_CATEGORY_IDS = {
-  '여성패션': 1001, '남성패션': 1002, '뷰티': 1010, '출산/유아동': 1011, '식품': 1012,
-  '주방용품': 1013, '생활용품': 1014, '홈인테리어': 1015, '가전디지털': 1016,
-  '스포츠/레저': 1017, '자동차용품': 1018, '헬스/건강식품': 1024, '반려동물용품': 1029,
+  여성패션: 1001,
+  남성패션: 1002,
+  뷰티: 1010,
+  '출산/유아동': 1011,
+  식품: 1012,
+  주방용품: 1013,
+  생활용품: 1014,
+  홈인테리어: 1015,
+  가전디지털: 1016,
+  '스포츠/레저': 1017,
+  자동차용품: 1018,
+  '헬스/건강식품': 1024,
+  반려동물용품: 1029,
 };
 
 async function getBestCategoryProducts(accountId, categoryId, limit = 20) {
@@ -357,7 +410,9 @@ async function getBestCategoryProducts(accountId, categoryId, limit = 20) {
 function isRateLimitError(err) {
   return !!(err?.isCoupangRateLimit || err?.code === 'COUPANG_RATE_LIMIT');
 }
-function getApiCooldown(accountId) { return getCooldown(accountId); }
+function getApiCooldown(accountId) {
+  return getCooldown(accountId);
+}
 
 module.exports = {
   searchProducts,

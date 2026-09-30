@@ -1,7 +1,15 @@
 'use strict';
 const express = require('express');
 const crypto = require('crypto');
-const { listAccounts, getAccount, createAccount, updateAccount, deleteAccount, DEFAULT_DISCLOSURE_TEMPLATE, canAddThreadsAccount } = require('../../infra/db');
+const {
+  listAccounts,
+  getAccount,
+  createAccount,
+  updateAccount,
+  deleteAccount,
+  DEFAULT_DISCLOSURE_TEMPLATE,
+  canAddThreadsAccount,
+} = require('../../infra/db');
 const threadsApi = require('../../threads/threadsApi');
 const { expiryIso } = require('../../threads/tokenRefresh');
 const { requireAccount } = require('../middleware');
@@ -117,11 +125,22 @@ router.get('/auth/callback', async (req, res) => {
     if (!accountId) throw new Error('콜백에 계정 정보(state)가 없습니다');
     const pending = req.session.threadsOauth;
     delete req.session.threadsOauth;
-    if (!pending || !nonce || pending.nonce !== nonce || Number(pending.accountId) !== accountId || Date.now() - Number(pending.createdAt || 0) > 30 * 60000) {
-      return res.status(400).send('연결 실패: 연결 요청이 만료되었거나 올바르지 않습니다. 대시보드에서 "스레드 계정으로 연결하기"를 다시 눌러주세요.');
+    if (
+      !pending ||
+      !nonce ||
+      pending.nonce !== nonce ||
+      Number(pending.accountId) !== accountId ||
+      Date.now() - Number(pending.createdAt || 0) > 30 * 60000
+    ) {
+      return res
+        .status(400)
+        .send(
+          '연결 실패: 연결 요청이 만료되었거나 올바르지 않습니다. 대시보드에서 "스레드 계정으로 연결하기"를 다시 눌러주세요.'
+        );
     }
     const target = getAccount(accountId);
-    if (!target || target.user_id !== req.currentUser.id) return res.status(403).send('연결 실패: 본인 소유의 계정만 연결할 수 있습니다');
+    if (!target || target.user_id !== req.currentUser.id)
+      return res.status(403).send('연결 실패: 본인 소유의 계정만 연결할 수 있습니다');
 
     const shortLived = await threadsApi.exchangeCodeForToken(accountId, code);
     const longLived = await threadsApi.exchangeForLongLivedToken(accountId, shortLived.access_token);

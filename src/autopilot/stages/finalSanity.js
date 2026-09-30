@@ -5,12 +5,20 @@ const { collectPostDetails } = require('../../threads/benchmarkAccounts');
 
 const MAX_MATERIAL_ROUNDS = 2;
 
-function clean(v) { return String(v || '').replace(/\s+/g, ' ').trim(); }
-function sanitizeBody(text) { return normalizeVoice(text); }
+function clean(v) {
+  return String(v || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function sanitizeBody(text) {
+  return normalizeVoice(text);
+}
 
 function sourceEvidence(detail) {
   return [detail?.sourceText, ...(Array.isArray(detail?.authorReplies) ? detail.authorReplies : [])]
-    .map(v => String(v || '')).filter(Boolean).join('\n');
+    .map(v => String(v || ''))
+    .filter(Boolean)
+    .join('\n');
 }
 
 function affiliateKickLabel(productName) {
@@ -34,7 +42,8 @@ async function withFreshMaterialRounds(buildOnce) {
   let lastError = null;
   for (let round = 1; round <= MAX_MATERIAL_ROUNDS; round++) {
     try {
-      if (round > 1) console.log(`[AutopilotV3][YIELD RETRY] 새 소재 묶음 재탐색 round=${round}/${MAX_MATERIAL_ROUNDS}`);
+      if (round > 1)
+        console.log(`[AutopilotV3][YIELD RETRY] 새 소재 묶음 재탐색 round=${round}/${MAX_MATERIAL_ROUNDS}`);
       return await buildOnce();
     } catch (error) {
       lastError = error;
@@ -48,25 +57,41 @@ async function withFreshMaterialRounds(buildOnce) {
 // Re-reads the source post: drops a recipe "secret ingredient" the source never mentions, then
 // sanitizes the body text.
 async function recheckSourceAndSanitize(result) {
-    if (!result) return result;
-    let detail = null;
-    if (result.sourceUrl && result.sourceUsername) {
-      try { detail = await collectPostDetails(result.sourceUrl, result.sourceUsername); }
-      catch (e) { console.warn(`[AutopilotV3][FINAL SOURCE] 원문 재확인 실패 reason="${e.message}"`); }
+  if (!result) return result;
+  let detail = null;
+  if (result.sourceUrl && result.sourceUsername) {
+    try {
+      detail = await collectPostDetails(result.sourceUrl, result.sourceUsername);
+    } catch (e) {
+      console.warn(`[AutopilotV3][FINAL SOURCE] 원문 재확인 실패 reason="${e.message}"`);
     }
-    if (result.mode === 'recipe' && detail) {
-      try {
-        const evidence = sourceEvidence(detail);
-        const secret = clean(result.secretTerm);
-        const secretIsGrounded = secret && evidence.includes(secret);
-        const label = affiliateKickLabel(result?.product?.name);
-        if (!secretIsGrounded) result.secretTerm = '';
-        console.log(`[AutopilotV3][FINAL RECIPE GUARD] local-only source recheck source=${result.sourceUrl} kick=${label || 'none'}`);
-      } catch (e) { console.warn(`[AutopilotV3][FINAL RECIPE GUARD] 원문 재확인 실패 reason="${e.message}"`); }
+  }
+  if (result.mode === 'recipe' && detail) {
+    try {
+      const evidence = sourceEvidence(detail);
+      const secret = clean(result.secretTerm);
+      const secretIsGrounded = secret && evidence.includes(secret);
+      const label = affiliateKickLabel(result?.product?.name);
+      if (!secretIsGrounded) result.secretTerm = '';
+      console.log(
+        `[AutopilotV3][FINAL RECIPE GUARD] local-only source recheck source=${result.sourceUrl} kick=${label || 'none'}`
+      );
+    } catch (e) {
+      console.warn(`[AutopilotV3][FINAL RECIPE GUARD] 원문 재확인 실패 reason="${e.message}"`);
     }
-    result.text = sanitizeBody(result.text);
-    console.log(`[AutopilotV3][FINAL VOICE] v12 yield-retry mode=${result.mode} preview="${result.text.slice(0,160).replace(/\n/g,' / ')}"`);
-    return result;
+  }
+  result.text = sanitizeBody(result.text);
+  console.log(
+    `[AutopilotV3][FINAL VOICE] v12 yield-retry mode=${result.mode} preview="${result.text.slice(0, 160).replace(/\n/g, ' / ')}"`
+  );
+  return result;
 }
 
-module.exports = { sanitizeBody, sourceEvidence, isMaterialBatchExhausted, MAX_MATERIAL_ROUNDS, withFreshMaterialRounds, recheckSourceAndSanitize };
+module.exports = {
+  sanitizeBody,
+  sourceEvidence,
+  isMaterialBatchExhausted,
+  MAX_MATERIAL_ROUNDS,
+  withFreshMaterialRounds,
+  recheckSourceAndSanitize,
+};

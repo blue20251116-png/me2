@@ -1,7 +1,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { badRecipe, importantSourceIngredients, recipeContainsIngredient } = require('../src/autopilot/stages/recipeQuality');
+const {
+  badRecipe,
+  importantSourceIngredients,
+  recipeContainsIngredient,
+} = require('../src/autopilot/stages/recipeQuality');
 
 // REGRESSION (found via synthetic testing, hourly review): buildThreadsFirstAutopilot() already
 // runs scrubSecret() before this patch sees result.commentLead, replacing the designated secret
@@ -12,7 +16,8 @@ const { badRecipe, importantSourceIngredients, recipeContainsIngredient } = requ
 // pointless rewrite attempts and eventually throwing after 3 failures.
 test('badRecipe does not flag a recipe as incomplete just because its required ingredient is the intentionally-hidden secret one', () => {
   const result = { secretTerm: '마늘', sourceText: '이 요리에는 마늘이 듬뿍 들어가요' };
-  const commentLead = '🥘 재료\n비밀 재료 3쪽\n소금 약간\n\n🍳 만드는 법\n1. 비밀 재료를 다져서 볶는다\n2. 소금간을 한다';
+  const commentLead =
+    '🥘 재료\n비밀 재료 3쪽\n소금 약간\n\n🍳 만드는 법\n1. 비밀 재료를 다져서 볶는다\n2. 소금간을 한다';
   assert.deepEqual(importantSourceIngredients(result), ['마늘']);
   assert.equal(badRecipe(commentLead, result), false);
 });
@@ -20,7 +25,8 @@ test('badRecipe does not flag a recipe as incomplete just because its required i
 test('badRecipe still flags a recipe that is missing a required ingredient that is NOT the secret one', () => {
   const result = { secretTerm: '마늘', sourceText: '이 요리에는 마늘이랑 계란이 듬뿍 들어가요' };
   // "계란" never appears anywhere, and it is not the secret ingredient, so this is a real omission.
-  const commentLead = '🥘 재료\n비밀 재료 3쪽\n소금 약간\n\n🍳 만드는 법\n1. 비밀 재료를 다져서 볶는다\n2. 소금간을 한다';
+  const commentLead =
+    '🥘 재료\n비밀 재료 3쪽\n소금 약간\n\n🍳 만드는 법\n1. 비밀 재료를 다져서 볶는다\n2. 소금간을 한다';
   assert.equal(badRecipe(commentLead, result), true);
 });
 
@@ -38,9 +44,11 @@ test('badRecipe does not reject a well-formed recipe just because it puts a colo
   // colon variant was rejected as "bad" anyway, forcing a pointless rewrite loop that eventually
   // throws and kills the whole autopilot run for that topic.
   const result = { sourceText: '이 요리에는 계란이랑 대파가 들어가요' };
-  const colonRecipe = '🥘 재료:\n계란 2개, 대파 1대, 소금 약간\n\n🍳 만드는 법:\n1. 계란을 풀어 소금을 넣는다\n2. 대파를 썰어 넣고 볶는다';
+  const colonRecipe =
+    '🥘 재료:\n계란 2개, 대파 1대, 소금 약간\n\n🍳 만드는 법:\n1. 계란을 풀어 소금을 넣는다\n2. 대파를 썰어 넣고 볶는다';
   assert.equal(badRecipe(colonRecipe, result), false);
-  const fullwidthColonRecipe = '🥘 재료：\n계란 2개, 대파 1대, 소금 약간\n\n🍳 만드는 법：\n1. 계란을 풀어 소금을 넣는다\n2. 대파를 썰어 넣고 볶는다';
+  const fullwidthColonRecipe =
+    '🥘 재료：\n계란 2개, 대파 1대, 소금 약간\n\n🍳 만드는 법：\n1. 계란을 풀어 소금을 넣는다\n2. 대파를 썰어 넣고 볶는다';
   assert.equal(badRecipe(fullwidthColonRecipe, result), false);
 });
 

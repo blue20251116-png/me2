@@ -49,7 +49,10 @@ test('cacheImage reuses an existing cached file for the same URL without hitting
 
   const originalGet = axios.get;
   let networkCalled = false;
-  axios.get = async () => { networkCalled = true; throw new Error('network should not be called on a cache hit'); };
+  axios.get = async () => {
+    networkCalled = true;
+    throw new Error('network should not be called on a cache hit');
+  };
   try {
     const result = await cacheImage(url);
     assert.equal(networkCalled, false, 'a cache hit must not trigger a network request');

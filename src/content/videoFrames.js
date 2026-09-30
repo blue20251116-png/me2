@@ -37,22 +37,22 @@ function runCommand(cmd, args, { timeoutMs = PER_COMMAND_TIMEOUT_MS } = {}) {
       child.kill('SIGKILL');
     }, timeoutMs);
 
-    child.stdout?.on('data', (d) => {
+    child.stdout?.on('data', d => {
       stdout += d.toString();
       if (stdout.length > 200000) stdout = stdout.slice(-200000); // 방어적 상한
     });
-    child.stderr?.on('data', (d) => {
+    child.stderr?.on('data', d => {
       stderr += d.toString();
       if (stderr.length > 200000) stderr = stderr.slice(-200000);
     });
 
-    child.on('error', (err) => {
+    child.on('error', err => {
       clearTimeout(timer);
       // ENOENT = 바이너리 자체가 없음 (FFmpeg/FFprobe 미설치)
       reject(err);
     });
 
-    child.on('close', (code) => {
+    child.on('close', code => {
       clearTimeout(timer);
       if (timedOut) {
         return reject(new Error('영상 처리 시간이 초과되었습니다.'));
@@ -68,7 +68,7 @@ function runCommand(cmd, args, { timeoutMs = PER_COMMAND_TIMEOUT_MS } = {}) {
 // FFmpeg/FFprobe가 실제로 설치되어 있는지 확인. 앱 시작 시가 아니라 요청이 올 때만 체크한다
 // (설치 안 되어 있어도 서버 자체는 정상 기동해야 하므로).
 async function checkFfmpegAvailable() {
-  const check = async (cmd) => {
+  const check = async cmd => {
     try {
       await runCommand(cmd, ['-version'], { timeoutMs: 5000 });
       return true;
@@ -85,11 +85,16 @@ async function probeDuration(videoPath) {
   let stdout;
   try {
     const res = await runCommand(FFPROBE_PATH, [
-      '-v', 'error',
-      '-select_streams', 'v:0',
-      '-show_entries', 'stream=duration',
-      '-show_entries', 'format=duration',
-      '-of', 'default=noprint_wrappers=1:nokey=1',
+      '-v',
+      'error',
+      '-select_streams',
+      'v:0',
+      '-show_entries',
+      'stream=duration',
+      '-show_entries',
+      'format=duration',
+      '-of',
+      'default=noprint_wrappers=1:nokey=1',
       videoPath,
     ]);
     stdout = res.stdout;
@@ -98,8 +103,11 @@ async function probeDuration(videoPath) {
   }
 
   // stream=duration과 format=duration 둘 다 출력되므로 첫 번째 유효한 숫자를 사용
-  const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
-  const duration = lines.map(Number).find((n) => Number.isFinite(n) && n > 0);
+  const lines = stdout
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
+  const duration = lines.map(Number).find(n => Number.isFinite(n) && n > 0);
 
   if (!duration) {
     throw new Error('영상 파일을 분석할 수 없습니다.');
@@ -140,11 +148,16 @@ function computeExtractionTimestamps(duration) {
 async function extractOneFrame(videoPath, time, outputPath) {
   await runCommand(FFMPEG_PATH, [
     '-y',
-    '-ss', String(time),
-    '-i', videoPath,
-    '-frames:v', '1',
-    '-vf', `scale='min(${MAX_WIDTH},iw)':-2`,
-    '-q:v', String(JPEG_QUALITY),
+    '-ss',
+    String(time),
+    '-i',
+    videoPath,
+    '-frames:v',
+    '1',
+    '-vf',
+    `scale='min(${MAX_WIDTH},iw)':-2`,
+    '-q:v',
+    String(JPEG_QUALITY),
     outputPath,
   ]);
 }

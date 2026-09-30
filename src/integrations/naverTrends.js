@@ -26,7 +26,7 @@ async function rankKeywordsByTrend(accountId, keywords) {
       startDate,
       endDate,
       timeUnit: 'date',
-      keywordGroups: candidates.map((kw) => ({ groupName: kw, keywords: [kw] })),
+      keywordGroups: candidates.map(kw => ({ groupName: kw, keywords: [kw] })),
     },
     {
       headers: {
@@ -40,7 +40,7 @@ async function rankKeywordsByTrend(accountId, keywords) {
 
   // 각 키워드 그룹의 최근 3일 평균 비율로 순위 매김 (당일치 하루만 보면 튀는 값이 있을 수 있어서)
   const ranked = (res.data.results || [])
-    .map((group) => {
+    .map(group => {
       const recent = (group.data || []).slice(-3);
       const avg = recent.length ? recent.reduce((s, d) => s + d.ratio, 0) / recent.length : 0;
       return { keyword: group.title, avgRatio: avg };

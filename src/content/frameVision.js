@@ -87,10 +87,10 @@ async function analyzeFrames(accountId, frames) {
   }
   if (!Array.isArray(parsed)) throw new Error('AI 분석 결과 형식이 올바르지 않습니다');
 
-  const validFrameIds = new Set(frames.map((f) => f.id));
+  const validFrameIds = new Set(frames.map(f => f.id));
   return parsed
-    .filter((r) => r && validFrameIds.has(r.frameId))
-    .map((r) => ({
+    .filter(r => r && validFrameIds.has(r.frameId))
+    .map(r => ({
       frameId: r.frameId,
       category: ALLOWED_CATEGORIES.includes(r.category) ? r.category : 'general',
       score: Math.max(0, Math.min(100, Math.round(Number(r.score)) || 0)),
@@ -105,8 +105,8 @@ async function analyzeFrames(accountId, frames) {
 // bad로 분류된 프레임은 추천 후보에서 제외한다 (삭제는 하지 않음 — 사용자가 원하면 직접 선택 가능).
 function rankRecommendations(recommendations) {
   return recommendations
-    .filter((r) => r.category !== 'bad')
-    .map((r) => {
+    .filter(r => r.category !== 'bad')
+    .map(r => {
       const band = CATEGORY_PRIORITY[r.category] ?? 3;
       const weight = (3 - band) * 10 + r.score;
       return { ...r, _weight: weight };

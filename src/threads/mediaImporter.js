@@ -22,8 +22,7 @@ function validateThreadsUrl(raw) {
   if (u.protocol !== 'https:') throw new Error('https Threads URL만 사용할 수 있습니다.');
   const host = u.hostname.toLowerCase();
   const allowed =
-    host === 'threads.com' || host.endsWith('.threads.com') ||
-    host === 'threads.net' || host.endsWith('.threads.net');
+    host === 'threads.com' || host.endsWith('.threads.com') || host === 'threads.net' || host.endsWith('.threads.net');
   if (!allowed) throw new Error('Threads 공개 게시물 URL만 사용할 수 있습니다.');
   if (!/\/post\//i.test(u.pathname)) throw new Error('Threads 게시물 주소(/post/...)를 입력해주세요.');
   u.pathname = u.pathname.replace(/\/media\/?$/i, '').replace(/\/+$/, '');
@@ -46,7 +45,9 @@ function decodeEscapedUrl(value) {
     .replace(/\\\//g, '/')
     .replace(/&amp;/gi, '&')
     .replace(/&#x26;/gi, '&');
-  try { s = decodeURIComponent(s); } catch {}
+  try {
+    s = decodeURIComponent(s);
+  } catch {}
   return s;
 }
 
@@ -56,11 +57,16 @@ function isAllowedMediaUrl(raw) {
     if (u.protocol !== 'https:') return false;
     const h = u.hostname.toLowerCase();
     return (
-      h === 'threads.com' || h.endsWith('.threads.com') ||
-      h === 'threads.net' || h.endsWith('.threads.net') ||
-      h === 'instagram.com' || h.endsWith('.instagram.com') ||
-      h === 'cdninstagram.com' || h.endsWith('.cdninstagram.com') ||
-      h === 'fbcdn.net' || h.endsWith('.fbcdn.net')
+      h === 'threads.com' ||
+      h.endsWith('.threads.com') ||
+      h === 'threads.net' ||
+      h.endsWith('.threads.net') ||
+      h === 'instagram.com' ||
+      h.endsWith('.instagram.com') ||
+      h === 'cdninstagram.com' ||
+      h.endsWith('.cdninstagram.com') ||
+      h === 'fbcdn.net' ||
+      h.endsWith('.fbcdn.net')
     );
   } catch {
     return false;
@@ -101,8 +107,7 @@ function extractCandidates(html) {
   }
 
   const poster = decodeEscapedUrl(
-    $('meta[property="og:image"]').attr('content') ||
-    $('meta[name="twitter:image"]').attr('content') || ''
+    $('meta[property="og:image"]').attr('content') || $('meta[name="twitter:image"]').attr('content') || ''
   );
   const title = $('meta[property="og:title"]').attr('content') || $('title').text() || '';
   return { videos, poster, title: String(title).trim() };
@@ -164,7 +169,8 @@ async function extractCandidatesWithBrowser(sourceUrl) {
         try {
           const headers = await response.allHeaders().catch(() => ({}));
           const type = String(headers['content-type'] || '').toLowerCase();
-          if (type.startsWith('video/') || type.includes('application/octet-stream')) pushCandidate(videos, responseUrl);
+          if (type.startsWith('video/') || type.includes('application/octet-stream'))
+            pushCandidate(videos, responseUrl);
         } catch {}
       });
 
@@ -203,7 +209,11 @@ async function extractCandidatesWithBrowser(sourceUrl) {
         try {
           const playButtons = page.getByRole('button', { name: /play|재생/i });
           const n = Math.min(await playButtons.count(), 3);
-          for (let i = 0; i < n; i++) await playButtons.nth(i).click({ force: true, timeout: 1200 }).catch(() => {});
+          for (let i = 0; i < n; i++)
+            await playButtons
+              .nth(i)
+              .click({ force: true, timeout: 1200 })
+              .catch(() => {});
         } catch {}
 
         await page.waitForTimeout(4200);
@@ -227,7 +237,8 @@ async function extractCandidatesWithBrowser(sourceUrl) {
               add(video.currentSrc);
               add(video.src);
               add(video.getAttribute('src'));
-              for (const key of ['data-src', 'data-video-url', 'data-url', 'data-playable-url']) add(video.getAttribute(key));
+              for (const key of ['data-src', 'data-video-url', 'data-url', 'data-playable-url'])
+                add(video.getAttribute(key));
               video.querySelectorAll('source[src]').forEach(source => add(source.src || source.getAttribute('src')));
             });
             document.querySelectorAll('source[src]').forEach(source => add(source.src || source.getAttribute('src')));
@@ -236,8 +247,11 @@ async function extractCandidatesWithBrowser(sourceUrl) {
               'meta[property="og:video:url"]',
               'meta[property="og:video:secure_url"]',
               'meta[name="twitter:player:stream"]',
-            ]) add(document.querySelector(selector)?.content);
-            try { for (const entry of performance.getEntriesByType('resource')) add(entry?.name); } catch {}
+            ])
+              add(document.querySelector(selector)?.content);
+            try {
+              for (const entry of performance.getEntriesByType('resource')) add(entry?.name);
+            } catch {}
             return out;
           });
           for (const raw of domUrls) inspectUrl(raw);
@@ -246,7 +260,10 @@ async function extractCandidatesWithBrowser(sourceUrl) {
         if (!poster || !title) {
           try {
             const meta = await page.evaluate(() => ({
-              poster: document.querySelector('meta[property="og:image"]')?.content || document.querySelector('video')?.poster || '',
+              poster:
+                document.querySelector('meta[property="og:image"]')?.content ||
+                document.querySelector('video')?.poster ||
+                '',
               title: document.querySelector('meta[property="og:title"]')?.content || document.title || '',
             }));
             if (!poster) poster = meta.poster || '';
@@ -254,10 +271,17 @@ async function extractCandidatesWithBrowser(sourceUrl) {
           } catch {}
         }
 
-        const domVideoCount = await page.locator('video').count().catch(() => 0);
-        console.log(`[Threads import][BROWSER_SCAN] status=${response?.status?.() ?? '-'} url=${targetUrl} domVideos=${domVideoCount} candidates=${videos.length}`);
+        const domVideoCount = await page
+          .locator('video')
+          .count()
+          .catch(() => 0);
+        console.log(
+          `[Threads import][BROWSER_SCAN] status=${response?.status?.() ?? '-'} url=${targetUrl} domVideos=${domVideoCount} candidates=${videos.length}`
+        );
       } finally {
-        try { await page.close(); } catch {}
+        try {
+          await page.close();
+        } catch {}
       }
     };
 
@@ -282,7 +306,10 @@ async function extractCandidatesWithBrowser(sourceUrl) {
   } catch (err) {
     return { videos, poster, title, requestHeaders: {}, unavailable: false, error: err };
   } finally {
-    if (browser) try { await browser.close(); } catch {}
+    if (browser)
+      try {
+        await browser.close();
+      } catch {}
   }
 }
 
@@ -298,7 +325,9 @@ async function downloadCandidate(videoUrl, outputDir, requestHeaders = {}) {
       maxRedirects: 5,
       responseType: 'stream',
       headers: {
-        'user-agent': requestHeaders['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
+        'user-agent':
+          requestHeaders['user-agent'] ||
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
         referer: requestHeaders.referer || 'https://www.threads.com/',
         'accept-language': requestHeaders['accept-language'] || 'ko-KR,ko;q=0.9,en;q=0.8',
         ...(requestHeaders.cookie ? { cookie: requestHeaders.cookie } : {}),
@@ -327,15 +356,22 @@ async function downloadCandidate(videoUrl, outputDir, requestHeaders = {}) {
       writer.on('finish', resolve);
       response.data.pipe(writer);
     });
-    if (bytes < MIN_VIDEO_BYTES) throw new Error(`가져온 영상 파일이 너무 작습니다: ${bytes} bytes (< ${MIN_VIDEO_BYTES}). 다음 후보를 확인합니다.`);
+    if (bytes < MIN_VIDEO_BYTES)
+      throw new Error(
+        `가져온 영상 파일이 너무 작습니다: ${bytes} bytes (< ${MIN_VIDEO_BYTES}). 다음 후보를 확인합니다.`
+      );
     const head = fs.readFileSync(filepath, { encoding: null }).subarray(0, 32);
     const ascii = head.toString('latin1');
     const hasFtyp = head.length >= 12 && ascii.includes('ftyp');
     if (!hasFtyp) throw new Error('MP4 컨테이너 헤더(ftyp)를 확인할 수 없습니다. 다음 후보를 확인합니다.');
     return { filename, filepath, size: bytes };
   } catch (err) {
-    try { writer.destroy(); } catch {}
-    try { if (fs.existsSync(filepath)) fs.unlinkSync(filepath); } catch {}
+    try {
+      writer.destroy();
+    } catch {}
+    try {
+      if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+    } catch {}
     throw err;
   }
 }
@@ -377,13 +413,24 @@ async function importThreadsVideo({ url, outputDir }) {
   if (direct.videos.length) {
     const saved = await tryDownloadCandidates(direct.videos, outputDir, { referer: sourceUrl });
     if (saved.file) {
-      return { ...saved.file, sourceUrl, mediaUrl: saved.mediaUrl, poster: direct.poster, title: direct.title, extractionMethod: 'html' };
+      return {
+        ...saved.file,
+        sourceUrl,
+        mediaUrl: saved.mediaUrl,
+        poster: direct.poster,
+        title: direct.title,
+        extractionMethod: 'html',
+      };
     }
   }
 
   const browserFound = await extractCandidatesWithBrowser(sourceUrl);
   if (browserFound.videos.length) {
-    const saved = await tryDownloadCandidates(browserFound.videos, outputDir, browserFound.requestHeaders || { referer: sourceUrl });
+    const saved = await tryDownloadCandidates(
+      browserFound.videos,
+      outputDir,
+      browserFound.requestHeaders || { referer: sourceUrl }
+    );
     if (saved.file) {
       return {
         ...saved.file,
@@ -394,18 +441,25 @@ async function importThreadsVideo({ url, outputDir }) {
         extractionMethod: 'browser',
       };
     }
-    throw new Error(`브라우저에서 영상 주소는 찾았지만 파일 저장에 실패했습니다${saved.lastError ? `: ${saved.lastError.message}` : ''}`);
+    throw new Error(
+      `브라우저에서 영상 주소는 찾았지만 파일 저장에 실패했습니다${saved.lastError ? `: ${saved.lastError.message}` : ''}`
+    );
   }
 
-  if (browserFound.unavailable) throw new Error('HTML에서 영상을 찾지 못했고 서버에 Chromium 추출기가 설치되어 있지 않습니다. 최신 배포인지 확인해주세요.');
+  if (browserFound.unavailable)
+    throw new Error(
+      'HTML에서 영상을 찾지 못했고 서버에 Chromium 추출기가 설치되어 있지 않습니다. 최신 배포인지 확인해주세요.'
+    );
   if (browserFound.error) throw new Error(`Threads 브라우저 추출에도 실패했습니다: ${browserFound.error.message}`);
-  throw new Error('Threads 페이지에서 영상 게시물은 확인했지만 재생 가능한 영상 주소를 찾지 못했습니다. 일반 post 뷰와 /media 뷰를 모두 확인했습니다.');
+  throw new Error(
+    'Threads 페이지에서 영상 게시물은 확인했지만 재생 가능한 영상 주소를 찾지 못했습니다. 일반 post 뷰와 /media 뷰를 모두 확인했습니다.'
+  );
 }
 
 module.exports = { validateThreadsUrl, extractCandidates, extractCandidatesWithBrowser, importThreadsVideo };
 if (process.env.ME2_BROWSER_WORKER !== '1') {
   const { isolatedBrowserTask } = require('../infra/isolatedTask');
-  for (const method of ['importThreadsVideo','extractCandidatesWithBrowser']) {
+  for (const method of ['importThreadsVideo', 'extractCandidatesWithBrowser']) {
     module.exports[method] = (...args) => isolatedBrowserTask('mediaImporter', method, args, 180000);
   }
 }

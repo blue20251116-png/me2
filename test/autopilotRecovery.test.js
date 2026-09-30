@@ -23,32 +23,58 @@ function harness({ generationError, preflightError, env = {} } = {}) {
   let tick;
   let searches = 0;
   let generations = 0;
-  const account = { id: 1, autopilot_enabled: 1, threads_access_token: 'test-token', coupang_access_key: 'abcdef-old', coupang_secret_key: 'old-secret' };
-  const db = { prepare: sql => ({
-    all: () => sql.startsWith('SELECT id FROM accounts') ? [{ id: 1 }] : [],
-    get: () => ({ c: 0 }),
-    run: () => {},
-  }) };
+  const account = {
+    id: 1,
+    autopilot_enabled: 1,
+    threads_access_token: 'test-token',
+    coupang_access_key: 'abcdef-old',
+    coupang_secret_key: 'old-secret',
+  };
+  const db = {
+    prepare: sql => ({
+      all: () => (sql.startsWith('SELECT id FROM accounts') ? [{ id: 1 }] : []),
+      get: () => ({ c: 0 }),
+      run: () => {},
+    }),
+  };
   const dependencies = {
     fs: { readFileSync: () => '', writeFileSync: () => {}, existsSync: () => true, mkdirSync: () => {} },
-    path, crypto: require('node:crypto'),
-    'node-cron': { schedule: (_, fn) => { tick = fn; } },
+    path,
+    crypto: require('node:crypto'),
+    'node-cron': {
+      schedule: (_, fn) => {
+        tick = fn;
+      },
+    },
     '../config/paths': require('../src/config/paths'),
     '../infra/automationState': { setState() {}, budgetState: () => ({ available: true }) },
     '../threads/tokenRefresh': require('../src/threads/tokenRefresh'),
     '../infra/db': {
-      db, getAccount: () => account, getUserById: () => null,
-      listAllAccountsForSystem: () => [], canPublish: () => true, logUsage: () => {},
-      findMediaSourceForProduct: () => null, markMediaSourceUsed: () => {},
+      db,
+      getAccount: () => account,
+      getUserById: () => null,
+      listAllAccountsForSystem: () => [],
+      canPublish: () => true,
+      logUsage: () => {},
+      findMediaSourceForProduct: () => null,
+      markMediaSourceUsed: () => {},
     },
     '../threads/threadsApi': {
-      publishPost: async () => ({}), publishCarouselPost: async () => ({}),
-      publishReply: async () => ({}), getMediaInsights: async () => ({}),
+      publishPost: async () => ({}),
+      publishCarouselPost: async () => ({}),
+      publishReply: async () => ({}),
+      getMediaInsights: async () => ({}),
     },
     '../integrations/coupangApi': {
       hasCredentials: a => !!(a.coupang_access_key && a.coupang_secret_key),
-      searchProducts: async () => { searches++; if (preflightError) throw preflightError; return []; },
-      getApiCooldown: () => null, isRateLimitError: () => false, createDeeplink: async () => [],
+      searchProducts: async () => {
+        searches++;
+        if (preflightError) throw preflightError;
+        return [];
+      },
+      getApiCooldown: () => null,
+      isRateLimitError: () => false,
+      createDeeplink: async () => [],
     },
     '../content/contentOnlyAutomation': { generateRecipe: async () => ({}) },
     '../autopilot/pipeline': { buildAutopilotPost: async () => ({}) },
@@ -57,25 +83,53 @@ function harness({ generationError, preflightError, env = {} } = {}) {
   };
   const contextModule = { exports: {} };
   const context = vm.createContext({
-    require: name => { assert.ok(name in dependencies, name); return dependencies[name]; },
-    module: contextModule, exports: contextModule.exports,
-    __dirname, process: { env }, global: {}, URL,
-    Date: class extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } },
-    setTimeout: () => {}, console: { log() {}, warn() {}, error() {} },
+    require: name => {
+      assert.ok(name in dependencies, name);
+      return dependencies[name];
+    },
+    module: contextModule,
+    exports: contextModule.exports,
+    __dirname,
+    process: { env },
+    global: {},
+    URL,
+    Date: class extends Date {
+      constructor(...args) {
+        super(...(args.length ? args : [now]));
+      }
+      static now() {
+        return now;
+      }
+    },
+    setTimeout: () => {},
+    console: { log() {}, warn() {}, error() {} },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', 'publish', 'scheduler.js'), 'utf8'), context);
-  contextModule.exports.runAutopilotOnce = async () => { generations++; if (generationError) throw generationError; };
+  contextModule.exports.runAutopilotOnce = async () => {
+    generations++;
+    if (generationError) throw generationError;
+  };
   contextModule.exports.startAutopilotJob();
   return {
-    account, tick: () => tick(), advance: ms => { now += ms; },
-    recover: () => { generationError = null; preflightError = null; },
+    account,
+    tick: () => tick(),
+    advance: ms => {
+      now += ms;
+    },
+    recover: () => {
+      generationError = null;
+      preflightError = null;
+    },
     stats: () => ({ searches, generations }),
   };
 }
 
-const authError = (host, service) => Object.assign(new Error('Unauthorized'), {
-  response: { status: 401 }, config: { url: `https://${host}/endpoint` }, ...(service ? { service } : {}),
-});
+const authError = (host, service) =>
+  Object.assign(new Error('Unauthorized'), {
+    response: { status: 401 },
+    config: { url: `https://${host}/endpoint` },
+    ...(service ? { service } : {}),
+  });
 
 for (const host of ['api.openai.com', 'graph.threads.net', 'media.example.com']) {
   test(`${host} 401 does not block later generation as Coupang-invalid`, async () => {
@@ -112,7 +166,10 @@ test('same-prefix same-length credential rotation invalidates failure immediatel
 });
 
 test('legacy six-hour invalid TTL cannot keep an account blocked for six hours', async () => {
-  const h = harness({ preflightError: authError('api-gateway.coupang.com'), env: { COUPANG_INVALID_TTL_MS: '21600000' } });
+  const h = harness({
+    preflightError: authError('api-gateway.coupang.com'),
+    env: { COUPANG_INVALID_TTL_MS: '21600000' },
+  });
   await h.tick();
   h.recover();
   h.advance(10 * 60000);
@@ -131,15 +188,15 @@ test('quality hold does not repeatedly consume all remaining slots', async () =>
 });
 
 test('missing Threads token prevents browser and AI work', async () => {
-  const h=harness();
-  h.account.threads_access_token='';
+  const h = harness();
+  h.account.threads_access_token = '';
   await h.tick();
-  assert.deepEqual(h.stats(),{searches:0,generations:0});
+  assert.deepEqual(h.stats(), { searches: 0, generations: 0 });
 });
 
 test('expired Threads token prevents generation', async () => {
-  const h=harness();
-  h.account.threads_token_expires_at='2020-01-01T00:00:00Z';
+  const h = harness();
+  h.account.threads_token_expires_at = '2020-01-01T00:00:00Z';
   await h.tick();
-  assert.deepEqual(h.stats(),{searches:0,generations:0});
+  assert.deepEqual(h.stats(), { searches: 0, generations: 0 });
 });

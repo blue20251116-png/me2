@@ -11,7 +11,11 @@ const { publishContainer } = require('../src/threads/threadsApi');
 
 test('tags a failed threads_publish call with creation id', async () => {
   const originalPost = axios.post;
-  axios.post = async () => { const err = new Error('timeout'); err.code = 'ETIMEDOUT'; throw err; };
+  axios.post = async () => {
+    const err = new Error('timeout');
+    err.code = 'ETIMEDOUT';
+    throw err;
+  };
   try {
     await assert.rejects(
       publishContainer('creation-123', 'token', 1, 0),

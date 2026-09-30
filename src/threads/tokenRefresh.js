@@ -42,21 +42,31 @@ function expiryIso(expiresInSeconds, now = Date.now()) {
   return new Date(now + (Number.isFinite(sec) && sec > 0 ? sec * 1000 : TOKEN_LIFETIME_MS)).toISOString();
 }
 
-async function refreshDueTokens({ refresh = require('./threadsApi').refreshLongLivedToken, now = Date.now(), store = require('../infra/db') } = {}) {
+async function refreshDueTokens({
+  refresh = require('./threadsApi').refreshLongLivedToken,
+  now = Date.now(),
+  store = require('../infra/db'),
+} = {}) {
   const { getAccount, listAllAccountsForSystem, updateAccount } = store;
-  let refreshed = 0, failed = 0;
+  let refreshed = 0,
+    failed = 0;
   for (const { id } of listAllAccountsForSystem()) {
     const account = getAccount(id);
     if (!needsRefresh(account, now)) continue;
     try {
       const data = await refresh(account.threads_access_token);
       if (!data?.access_token) throw new Error('refresh 응답에 access_token이 없습니다');
-      updateAccount(id, { threads_access_token: data.access_token, threads_token_expires_at: expiryIso(data.expires_in, now) });
+      updateAccount(id, {
+        threads_access_token: data.access_token,
+        threads_token_expires_at: expiryIso(data.expires_in, now),
+      });
       refreshed++;
       console.log(`[Threads][TOKEN_REFRESH] account #${id} 갱신 완료`);
     } catch (e) {
       failed++;
-      console.warn(`[Threads][TOKEN_REFRESH] account #${id} 갱신 실패: ${e.response?.data?.error?.message || e.message}`);
+      console.warn(
+        `[Threads][TOKEN_REFRESH] account #${id} 갱신 실패: ${e.response?.data?.error?.message || e.message}`
+      );
     }
   }
   return { refreshed, failed };
@@ -69,4 +79,12 @@ function startTokenRefreshJob() {
   console.log('[Threads][TOKEN_REFRESH] daily long-lived token refresh ON (04:17 KST, <=10 days to expiry)');
 }
 
-module.exports = { parseTokenExpiry, isTokenExpired, needsRefresh, expiryIso, refreshDueTokens, startTokenRefreshJob, REFRESH_WITHIN_DAYS };
+module.exports = {
+  parseTokenExpiry,
+  isTokenExpired,
+  needsRefresh,
+  expiryIso,
+  refreshDueTokens,
+  startTokenRefreshJob,
+  REFRESH_WITHIN_DAYS,
+};

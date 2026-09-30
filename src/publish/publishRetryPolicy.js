@@ -4,7 +4,9 @@ const MAX_PUBLISH_ATTEMPTS = 3;
 
 function publishRetryable(err) {
   const status = Number(err?.response?.status || 0);
-  return status === 429 || status >= 500 || ['ECONNRESET','ETIMEDOUT','ECONNABORTED','EAI_AGAIN'].includes(err?.code);
+  return (
+    status === 429 || status >= 500 || ['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN'].includes(err?.code)
+  );
 }
 
 function hasKnownExternalCreation(err) {

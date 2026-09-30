@@ -19,16 +19,18 @@ function run(cmd, args, timeoutMs = TIMEOUT_MS) {
       child.kill('SIGKILL');
     }, timeoutMs);
 
-    child.stdout?.on('data', (d) => { stdout += d.toString(); });
-    child.stderr?.on('data', (d) => {
+    child.stdout?.on('data', d => {
+      stdout += d.toString();
+    });
+    child.stderr?.on('data', d => {
       stderr += d.toString();
       if (stderr.length > 200000) stderr = stderr.slice(-200000);
     });
-    child.on('error', (err) => {
+    child.on('error', err => {
       clearTimeout(timer);
       reject(err);
     });
-    child.on('close', (code) => {
+    child.on('close', code => {
       clearTimeout(timer);
       if (timedOut) return reject(new Error('영상 편집 시간이 초과되었습니다.'));
       if (code !== 0) return reject(new Error(`영상 편집 실패: ${stderr.slice(-1200)}`));
@@ -38,12 +40,11 @@ function run(cmd, args, timeoutMs = TIMEOUT_MS) {
 }
 
 async function probeDuration(videoPath) {
-  const { stdout } = await run(FFPROBE_PATH, [
-    '-v', 'error',
-    '-show_entries', 'format=duration',
-    '-of', 'default=noprint_wrappers=1:nokey=1',
-    videoPath,
-  ], 10000);
+  const { stdout } = await run(
+    FFPROBE_PATH,
+    ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', videoPath],
+    10000
+  );
   const duration = Number(String(stdout).trim());
   if (!Number.isFinite(duration) || duration <= 0) throw new Error('영상 길이를 확인할 수 없습니다.');
   return duration;
@@ -66,13 +67,7 @@ async function editVideo({ inputPath, outputDir, start = 0, end = null, mute = t
   const filename = `edited-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.mp4`;
   const outputPath = path.join(outputDir, filename);
 
-  const args = [
-    '-y',
-    '-ss', String(safeStart),
-    '-i', inputPath,
-    '-t', String(clipDuration),
-    '-map', '0:v:0',
-  ];
+  const args = ['-y', '-ss', String(safeStart), '-i', inputPath, '-t', String(clipDuration), '-map', '0:v:0'];
 
   if (mute) {
     args.push('-an');
@@ -80,13 +75,7 @@ async function editVideo({ inputPath, outputDir, start = 0, end = null, mute = t
     args.push('-map', '0:a?');
   }
 
-  args.push(
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '23',
-    '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart'
-  );
+  args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
 
   if (!mute) args.push('-c:a', 'aac', '-b:a', '128k');
   args.push(outputPath);
@@ -95,7 +84,9 @@ async function editVideo({ inputPath, outputDir, start = 0, end = null, mute = t
 
   const stat = fs.statSync(outputPath);
   if (stat.size > MAX_OUTPUT_BYTES) {
-    try { fs.unlinkSync(outputPath); } catch {}
+    try {
+      fs.unlinkSync(outputPath);
+    } catch {}
     throw new Error('편집된 영상이 200MB를 초과했습니다.');
   }
 

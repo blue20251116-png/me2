@@ -11,10 +11,15 @@ const { requireAuth } = require('./auth');
 const { uploadsDir } = require('./middleware');
 
 // bootstrapAdmin() writes to the users table; on a full disk it must not crash the boot.
-try { bootstrapAdmin(); } catch (e) { console.error('[Server][INIT] bootstrapAdmin 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message); }
+try {
+  bootstrapAdmin();
+} catch (e) {
+  console.error('[Server][INIT] bootstrapAdmin 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message);
+}
 
 function createApp() {
-  if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) throw new Error('SESSION_SECRET is required in production');
+  if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET)
+    throw new Error('SESSION_SECRET is required in production');
   const app = express();
 
   // Link-preview crawlers get a 404 for pages (keeps the dashboard out of previews) but can
@@ -38,17 +43,25 @@ function createApp() {
 
   app.use(require('./routes/system')); // /healthz, /admin/emergency-cleanup (must work without DB/session)
 
-  app.use(session({
-    store: new SQLiteSessionStore(),
-    secret: process.env.SESSION_SECRET || 'threads-scheduler-dev-secret-change-me',
-    resave: false,
-    saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 24 * 30, secure: process.env.NODE_ENV === 'production' },
-  }));
+  app.use(
+    session({
+      store: new SQLiteSessionStore(),
+      secret: process.env.SESSION_SECRET || 'threads-scheduler-dev-secret-change-me',
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        maxAge: 1000 * 60 * 60 * 24 * 30,
+        secure: process.env.NODE_ENV === 'production',
+      },
+    })
+  );
 
   // ---------- 공개 라우트 (로그인 없이 접근 가능) ----------
   app.use(express.static(PUBLIC_DIR, { index: false }));
-  for (const page of ['login.html', 'signup.html', 'status.html']) app.get(`/${page}`, (req, res) => res.sendFile(path.join(PUBLIC_DIR, page)));
+  for (const page of ['login.html', 'signup.html', 'status.html'])
+    app.get(`/${page}`, (req, res) => res.sendFile(path.join(PUBLIC_DIR, page)));
   app.use(require('./routes/auth'));
 
   // Threads API requires public media URLs, so /uploads is served before the auth gate.

@@ -13,7 +13,9 @@ function startDbRetention() {
   const controller = startRetentionCleanup(maintenanceDb, { uploadsDir: UPLOADS_DIR });
   process.once('exit', () => {
     controller.stop();
-    try { maintenanceDb.close(); } catch {}
+    try {
+      maintenanceDb.close();
+    } catch {}
   });
   return controller;
 }

@@ -35,7 +35,9 @@ router.delete('/api/upload-media/:filename', requireAccount, (req, res) => {
   const flatPath = path.join(uploadsDir, filename);
   if (fs.existsSync(flatPath)) {
     const like = `%/uploads/${filename}`;
-    const referenced = db.prepare("SELECT 1 FROM posts WHERE image_url LIKE ? OR extra_image_url LIKE ? OR video_url LIKE ? LIMIT 1").get(like, like, like);
+    const referenced = db
+      .prepare('SELECT 1 FROM posts WHERE image_url LIKE ? OR extra_image_url LIKE ? OR video_url LIKE ? LIMIT 1')
+      .get(like, like, like);
     if (referenced) return res.status(409).json({ error: '예약된 글이 사용 중인 파일은 삭제할 수 없습니다' });
     fs.unlinkSync(flatPath);
   }
@@ -81,7 +83,7 @@ router.post('/api/video/frames', requireAccount, async (req, res) => {
     const { duration, frames } = await videoFrames.extractFrames({ videoPath, outputDir });
 
     const baseUrl = getPublicBaseUrl(req, req.account);
-    const framesOut = frames.map((f) => ({
+    const framesOut = frames.map(f => ({
       id: `frame_${f.filename.replace(/[^0-9]/g, '')}`,
       time: f.time,
       url: `${baseUrl}/uploads/frames/${req.account.id}/${jobId}/${f.filename}`,
@@ -92,7 +94,7 @@ router.post('/api/video/frames', requireAccount, async (req, res) => {
     try {
       fs.writeFileSync(
         path.join(outputDir, 'manifest.json'),
-        JSON.stringify({ duration, frames: frames.map((f) => ({ time: f.time, filename: f.filename })) })
+        JSON.stringify({ duration, frames: frames.map(f => ({ time: f.time, filename: f.filename })) })
       );
     } catch (manifestErr) {
       // manifest 기록 실패는 AI 추천 기능만 못 쓰게 될 뿐 — 프레임 추출 자체는 이미 성공했으므로 무시
@@ -153,8 +155,8 @@ router.post('/api/video/frames/:jobId/recommend', requireAccount, async (req, re
 
     const baseUrl = getPublicBaseUrl(req, req.account);
     const frames = (manifest.frames || [])
-      .filter((f) => fs.existsSync(path.join(jobDir, f.filename)))
-      .map((f) => ({
+      .filter(f => fs.existsSync(path.join(jobDir, f.filename)))
+      .map(f => ({
         id: `frame_${f.filename.replace(/[^0-9]/g, '')}`,
         url: `${baseUrl}/uploads/frames/${req.account.id}/${jobId}/${f.filename}`,
       }));
@@ -170,7 +172,7 @@ router.post('/api/video/frames/:jobId/recommend', requireAccount, async (req, re
     res.json({
       success: true,
       recommendations,
-      recommended: ranked.slice(0, 2).map((r) => r.frameId), // Threads 이미지 최대 2장에 맞춰 상위 2개만
+      recommended: ranked.slice(0, 2).map(r => r.frameId), // Threads 이미지 최대 2장에 맞춰 상위 2개만
     });
   } catch (err) {
     console.log('[Vision] 분석 실패 — 수동 선택으로 폴백:', err.response?.data?.error?.message || err.message);

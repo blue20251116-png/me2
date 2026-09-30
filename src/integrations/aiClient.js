@@ -21,7 +21,9 @@ function extractText(res) {
 // ({"items":[...]}), so trying the array pattern first would greedily match just the inner
 // array and silently discard the object it belongs to whenever the model adds surrounding text.
 function extractJson(text) {
-  const cleaned = String(text || '').replace(/```json|```/gi, '').trim();
+  const cleaned = String(text || '')
+    .replace(/```json|```/gi, '')
+    .trim();
   try {
     return JSON.parse(cleaned);
   } catch {}
@@ -54,8 +56,11 @@ function looksLikeAnthropicKey(k) {
 }
 
 // userContent may be a plain string or an array of OpenAI content parts (for vision).
-async function callAI(apiKey, { system, userContent, model = DEFAULT_MODEL, maxTokens = 1200, temperature = 0.7, timeout = 30000 } = {}) {
-  const key = (!apiKey || looksLikeAnthropicKey(apiKey)) ? (process.env.OPENAI_API_KEY || apiKey) : apiKey;
+async function callAI(
+  apiKey,
+  { system, userContent, model = DEFAULT_MODEL, maxTokens = 1200, temperature = 0.7, timeout = 30000 } = {}
+) {
+  const key = !apiKey || looksLikeAnthropicKey(apiKey) ? process.env.OPENAI_API_KEY || apiKey : apiKey;
   if (!key) throw new Error('OpenAI API 키가 설정되지 않았습니다');
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
@@ -87,7 +92,9 @@ async function callAIJson(apiKey, options) {
 // up to 3 images per post; the content-only path; the manual frame analyzer, 8-15 frames per
 // call) is for identifying what a product/dish/scene is, which low detail (512px) handles fine.
 // Set OPENAI_IMAGE_DETAIL=high (or auto) to opt back in if small on-image text ever needs reading.
-const IMAGE_DETAIL = ['low', 'high', 'auto'].includes(process.env.OPENAI_IMAGE_DETAIL) ? process.env.OPENAI_IMAGE_DETAIL : 'low';
+const IMAGE_DETAIL = ['low', 'high', 'auto'].includes(process.env.OPENAI_IMAGE_DETAIL)
+  ? process.env.OPENAI_IMAGE_DETAIL
+  : 'low';
 
 function imageBlock(url) {
   return { type: 'image_url', image_url: { url, detail: IMAGE_DETAIL } };
