@@ -5,72 +5,16 @@ const { CONNECTOR_ONLY, DANGLING_PUNCTUATION_START, DANGLING_BOUND_NOUN_START } 
 const { PERSONAS } = require('./personas');
 const DEFAULT_PERSONA_BLOCK = PERSONAS.find(p => p.id === 'reaction').block;
 const MAX_LINES = 14;
-// No hard per-line character cap anymore — a real, complete Korean sentence can legitimately run
-// well past 40 chars ("사촌오빠가 밥먹다 말고 물고기 밥주러 가야된다고 함"), and a fixed ceiling used to
-// reject or force-split those, contradicting this file's own rule below ("줄은 글자수가 아니라
-// 완결된 문장·절 단위로 나눈다"). The only thing that still matters is whether a line is one
-// complete sentence/clause, which incompleteLineReasons() already checks independently of length.
-// MAX_LINE_CHARS itself is kept only as repairConnectorOnlyBreaks()'s merge threshold, so
-// stitching two dangling half-lines back together doesn't force them onto one absurd line.
+// No per-line length limit: a complete sentence may be long. MAX_LINE_CHARS is only the merge
+// threshold voiceLocalRepair uses when stitching two broken half-lines back together.
 const MAX_LINE_CHARS = 40;
-// 2026-09-16 (user request, referencing a Threads growth-tips post): short posts read better
-// and this account's own results back that up, so voiceGuide() now targets ~120 chars for the
-// whole body. Same principle as MAX_LINE_CHARS above applies here - an exact byte cutoff would
-// force-cut a real, complete sentence mid-word, which is exactly the failure mode this file's
-// history (see the MAX_LINE_CHARS comment) already fixed once for per-line length. So this is
-// a generous ceiling (1.5x the ~120 target), not the target itself: voiceProblems() only flags
-// a post as too long once it's clearly padded past "finished the sentence a bit over target,"
-// and a flagged post goes through the same AI repair loop as every other check here (too many
-// lines, incomplete line breaks, etc.) rather than an instant hard reject.
+// The prompt targets ~120 visible characters; this is a generous ceiling (1.5x) so finishing a
+// sentence slightly over target is fine. Over the ceiling goes through the AI repair loop.
 const MAX_BODY_CHARS = 180;
 const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
-// CONNECTOR_ONLY / DANGLING_PUNCTUATION_START / DANGLING_BOUND_NOUN_START live in
-// voiceLineGuards.js, shared with voiceLocalRepair.js's repair pass — see that
-// file for what each one catches and why. Keeping one copy means the detector here and the
-// local self-repair in reviewSourceVoice() below can never drift apart again.
-// A generic "you try it too~🙂" sign-off is exactly the formulaic ad-CTA the persona is meant
-// to avoid — catch it on the last line regardless of the model still slipping one in.
-// voiceGuide() itself only *names* 해봐/도전해봐/써봐 as examples ("너도 해봐, 너도 도전해봐,
-// 너도 써봐**처럼**"), but the banned shape is any "너도 <verb>봐/보길" tacked-on CTA - the same
-// hardcoded-verb-list bug this session already found and fixed once for highRiskClaim(). A
-// hardcoded stem list let the identical CTA through unpunished for every other verb this bot's
-// many product categories actually use (발라봐 skincare, 만들어봐/먹어봐 food, 사봐 general
-// purchase, …), so this matches any short verb-like run between "너도" and the 보다-auxiliary
-// ending instead of enumerating stems.
-// REGRESSION (found via synthetic testing, hourly review): the same hardcoded-list bug that
-// motivated the verb-stem fix above also applied to the pronoun addressing the reader - only the
-// literal "너도" was matched, so a model avoiding just that one word ("너희도 써봐", "당신도
-// 써보길", "다들 써봐") could reproduce the exact same formulaic CTA shape untouched. These are
-// the same banned pattern under a different address form, not a different, legitimate ending.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): "보길"/"봐" had to be the
-// literal last word before the guard fires, but "~해보길 바람"/"~써보길 바래요"/"~해보길 바랍니다"
-// (tacking a wish-verb onto the recommendation) is at least as common a way to close this exact
-// formulaic CTA - "너희도 한번 써보길 바람" slipped through completely untouched simply because
-// "바람" came after "보길", not because it's a different, legitimate ending.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): the plain polite ending
-// "-요" straight after 봐 ("다들 한번 써봐요~", "너도 한번 먹어봐요") is at least as common as the
-// bare "봐" this guard already caught, and is the exact same formulaic recommend CTA - it just
-// slipped through because "요" wasn't one of the recognized optional suffixes after 봐/보길.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): only the casual 아/어 봐
-// register (봐/봐요/보길) was covered - the formal imperative register of the exact same
-// recommend-and-try CTA ("다들 한번 써보세요", "너도 한번 드셔보세요", "당신도 꼭 사용해보세요~",
-// "너도 함 써보시길") slipped through completely untouched simply because it uses -세요/-시길/
-// -십시오 instead of -봐/-봐요/-보길 for the same verb ending.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): "여러분도" (a very common
-// formal-plural way to address an audience on social media, at least as common as the already-
-// covered 다들/모두) was still missing from the pronoun list, so "여러분도 한번 써보세요"
-// reproduced the exact same banned CTA shape completely untouched.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the ending group already
-// paired 보시길 (a contraction of 보시기를) with the 바랍니다/바래요/바람 trailing group, but the
-// uncontracted "보시기"/"보시기를" form - at least as common a formal invitation ending as 보시길,
-// e.g. "너도 꼭 사용해보시기 바랍니다" - was missing entirely, so it sailed through unflagged.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-15): "다 같이"/"우리 다 같이"
-// address a group exactly like the already-covered 다들/모두 ("다 같이 써봐요", "우리 다 같이
-// 써봐" reproduce the identical formulaic CTA), but were missing entirely. Deliberately did NOT
-// make the whole pronoun group optional to also catch pronoun-less endings ("한번쯤 써보세요") -
-// tried and reverted in the same review pass, since 보다/봐/보세요 is also the ordinary literal
-// verb "to look" ("저기 좀 보세요", "이 사진 좀 봐"), and without a pronoun there is no way to tell
-// the two apart - that would have turned an ordinary "look at this" sentence into a false CTA flag.
+// Formulaic "you try it too" ad sign-off on the last lines, in any verb ("너도 써봐", "다들 한번
+// 드셔보세요", "여러분도 사용해보시기 바랍니다"). An address word (너도/다들/여러분도/다 같이…) is required:
+// without one, 봐/보세요 is just the ordinary verb "look" ("이 사진 좀 봐").
 const GENERIC_CTA_ENDING =
   /(?:너도|너희도|당신도|다들|모두|여러분도|다\s*같이|우리\s*다\s*같이)\s*(?:한\s*번\s*)?[가-힣\s]{1,10}(?:보십시오|보시길|보시기(?:를)?|보세요|봐요|보길|봐)(?:\s*바랍니다|\s*바래(?:요)?|\s*바람)?[~!.]*\s*\p{Extended_Pictographic}?\s*$/u;
 
@@ -84,15 +28,8 @@ function normalizeVoice(text) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the loop below only ever
-// checks a line as CONNECTOR_ONLY when a FOLLOWING line exists to pair it with (i<lines.length-1),
-// so a post that trails off with a bare dependent connective as its very last line ("이거 완전
-// 신기함\n그런데", or even a single-line post that is only "그런데") went completely undetected -
-// the single clearest possible evidence of a cut-off/incomplete post, arguably worse than the
-// mid-post split this function otherwise catches. repairConnectorOnlyBreaks() can't mechanically
-// fix this (there is no next line to merge with), but reviewSourceVoice() already falls through to
-// a full AI rewrite whenever the mechanical repair fails to reduce the problem list, so flagging
-// this here does lead to a real fix path, not a dead end.
+// Lines that can't stand alone: a bare connective with its clause on the next line (or as the very
+// last line - a cut-off post), or a next line starting with punctuation / a bound noun.
 function incompleteLineReasons(text) {
   const lines = normalizeVoice(text).split('\n');
   const reasons = [];
@@ -108,12 +45,9 @@ function incompleteLineReasons(text) {
   if (lastLine && CONNECTOR_ONLY.test(lastLine)) reasons.push(`미완결 줄:${lines.length}`);
   return reasons;
 }
-// Content-style change requested by the user (2026-09-15): exposure/reach improved after leaning
-// into curiosity-driven SNS Threads viral hooks, so a shared "hold one thing back" curiosity
-// directive was added here - in the common section that applies after EVERY persona's own
-// character block, not just CURIOSITY_BLOCK - so all 5 personas (reaction/curiosity/housewife-
-// recipe/trainer-expert/parenting-mom) carry at least a baseline curiosity-gap hook regardless of
-// which one gets picked, on top of whatever their own character style already does.
+// The system-prompt policy shared by every writer. The persona block (personas.js) sets the
+// character; everything after it - algorithm signals, curiosity gap, formatting and safety rules -
+// is identical for every persona.
 function voiceGuide(personaBlock) {
   return `[ME2 스레드 전용 바이럴 작가 — 최종 문체 정책]
 이 정책은 아래에 이어지는 레시피/상품별 세부 지시보다 우선한다. 세부 지시와 충돌하면 반드시 이 정책을 따른다.
@@ -166,92 +100,15 @@ ${personaBlock || DEFAULT_PERSONA_BLOCK}
 function formatVoice(text) {
   return normalizeVoice(text);
 }
-// "낫다" (to be cured) is ㅅ-irregular: the ㅅ drops before a vowel-starting ending, so the
-// correct casual forms are "나아"/"나았"/"나음"/"나은" (NOT "낫아"/"낫음") - matching only "낫음"
-// here missed real cured-of-illness claims written in the casual endings voiceGuide() itself
-// prefers ("나았어", "다 나음"). "나아/나은" also mean "better than" in a comparison with no
-// illness involved ("이게 더 나아"), but this whole branch already requires a disease/symptom
-// keyword nearby, so that sense won't spuriously combine with one in practice.
-// The shared rule two lines up says "건강·의학·안전·금융처럼... 확정 주장으로 만들지 않는다" (health,
-// medicine, SAFETY, and finance). This originally also matched any generic "완전 안전"/"100%
-// 안전" - REGRESSION (found live: real posts were failing to publish): that phrasing is
-// completely ordinary marketing language across nearly every product category ("이 케이스 완전
-// 안전하게 보호해줌", "이 콘센트 완전 안전함", "와이파이 완전 안전하게 연결됨"), not a red flag on
-// its own, so it was rejecting a huge fraction of ordinary posts. The real, narrow risk this was
-// meant to catch is a false claim of protection from actual physical harm to a child (choking/
-// swallowing/allergy) - the parenting-mom persona (personas.js) explicitly warns against
-// exactly that ("이거 완전 안전함" 대신 "이 정도면 안심되는 편"). Narrowed to just those specific
-// hazard phrasings instead of any generic "완전/100% 안전".
-// The cure-verb list also missed 사라지다 ("disappear") and 가라앉다 ("subside") entirely, and its
-// one "없어짐" entry only matched that exact base form - not "없어졌어"/"없어져" either. These are
-// at least as common in casual Korean as "낫다"/"치료되다" for describing symptom relief ("통증이
-// 싹 사라짐", "염증이 가라앉았어"), so real claims using them slipped through completely unchecked.
-// REGRESSION (found live: real posts were failing to publish): "병" is bare-word ambiguous between
-// "disease" and "bottle" ("화장품병", "샴푸병", "오일병", "약병", or a bare "이 오일 병") - a hazard
-// that already existed with the original "없어짐" alone, but widening the verb list to include the
-// far more common, generic 사라지다/가라앉다 (which naturally describe a bottle's contents running
-// out, or sediment settling) turned an occasional false positive into a routine one for ordinary
-// beauty/food product reviews. "병" is removed from this keyword set entirely - 질환 already covers
-// the "disease" sense unambiguously, and every other keyword here (암/통증/염증/당뇨/고혈압) has no
-// such common-word collision.
-// Found via synthetic-sentence testing (hourly review, 2026-09-12): the child-hazard branch
-// below was written assuming its keywords sit directly next to each other, but real Korean
-// almost always inserts a subject particle (위험'이' 없다, 걱정'이' 없다) or a space after an
-// intensifier (완전 '안전해요' with a space, not '완전안전'). Without \s* / an optional (이|가)
-// particle, "알레르기 위험이 없어요", "질식 위험이 없어요", and "삼켜도 완전 안전해요" - arguably
-// the single most natural phrasing of exactly the absolute claims this branch exists to catch -
-// all silently passed through uncaught. That is a false NEGATIVE in a child-safety guard, worse
-// than the false positives found earlier this session. Fixing the under-match reopens the
-// over-match risk this session already hit once (narrowing "완전 안전" broke real posts): once
-// "위험이" is allowed, a hedge like "위험이 없는 편이라 안심되는 편" (exactly the softened phrasing
-// the parenting-mom persona in personas.js is instructed to prefer, e.g. "안심되는 편")
-// would also match on a literal "없" substring. The (?!\s*는\s*(?:편|것|거|셈)) guard excludes only
-// that specific continuing/hedging shape (없는 편/없는 것/없는 것은 아니지만) while still catching
-// every sentence-final absolute form (없어/없음/없다/없네/없죠) AND the noun-modifying absolute
-// shape ("없는 사이즈", "없는 제품" - "없는" followed directly by a noun, not a hedge word, is
-// still an absolute "risk-free X" claim and must stay caught, per the existing test below).
-// REGRESSION (found via re-reading voiceGuide() against the code, hourly review, 2026-09-13): the
-// shared rule below explicitly names "건강·의학·안전·금융" (health/medicine/safety/AND finance) as
-// the four categories that must never get an unverified absolute claim - but until now this
-// function only ever checked the first three. A model writing "이 적금 가입하면 무조건 이득임" or
-// "이거 사면 원금 손실 절대 없음" about a financial product/service sailed through completely
-// unchecked - a straightforward prose-vs-code contradiction where the policy promised a protection
-// the guard never implemented. Kept as narrow as the existing health-claim branches (원금/손실
-// paired with an absolute 없/보장, or a bare "무조건 <수익어>") to avoid flagging ordinary
-// savings/budgeting content ("가계부 쓰니까 돈이 좀 모임", "무조건 예쁜 디자인이라 삼").
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 아토피/습진/비염 (atopic
-// dermatitis/eczema/rhinitis) are exactly as common in this bot's baby/skincare-adjacent product
-// reviews as 암/통증/질환/염증/당뇨/고혈압 already are, and are unambiguous condition names with no
-// unrelated everyday meaning (unlike the "병"=bottle collision already removed from this list) -
-// but were missing entirely, so "아토피 완전 나음"/"습진 다 나았어요"/"비염 싹 없어짐" sailed through
-// completely unchecked despite being the exact same unverified cure claim shape this branch exists
-// to catch. The softened "있는 편"/"괜찮은 편" phrasing the parenting-mom persona is instructed to
-// prefer still correctly stays unflagged, same as the existing keywords.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the quantified body-change
-// claim only ever recognized weight units (kg/키로/킬로) and a narrow verb set (빠졌/빠짐/감량/뺐/
-// 감소) - "cm"/"센치" body-measurement reduction claims ("허리 5cm 줄었어", "허벅지 3센치 빠짐") are
-// exactly as common and exactly as unverifiable a body-transformation claim for this bot's
-// shapewear/diet-product categories, and "줄었/줄음" (to decrease) is at least as common a verb as
-// the ones already listed - but both were missing, so these sailed through completely unchecked.
-// Ordinary size-tolerance statements ("이 옷 사이즈 5cm 크게 나옴") still stay unflagged since they
-// use no reduction verb from this list.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): 탈모(hair loss)/여드름(acne)
-// are exactly the condition this bot's haircare/skincare affiliate-product posts are most likely
-// to generate an unverified cure claim about ("이 샴푸 쓰고 탈모 완전 없어짐", "이 크림 바르니까 여드름
-// 싹 나았음") - both are unambiguous condition names with no unrelated everyday meaning, same shape
-// as the already-listed 아토피/습진/비염 - but were missing entirely, so both sailed through
-// completely unchecked. voiceProblems() confirmed neither triggered any other check either.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-15): the finance branch only
-// ever recognized the bare words 원금/손실 (paired with 없/보장) or a bare "무조건 <수익어>" - a claim
-// phrased as "무손실로 확실하게 수익남" (no-loss, guaranteed profit) sailed through unchecked because
-// it uses neither shape, despite being exactly the same deceptive guaranteed-return claim this
-// branch exists to catch. Deliberately scoped to "무손실" (no-loss) followed shortly by a
-// profit/certainty word rather than widening 원금/손실 themselves: "손해"/"손실" alone (e.g. "손해
-// 볼 일 없음", "남는 장사") are extremely common, harmless shopping-deal praise in this bot's core
-// product-review content and were verified via synthetic testing NOT to be added, to avoid the
-// same false-positive class that sank the earlier GENERIC_CTA_ENDING optional-pronoun attempt.
-// "무손실" itself is ambiguous (무손실 압축/오디오 = lossless compression/audio, a common harmless
-// tech term) so it only trips this when a profit/certainty word appears nearby, never bare.
+// Unverified high-risk claims that must never be published as fact (the prompt promises this for
+// health, medicine, safety and finance):
+//  - quantified body change ("2주 만에 5kg 빠짐", "허리 3cm 줄었어")
+//  - a named condition plus a cure verb ("아토피 싹 나았어", "통증이 사라짐"), incl. ㅅ-irregular 낫다
+//    forms (나아/나았/나음); "병" is excluded because it also means "bottle"
+//  - absolute child-safety claims ("삼켜도 안전", "질식 위험 없음") - hedges like "위험이 없는 편"
+//    stay allowed, matching the parenting persona's instructed tone
+//  - guaranteed financial returns ("원금 손실 없음", "무조건 수익", "무손실 … 확실"); bare "손해 볼 일
+//    없음" is ordinary deal talk and "무손실" alone is a tech term, so neither triggers on its own
 function highRiskClaim(text) {
   const t = String(text || '');
   return (
@@ -268,33 +125,9 @@ function highRiskClaim(text) {
     )
   );
 }
-// REGRESSION (found live, 2026-09-13): voiceGuide() explicitly instructs grouping a 1~3-line
-// thought and inserting a blank line (two line breaks) before the next one - "이렇게 나눠야 보기
-// 좋다" - but until now nothing ever checked whether the model actually did this. Two real
-// published posts (10 lines and 8 lines) came back with a hard line break after every single
-// line and not one blank line anywhere, reading as a flat wall of one-liners instead of the
-// intended paragraph rhythm - and voiceProblems() passed both, because this rule had zero code
-// enforcement, unlike MAX_LINES/CTA/dangling-line checks which are all actually checked. A short,
-// genuinely single-thought post (voiceGuide: "한 생각 안에서는 억지로 빈 줄을 넣지 않는다") is not
-// flagged - only posts long enough to plausibly span more than one thought, with zero
-// paragraph break anywhere, are treated as a real formatting problem worth sending back through
-// the existing repair loop below.
-// REGRESSION (found live, 2026-09-23): two more real published posts slipped past this check
-// entirely. (1) A 5-line post (situation -> product feature -> comparison -> question ->
-// reaction, each already its own line, zero blank line anywhere) stayed under the old
-// lines.length>=6 threshold - it clearly spans 5 distinct thoughts, not the "짧은, 진짜
-// 한생각짜리 포스트" the threshold exists to protect (already covered separately by the 2-line/
-// 4-line fixtures below). Lowered the threshold to 5; verified this doesn't affect either
-// existing short-thought fixture. (2) Two other real posts were written as ONE unbroken line
-// with no \n at all (lines.length===1), which the line-count check can never see no matter how
-// low the threshold goes - the same "reads as an undifferentiated wall of text" problem, just
-// expressed as one long line instead of many short ones. Added a second, independent trigger for
-// that shape: 2 or fewer lines, already past a plausibly-single-thought length (reusing
-// bodyTooLong()'s visible-char convention), AND containing 2+ separate strong sentence-ending
-// marks (?/!/;;/..  runs, not counting doubled marks like "??" as two) - a signal that multiple
-// complete thoughts were run together with no separation at all, not that one sentence is simply
-// long (voiceGuide() explicitly allows a single complete sentence to stay long on one line, and a
-// long sentence with zero or one such marks stays correctly unflagged either way).
+// A post that never uses a blank line between thoughts: 5+ lines with no blank line, or a 1-2 line
+// post of 100+ visible characters that runs 2+ complete sentences together. A short single-thought
+// post is allowed to have no blank line.
 function missingParagraphBreak(t, lines) {
   if (t.includes('\n\n')) return false;
   if (lines.length >= 5) return true;
@@ -303,45 +136,23 @@ function missingParagraphBreak(t, lines) {
   const sentenceBoundaries = (visible.match(/[?!]+|;;|\.\.+/g) || []).length;
   return visible.length >= 100 && sentenceBoundaries >= 2;
 }
-// REGRESSION (found live, 2026-09-23, same day the sentence-per-line fix shipped): a real
-// published post over-applied it - every single one-sentence line got its own blank-line
-// separation, turning a 4-sentence post into 7 isolated one-line "paragraphs" that read like a
-// mechanically generated list ("기계로쓴거같잖아"). voiceGuide() was clarified in response, but
-// that alone is a prompt-only fix with no code-side enforcement - unlike missingParagraphBreak()
-// just above (which only catches an ABSENCE of blank lines), nothing checked for the opposite
-// failure: blank lines EVERYWHERE, fragmenting every thought into its own paragraph. Requires 4+
-// non-empty paragraph groups (split on blank lines) with EVERY group exactly 1 line - a strict,
-// unambiguous "every single line is its own paragraph" shape, not "nearly all" - so a normal post
-// mixing a short 1-line hook/closer with 2-3-line body groups (the wellFormatted fixture below,
-// and the encouraged "오프닝 훅 다음엔 항상 빈 줄" pattern) never trips it.
-// User feedback (2026-09-24): "이거실화냐? 이말투 너무 반복적으로 사용하고 스레드 바이럴 sns
-// 페르소나가 아닌거같아". Real published posts on the same account opened "이거 실화냐?",
-// "이거 뭔데 이렇게 난리냐;;", "이거 실화냐?!", "이거 뭐야,", "이거 왜 이렇게 맛있냐고??" back to
-// back - the persona prompts themselves seeded these (실화냐/미쳤다 listed as model reactions in 4
-// places, and the curiosity persona was explicitly told to open with "이거 뭔데/이게 대체 뭐길래").
-// Those seeds are removed from personas.js; this is the code-side net, same pattern as
-// stripEmoji/missingParagraphBreak: flags the specific worn-out opener shapes and "실화" in any
-// sentence-final form. Deliberately narrow - a first line that merely starts with "이거" followed
-// by something concrete ("이거 사주고 나서 조용한 시간 생김") is left to the prompt, since "이거"
-// alone is ordinary Korean and a blanket ban would reject a lot of otherwise fine posts.
+// Worn-out machine-sounding openers ("이거 실화냐", "이거 뭔데 이렇게") and "실화" in any sentence-final
+// form. A first line that merely starts with "이거" followed by something concrete is fine.
 const CLICHE_OPENER = /^(?:이거|이게)\s*(?:진짜\s*|대체\s*|도대체\s*)?(?:실화|뭔데|뭐야|뭐지|뭐길래|왜\s*이렇게)/;
 const CLICHE_ANYWHERE = /실화(?:냐|임|야|인가|냐고|냐구|라니)/;
 function clichePhrasing(t) {
   const firstLine = (t.split('\n').find(l => l.trim()) || '').trim();
   return CLICHE_OPENER.test(firstLine) || CLICHE_ANYWHERE.test(t);
 }
-// 2026-09-30 (user request: "스레드 알고리즘 타는 글에 맞춰줘 — 조회수가 안 나옴"): Meta's ranking
-// explicitly demotes engagement bait - posts that ask for replies/likes/follows/shares or trade
-// information for a comment ("댓글 달면 알려줌", "궁금하면 댓글 남겨줘", "좋아요 눌러줘"). voiceGuide()
-// now says so, and this is the matching code-side net, same pattern as clichePhrasing(). Only
-// reader-directed demands are matched: the author announcing where info lives ("재료는 댓글에
-// 적어둘게", "레시피는 댓글로 남겨둘게") stays allowed - 남겨둘/적어둘 is not 남겨줘/남기면. A plain
-// question ending ("다들 어떻게 해?") is the intended replacement and never matches either.
+// Engagement bait, which Threads demotes: asking for replies/likes/follows/shares or trading info
+// for a comment ("댓글 달면 알려줌", "좋아요 눌러줘", "친구 태그해"). The author announcing where info
+// lives ("재료는 댓글에 적어둘게") is not bait and stays allowed.
 const ENGAGEMENT_BAIT =
   /(?:댓글|답글)\s*(?:을|를|로|좀|하나|꼭)?\s*(?:좀\s*|꼭\s*)?(?:남겨\s*줘|남겨\s*주(?:세요|면|라)|달아\s*줘|달아\s*주(?:세요|면|라)|남기면|달면|써\s*주면)|(?:좋아요|팔로우|팔로|리포스트)\s*(?:좀\s*|꼭\s*)?(?:눌러|누르면|해\s*주|하면|부탁)|공유\s*(?:좀\s*|꼭\s*)?(?:부탁|해\s*줘|해\s*주세요)|(?:친구|지인)\s*(?:를|들)?\s*(?:태그|소환)/;
 function engagementBait(t) {
   return ENGAGEMENT_BAIT.test(t);
 }
+// The opposite failure: 4+ paragraphs where every paragraph is a single line (reads like a list).
 function overFragmentedParagraphs(t) {
   if (!t.includes('\n\n')) return false;
   const groups = t
@@ -350,8 +161,7 @@ function overFragmentedParagraphs(t) {
     .filter(g => g.length);
   return groups.length >= 4 && groups.every(g => g.length === 1);
 }
-// Counts only visible characters - line breaks are formatting, not content length, so a
-// well-paragraphed post isn't penalized for the blank lines voiceGuide() itself asks for.
+// Counts visible characters only; blank lines between paragraphs are not content.
 function bodyTooLong(t) {
   return t.replace(/\n/g, '').length > MAX_BODY_CHARS;
 }

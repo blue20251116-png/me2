@@ -45,14 +45,8 @@ async function callAiText(accountId, system, user, { maxTokens = 1000, json = fa
   return callAI(apiKey, { system, userContent: user, maxTokens, temperature, timeout: 30000 });
 }
 
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): same hardcoded-list
-// under-match class already found and fixed several times this session (FITNESS_KEYWORDS,
-// KIDS_KEYWORDS, GENERIC_CTA_ENDING, highRiskClaim). "일품이다/일품인" (a classic "this dish is
-// excellent" blog word), "온 가족이 좋아할" (a stock family-friendly-menu blurb), and "누구나 쉽게
-// 따라할 수 있는" (a stock recipe-blog opener) are all at least as common in real AI-generated
-// Korean food content as the phrases already listed below, but none of them end in a formal
-// 요./니다. sentence ending either - so they slipped past both the explicit list AND the
-// "2+ formal endings" fallback heuristic completely unflagged.
+// Blog/AI-sounding food copy: stock phrases (일품, 온 가족이 좋아할, 누구나 쉽게 따라할 수 있는…) or 2+
+// formal 요./니다. endings.
 function looksBloggy(text) {
   const t = String(text || '').trim();
   if (!t) return false;
@@ -71,10 +65,6 @@ function looksBloggy(text) {
     /일품(?:이다|이에요|입니다|인|이네)/,
     /온\s*가족(?:이|도)?\s*(?:좋아할|사랑할|만족할)/,
     /누구나\s*(?:쉽게|간단하게)\s*(?:따라|만들)/,
-    // REGRESSION (found via synthetic testing, hourly review, 2026-09-14): "영양 만점", "든든한 한
-    // 끼", "정성 가득" are exactly the same class of blog/marketing food-writing cliche as the
-    // already-listed "맛과 영양"/"특별한 저녁·식사·한 끼", but were missing, so a hook using them
-    // slipped past looksBloggy() and skipped the humanizeHook() rewrite entirely.
     /영양\s*만점/,
     /든든한\s*한\s*끼/,
     /정성\s*가득/,

@@ -1,14 +1,8 @@
 'use strict';
 
-// Extra writing personas layered on top of voicePolicy.js's shared voiceGuide().
-// Each persona only swaps the "[캐릭터 강도]" block (opening/closing hook style) - the shared
-// formatting and safety rules (line limits, no dangling line breaks, no formulaic CTA, no
-// unverified high-risk claims) stay identical for every persona, so none of this touches the
-// output-side guards (voiceProblems/assertVoice) already enforced regardless of who "wrote" it.
-
-// This is the same text voiceGuide() has always used by default - kept here verbatim so it can
-// be picked like any other persona, and so voiceGuide() with no argument still returns exactly
-// what it always has (existing callers and tests are unaffected).
+// Writing personas. Each one only supplies the "[캐릭터 강도]" block of voiceGuide(); the shared
+// algorithm, formatting and safety rules - and the code-side checks in voicePolicy.js - apply to
+// every persona equally. REACTION_BLOCK is the default (voiceGuide() with no argument).
 const REACTION_BLOCK = `[캐릭터 강도 — 이 정책에서 가장 자주 무너지는 부분]
 이 작가는 리액션이 크고 감정 기복이 확실한 사람이다. 담담하게 정보를 나열하는 사람이 아니다.
 - "괜찮다", "나쁘지 않다", "쓸 만하다", "도움이 된다" 같은 미온적인 반응은 쓰지 않는다. 대신 확실하고 큰 반응으로 쓰되, 그 크기는 상투적인 감탄사 한 단어가 아니라 구체적인 장면·결과로 보여준다: "3만 보 걸었는데 발바닥 멀쩡함", "애가 2시간째 방에서 안 나옴", "남편이 두 그릇째 퍼감" 처럼.
@@ -64,12 +58,8 @@ const PARENTING_MOM_BLOCK = `[캐릭터 강도 — 이 정책에서 가장 자�
 - [오프닝 패턴 예시 — 그대로 복사하지 말고 소재에 맞게 변형해서 쓴다] "애가 이거 손에서 안 놓음ㅋㅋ" / "육아템 고민하다가 발견한 건데 이거 레전드" / "사주고 나서 조용한 시간이 생김ㅋㅋ" / "다른 엄마들은 이거 알고 있었나"
 - [마무리 패턴 예시 — 마찬가지로 변형해서 쓴다] "다른 엄마들은 벌써 알고 있었나", "다들 몇 개월부터 썼어?", "이거 모르고 산 거 너무 아까움", "자세한 건 댓글에 적어둘게" 처럼 실제 대화체로 끝맺는다. 다른 엄마들이 자기 경험(월령, 쓰던 방법)으로 바로 답할 수 있는 질문이면 답글이 제일 잘 붙는다. "추천", "강추" 같은 판매 문구로 끝내지 않는다. "너도 해봐/도전해봐/써봐" 계열은 아래 금지 항목이므로 이 예시로도 쓰지 않는다.`;
 
-// 2026-09-30 (user request: "스레드 알고리즘 타는 글에 맞춰줘 — 글때문에 조회수가 안 나옴"): Threads
-// ranks mostly on replies/conversation, and the posts that pull the most replies on Korean Threads
-// are relatable confessions ("나만 그래?") where the product is a side prop, not the subject - the
-// reader answers with their own story. None of the existing 5 personas was built around that
-// shape (they all lead with the product's effect or someone's reaction to it), so this adds one
-// that is, for every non-recipe category.
+// Relatable confession ("나만 그래?") with the product as a side prop - the shape that draws the most
+// replies on Korean Threads, which is the strongest ranking signal.
 const EMPATHY_BLOCK = `[캐릭터 강도 — 이 정책에서 가장 자주 무너지는 부분]
 이 작가는 누구나 한 번쯤 겪어본 사소한 불편·습관·고민을 솔직하게 털어놓고 "나만 이래?" 하고 묻는 사람이다. 물건을 소개하는 사람이 아니라 자기 썰을 푸는 사람이다.
 - 첫 줄은 상품이 아니라 읽는 사람이 "어 나도" 할 만한 상황·고백으로 시작한다: "빨래 개다가 양말 짝 안 맞으면 그냥 버림", "퇴근하고 씻기까지 1시간 걸리는 사람" 처럼 구체적인 장면 하나를 짚는다.
@@ -80,13 +70,9 @@ const EMPATHY_BLOCK = `[캐릭터 강도 — 이 정책에서 가장 자주 무�
 - [오프닝 패턴 예시 — 그대로 복사하지 말고 소재에 맞게 변형해서 쓴다] "빨래 개다가 양말 짝 안 맞으면 그냥 버림" / "퇴근하고 씻기까지 1시간 걸리는 사람 나야 나" / "설거지 쌓아두는 거 게을러서가 아니라 진짜 힘들어서임" / "택배 뜯는 게 제일 귀찮은 사람 여기 있음"
 - [마무리 패턴 예시 — 마찬가지로 변형해서 쓴다] "나만 이래?", "다들 이거 어떻게 해?", "아침에 씻는 파야 저녁에 씻는 파야?", "이거 공감하는 사람 은근 많을 듯" 처럼 읽는 사람이 자기 얘기를 한 줄 얹고 싶어지게 끝맺는다. "너도 해봐/도전해봐/써봐" 계열은 아래 금지 항목이므로 이 예시로도 쓰지 않는다.`;
 
-// categories: which content categories this persona is allowed to be picked for.
-// 'recipe' comes from analysis.mode === 'recipe' directly; 'fitness'/'kids'/'general' come from
-// detectPersonaCategory()'s keyword match over the material's topic/source text. Each category's
-// candidate pool always includes 'reaction' as the baseline so there's never a category with an
-// empty pool, plus 'curiosity' for anything that isn't a recipe (a curiosity-first hook works
-// for any product, but recipe mode already has its own dedicated reveal-the-secret-ingredient
-// persona and structure).
+// categories: which content categories may pick this persona. 'recipe' comes from the analysis
+// mode; 'fitness'/'kids'/'general' from detectPersonaCategory(). 'reaction' is in every pool so no
+// pool is ever empty.
 const PERSONAS = [
   { id: 'reaction', name: '리액션형', categories: ['general', 'fitness', 'kids', 'recipe'], block: REACTION_BLOCK },
   { id: 'curiosity', name: '궁금증 유발형', categories: ['general', 'fitness', 'kids'], block: CURIOSITY_BLOCK },
@@ -96,32 +82,15 @@ const PERSONAS = [
   { id: 'empathy', name: '공감 썰형', categories: ['general', 'fitness', 'kids'], block: EMPATHY_BLOCK },
 ];
 
-// REGRESSION (found live, 2026-09-13): a real 골반 비틀림 교정(pelvis/posture correction) product
-// post matched none of these keywords, so detectPersonaCategory() fell through to 'general' -
-// missing the trainer-expert persona pool entirely even though "PT쌤이 알려준 골반 교정" is exactly
-// the kind of material that persona fits best. Posture/stretching/body-alignment content is a
-// common fitness-adjacent category this bot covers but the keyword list never named.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): same hardcoded-list
-// under-match class as the fix directly above. 스쿼트/런지/플랭크 (squat/lunge/plank) are common,
-// unambiguous exercise names with no unrelated everyday meaning - at least as clear a fitness
-// signal as 스트레칭/코어 already listed - but a post naming only one of them ("스쿼트할 때 무릎 안
-// 아픔") fell through to 'general', missing the trainer-expert persona pool the same way the
-// pelvis-correction case did.
+// Keyword lists include colloquial spellings (애기) and specific product/exercise nouns (골반, 스쿼트,
+// 분유, 카시트) because real posts often name only those.
 const FITNESS_KEYWORDS =
   /(운동|헬스|다이어트|단백질|보충제|프로틴|근육|PT|피티|트레이너|홈트|요가|필라테스|헬스장|런닝머신|러닝|덤벨|폼롤러|헬스용품|스트레칭|골반|체형|자세\s*교정|코어|스쿼트|런지|플랭크)/i;
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-13): same hardcoded-list
-// under-match class as the FITNESS_KEYWORDS fix above. "애기" - the colloquial spelling of "아기"
-// that Korean parents actually type far more often than the standard form on social media - wasn't
-// listed at all, so ordinary posts like "애기 옷 이거 완전 편함"/"우리 애기가 너무 좋아함" fell through
-// to 'general', missing the parenting-mom persona pool entirely. Common baby-gear product nouns
-// (분유/카시트/속싸개) that don't happen to contain "아기"/"유아"/etc. as a substring had the same gap.
 const KIDS_KEYWORDS =
   /(아기|애기|유아|이유식|기저귀|어린이|장난감|아동용|육아|신생아|초등학생|아이용|유모차|젖병|딸랑이|분유|카시트|속싸개)/i;
 
-// mode is materialEngine.js's analysis.mode ('recipe'|'product'|'lifestyle') - only
-// 'recipe' maps directly to a category here. For everything else, this only decides which VOICE
-// persona to write with; it is a separate concern from mode/content-type selection and must
-// never feed back into it.
+// Picks the persona pool only. mode ('recipe'|'product'|'lifestyle') comes from the autopilot
+// analysis; this never feeds back into the content-type decision.
 function detectPersonaCategory({ mode, text } = {}) {
   if (mode === 'recipe') return 'recipe';
   const t = String(text || '');

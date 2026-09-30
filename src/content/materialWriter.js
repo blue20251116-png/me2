@@ -24,29 +24,8 @@ function stripAffiliateNoise(value, { preserveLines = true } = {}) {
     .replace(/네이버\s*쇼핑\s*커넥트[^\n.!?]*(?:제공받을\s*수\s*있습니다|받습니다)?\.?/gi, ' ')
     .replace(/^\s*스레드\s*조회\s*[\d.,천만억]+회\s*/gim, '')
     .replace(/^(?:인기순|최신순|전체)\s*/gim, '')
-    // REGRESSION (found via synthetic testing, hourly review, 2026-09-13): \b is defined in terms
-    // of ASCII \w, which no Hangul character is ever part of - so \b좋아요\b (and the other three)
-    // never actually bounded anything: between two Hangul characters there is no \w/\W transition
-    // at all, so this line was a silent no-op for every realistic Korean sentence containing these
-    // words ("이거 좋아요 눌러줘" was left completely untouched, and so was the actual scraped-UI
-    // cluster "좋아요\n답글\n리포스트\n공유\n129" it exists to catch).
-    // A naive Hangul-boundary fix (matching each word whenever isolated, the same technique
-    // scrubSecret() uses) was tried and rejected: "좋아요"/"답글"/"공유" are also completely
-    // ordinary words in real sentences ("이거 완전 좋아요ㅋㅋ 진짜 만족함"), and stripping them
-    // there breaks the sentence ("이거 완전 ㅋㅋ 진짜 만족함") - worse than the original no-op.
-    // Only strip when 2+ of these labels appear back-to-back with nothing but whitespace/·/counts
-    // between them - the actual shape of a scraped Threads action-button row - which a real
-    // sentence using any one of these words on its own never matches.
-    // REGRESSION (found via synthetic testing, hourly review, 2026-09-15): the cluster match had
-    // no boundary check on either end, so it also fired inside an ordinary sentence whenever two
-    // of these words happened to sit next to each other with a real verb suffix directly attached
-    // to the second one - "답글" immediately followed by " 공유해주세요" (a genuine request to
-    // reply-and-share, not scraped UI chrome) matched "답글 공유" as a false-positive 2-word
-    // cluster and tore it out, leaving the mangled, nonsensical "해주세요" behind. The real UI
-    // cluster's labels always stand alone (bare words with nothing but whitespace/counts around
-    // them); a Hangul lookaround on the cluster's own start/end - not on each internal word here,
-    // which was already tried and rejected for breaking single bare-word usage - distinguishes the
-    // two without reopening that rejected approach.
+    // Scraped Threads action-button row: 2+ of 좋아요/답글/리포스트/공유 back-to-back (with counts) and not
+    // attached to other Hangul. Single words stay, since they are ordinary words in real sentences.
     .replace(/(?<![가-힣])(?:(?:좋아요|답글|리포스트|공유)[\s,·|0-9]*){2,}(?![가-힣])/g, ' ');
   if (preserveLines)
     return s
@@ -70,16 +49,8 @@ function sanitizeAuthorReplies(value) {
 function sanitizeGeneratedComment(value) {
   return stripAffiliateNoise(value, { preserveLines: true }).trim();
 }
-// REGRESSION (found via synthetic testing, hourly review): "썰" (to cut/slice) is at least as
-// common in ordinary knife/cutting-board/kitchenware reviews ("이 도마 고기 썰기 편함", "이 칼
-// 진짜 잘 썰림") as in actual recipes - it does not, on its own, indicate the source material is
-// a recipe at all. Combined with a food noun, it was misclassifying plain kitchen-tool reviews as
-// recipe mode, which then applies the wrong persona pool (reaction/housewife-recipe only) and the
-// wrong prompt framing (hide a "secret ingredient" that doesn't exist for a knife or cutting
-// board) to a product that has nothing to do with cooking instructions. The remaining cooking
-// process verbs (볶/굽/끓/튀기/찜/삶/섞) and measurement units are left as-is - they still
-// correctly catch real recipes (verified: dishes described with an actual cooking method or a
-// measured ingredient still detect as recipe).
+// Recipe detection needs cooking-process verbs or measurements; "썰" alone is excluded because
+// knife/cutting-board reviews use it too.
 function detectRecipe(sourceText, authorReplies, requestedMode) {
   if (requestedMode === 'recipe') return true;
   const t = `${sourceText}\n${authorReplies}`.toLowerCase();

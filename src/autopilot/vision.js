@@ -56,21 +56,7 @@ function normalizeVisionResult(d) {
   };
 }
 
-// REGRESSION (found live, 2026-09-13, right after the OpenAI->Claude migration): when
-// getAiKey() has nothing to return, every call this function makes throws "Anthropic API
-// 키가 설정되지 않았습니다" - but both catch blocks below swallow that into a generic warn log and
-// (for the text fallback) a zero-confidence default object, not a rethrow. buildThreadsFirstAutopilot
-// then reads that as "판매 대상 신뢰도 부족" (low match confidence) and skips to the next material -
-// completely masking the real, fixable cause (missing API key) behind a misleading message for
-// every single material, every single run, making the actual outage undiagnosable from the logs.
-// Checking this once, up front, throws the real error before either catch block gets a chance to
-// bury it - it still reaches buildThreadsFirstAutopilot's own try/catch same as before, just with
-// the true message intact.
-// NOTE: the guard below is placed AFTER the images/system/text prologue, which now also builds
-// video-frame-extraction vision support (formerly a separate videoFrameVisionPatch.js that
-// exact-string-marker-spliced this prologue at require time - folded directly in here since
-// there's no longer a marker to preserve). Placement doesn't matter for correctness either way;
-// it still checks the key before any real API call happens.
+// Sampled video frames per source video, cached for 6 hours (bounded).
 const videoFrameVisionCache = new Map();
 
 const VIDEO_FRAME_CACHE_TTL = 6 * 60 * 60 * 1000;
@@ -232,6 +218,8 @@ async function identifyCommerceTarget(accountId, m) {
         visionMedia.frameCount +
         '장을 포함했다. 여러 프레임에서 반복되거나 실제 사용·시연되는 대상을 우선하고 배경 소품은 제외하라.'
       : '');
+  // Fail loudly on a missing AI key before the catch blocks below could turn it into a misleading
+  // "low confidence" result for every material.
   if (!getAiKey(accountId)) {
     throw new Error('Anthropic API 키가 설정되지 않았습니다');
   }

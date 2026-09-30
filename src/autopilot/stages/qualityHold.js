@@ -1,12 +1,7 @@
 'use strict';
 
-// REGRESSION (found live, 2026-09-13, in direct response to a user question about Claude credit
-// exhaustion): this regex was written for OpenAI's old phrasing and never updated for the
-// OpenAI->Claude migration earlier today. Anthropic's actual insufficient-credit error reads
-// "Your credit balance is too low to access the Claude API..." - matching none of the listed
-// phrases - so a real Claude credit-exhaustion error would fail this text check (the __openAiNoRetry
-// flag set upstream by aiRequestGuard.js's isNoCredits() already covers the common case,
-// but this is the independent, defense-in-depth signal this function was designed to also check).
+// AI quota / credit exhaustion in any provider's wording (defence in depth on top of
+// aiRequestGuard's __openAiNoRetry flag).
 function isAiQuotaExhausted(e) {
   const msg = `${e?.message || ''} ${e?.response?.data?.error?.message || ''}`;
   return !!(

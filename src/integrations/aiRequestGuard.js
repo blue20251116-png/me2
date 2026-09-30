@@ -41,13 +41,7 @@ function isNoCredits(e) {
   if (status !== 429 && status !== 400) return false;
   return /no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(errorMessage(e));
 }
-// REGRESSION (found via review, hourly review, 2026-09-13): the only way this ever computed a
-// precise retry delay was parsing OpenAI's specific "please try again in Xs" message text - which
-// never appears in an Anthropic 429 response, so every Claude rate-limit hit silently fell back to
-// the generic 1800ms default regardless of what the server actually asked for. Anthropic (like
-// most REST APIs) returns a standard `retry-after` response header on 429s - reading that first
-// gives an accurate wait for the actual provider now in use, while the OpenAI-era text parse stays
-// as a harmless fallback for any other API accessed through this file that does phrase it that way.
+// Wait time for a 429: the standard retry-after header first, then OpenAI's "try again in Xs" text.
 function retryAfterMs(e) {
   const headerSeconds = Number(e?.response?.headers?.['retry-after']);
   if (Number.isFinite(headerSeconds) && headerSeconds > 0) return Math.ceil(headerSeconds * 1000);
@@ -104,15 +98,7 @@ function countTextChars(value) {
   }
   return total;
 }
-// REGRESSION (found via synthetic testing, hourly review): head/tail had hardcoded MINIMUMS
-// (1000/500) that ignored `max` entirely once `max` dropped below ~1500 - truncateString(text, 200)
-// still returned ~1548 chars. capContent() calls this per-field with a shrinking shared budget
-// (MAX_TEXT_CHARS - state.used so far), so once earlier fields in a multi-field request had
-// consumed most of the budget, every later large field would still emit ~1500+ chars regardless
-// of how little budget remained - silently letting a request blow well past MAX_TEXT_CHARS in
-// exactly the cost-control path this file exists to enforce. Below a small `max`, this now falls
-// back to a plain slice (a head/tail split isn't meaningful at that size anyway); otherwise the
-// head/tail split is sized as a share of `max` itself, so the returned string never exceeds it.
+// Keeps the head and tail of an over-long field and never returns more than `max` characters.
 function truncateString(s, max) {
   const text = String(s || '');
   if (text.length <= max) return text;
@@ -141,12 +127,7 @@ function capContent(value, state) {
   }
   return out;
 }
-// REGRESSION (found during the OpenAI->Claude migration, 2026-09-13): OpenAI puts the system
-// prompt inside messages[] as a {role:'system'} entry, but Anthropic's Messages API sends it as
-// a separate top-level `system` string - often the LARGEST single field (voiceGuide() alone runs
-// to several thousand characters). This function used to only walk `data.messages`, so switching
-// to Claude would have silently stopped counting/capping the system prompt entirely, defeating
-// the cost cap this file exists to enforce for exactly the biggest field in most requests.
+// Caps total input text (system prompt + messages) at MAX_TEXT_CHARS to bound per-call cost.
 function capRequestText(data) {
   if (!data) return data;
   const before = countTextChars({ system: data.system, messages: data.messages });
@@ -160,11 +141,7 @@ function capRequestText(data) {
   return cloned;
 }
 
-// OpenAI's image_url.detail ('low'/'high'/'auto') let this file force cheaper, lower-resolution
-// vision analysis - Anthropic's image content blocks ({type:'image', source:{...}}) have no
-// equivalent per-image quality knob, so there is nothing to mutate here anymore. Kept as a
-// no-op observability counter (still useful in the usage log) rather than deleting the concept
-// outright, since a future provider swap may reintroduce a similar knob.
+// Image count, for the usage log.
 function countImages(data) {
   if (!data || !Array.isArray(data.messages)) return 0;
   let count = 0;
@@ -272,12 +249,8 @@ async function runGuardedRequest(url, rawData, config) {
   return response;
 }
 
-// REGRESSION (found during the OpenAI->Claude migration, 2026-09-13): OpenAI's auth header is
-// `Authorization: Bearer <key>`, but Anthropic uses `x-api-key: <key>` instead - this function only
-// ever read `Authorization`, so every Anthropic request hashed the SAME empty string as its
-// "credential scope" regardless of which account's key was actually used. That would have let two
-// different accounts' concurrent identical-content requests collapse into one shared in-flight
-// call, silently dropping the per-credential isolation this dedupe was designed to have.
+// Dedupe key: identical payload AND identical credential (Authorization or x-api-key), so two
+// accounts' identical requests are never merged.
 function requestKey(data, config) {
   const credential = String(
     config?.headers?.['x-api-key'] || config?.headers?.Authorization || config?.headers?.authorization || ''

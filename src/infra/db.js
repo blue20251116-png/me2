@@ -11,9 +11,7 @@ const db = new DatabaseSync(path.join(dbDir, 'scheduler.db'));
 if (process.env.NODE_ENV === 'production') {
   const backupPath = path.join(dbDir, 'scheduler-before-recovery-v1.db');
   if (!fs.existsSync(backupPath)) {
-    // Same class of bug as the PRAGMA guard below: VACUUM INTO writes an entire new DB file copy
-    // at module-load time, unguarded - on a full disk this throws and crashes the whole process
-    // before it ever starts listening, same as the WAL-mode crash this session found live.
+    // Guarded like every boot-time write: a full disk must not crash startup.
     try {
       db.exec('PRAGMA busy_timeout=5000;');
       db.prepare('VACUUM INTO ?').run(backupPath);
@@ -24,15 +22,8 @@ if (process.env.NODE_ENV === 'production') {
     }
   }
 }
-// REGRESSION (found live, 2026-09-12): when the persistent volume fills up, switching to WAL
-// mode needs to create new "-wal"/"-shm" sidecar files on disk, which fails with a disk I/O
-// error - and since this runs unguarded at module load time (require('./db') is the very first
-// thing server.js does), that error crashed the ENTIRE process before app.listen() ever ran.
-// That took down every route, including the filesystem-only /admin/emergency-cleanup route in
-// server.js that exists specifically to recover from a full disk - the fix was completely
-// unreachable because the process never got far enough to serve it. Catching this one line lets
-// the process boot in a degraded state; actual db.prepare()/db.exec() calls made later from real
-// request handlers still fail with the same real error on their own, same as before this fix.
+// Boot must survive a full disk (the emergency-cleanup route is how a full volume gets fixed), so
+// every schema statement at load time is guarded; real queries later still surface real errors.
 try {
   db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
 } catch (e) {
@@ -40,11 +31,6 @@ try {
 }
 const DEFAULT_DISCLOSURE_TEMPLATE =
   '이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.\n\n{link}';
-// REGRESSION (found live, 2026-09-12): same crash-at-boot class as the PRAGMA fix above - these
-// CREATE TABLE/seed-row statements ran unguarded right after it. On a full disk, "IF NOT EXISTS"
-// is not a safe no-op guarantee against a disk I/O error (SQLite can still need to touch a
-// journal file to process the statement), so leaving these unguarded just moved the same
-// crash-at-boot one line down instead of fixing it.
 try {
   db.exec(
     `CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,label TEXT NOT NULL,threads_app_id TEXT,threads_app_secret TEXT,threads_redirect_uri TEXT,threads_user_id TEXT,threads_access_token TEXT,threads_token_expires_at TEXT,threads_username TEXT,coupang_access_key TEXT,coupang_secret_key TEXT,coupang_sub_id TEXT,coupang_disclosure_template TEXT,anthropic_api_key TEXT,openai_api_key TEXT,naver_client_id TEXT,naver_client_secret TEXT,autopilot_enabled INTEGER DEFAULT 0,autopilot_next_at TEXT,autopilot_last_keyword TEXT,autopilot_last_target TEXT,autopilot_youtube_source_enabled INTEGER DEFAULT 1,autopilot_youtube_order TEXT DEFAULT 'relevance',autopilot_frame_media_enabled INTEGER DEFAULT 0,created_at TEXT DEFAULT (datetime('now')));CREATE TABLE IF NOT EXISTS media_sources (id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER NOT NULL,product_keyword TEXT NOT NULL,frame_job_id TEXT,image_url TEXT,extra_image_url TEXT,created_at TEXT DEFAULT (datetime('now')),last_used_at TEXT,use_count INTEGER DEFAULT 0);CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER NOT NULL,text TEXT NOT NULL,link TEXT,image_url TEXT,video_url TEXT,scheduled_at TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',threads_media_id TEXT,posted_at TEXT,error_message TEXT,auto_comment_enabled INTEGER DEFAULT 1,comment_status TEXT DEFAULT 'none',comment_media_id TEXT,comment_posted_at TEXT,comment_error_message TEXT,created_at TEXT DEFAULT (datetime('now')),FOREIGN KEY(account_id) REFERENCES accounts(id));CREATE TABLE IF NOT EXISTS insights(post_id INTEGER PRIMARY KEY,views INTEGER DEFAULT 0,likes INTEGER DEFAULT 0,replies INTEGER DEFAULT 0,reposts INTEGER DEFAULT 0,quotes INTEGER DEFAULT 0,updated_at TEXT DEFAULT(datetime('now')),FOREIGN KEY(post_id) REFERENCES posts(id));CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,name TEXT,role TEXT DEFAULT 'user',status TEXT DEFAULT 'pending',plan TEXT DEFAULT 'pro',daily_publish_limit INTEGER DEFAULT 20,max_threads_accounts INTEGER DEFAULT 1,expires_at TEXT,approved_at TEXT,approved_by INTEGER,created_at TEXT DEFAULT(datetime('now')));CREATE TABLE IF NOT EXISTS usage_events(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,type TEXT NOT NULL,created_at TEXT DEFAULT(datetime('now')));CREATE TABLE IF NOT EXISTS site_settings(key TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS system_api_settings(key TEXT PRIMARY KEY,value TEXT);`

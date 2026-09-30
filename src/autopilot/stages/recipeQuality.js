@@ -86,22 +86,9 @@ function recipeContainsIngredient(text, item) {
   };
   return (aliases[item] || [item]).some(x => String(text || '').includes(x));
 }
-// REGRESSION (found via synthetic testing, hourly review): buildThreadsFirstAutopilot() already
-// runs scrubSecret() before this patch ever sees result.commentLead, replacing the designated
-// secret ingredient's real name with the "비밀 재료"/"비밀 소스" placeholder. importantSourceIngredients()
-// pulls from a hardcoded common-ingredient list (마늘/소금/버터 등) that can easily overlap with
-// exactly that secret ingredient - when it does, the real name no longer appears anywhere in the
-// (correctly scrubbed) text, so the "required ingredient present" check below always failed for a
-// perfectly valid recipe, forcing pointless rewrite attempts and - after 3 failures - throwing and
-// killing the whole autopilot run for that topic. The intentionally-hidden ingredient can never
-// literally appear by name, by design, so it must be excluded from this check.
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): the format check required
-// a literal newline directly after "재료"/"만드는 법", with no tolerance for a colon - but the
-// system prompt below never actually forbids one, and "재료:"/"만드는 법:" is an extremely common,
-// harmless way for a model to format a labeled list. A recipe using that colon variant was
-// otherwise perfectly complete and source-accurate, but this rejected it as "bad" anyway, forcing
-// a pointless rewrite loop that (after 3 failed attempts, since the model has no reason to drop a
-// colon it wasn't told was wrong) throws and kills the whole autopilot run for that topic.
+// A recipe comment is bad when it lacks the 재료 / 만드는 법 sections (a trailing colon is fine) or
+// misses a key source ingredient. The intentionally hidden secret ingredient is excluded from the
+// ingredient check, since it is scrubbed to a placeholder by design.
 function badRecipe(text, result) {
   const t = clean(text);
   if (!/🥘\s*재료\s*[:：]?\s*\n/.test(t) || !/🍳\s*만드는 법\s*[:：]?\s*\n/.test(t)) return true;

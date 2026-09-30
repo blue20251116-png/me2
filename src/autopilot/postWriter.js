@@ -4,31 +4,14 @@ const { normalizeVoice, voiceGuide, formatVoice, assertVoice, reviewSourceVoice 
 const { pickPersona } = require('../content/personas');
 const { callAiText, clean } = require('./aiCalls');
 
-// REGRESSION (found via synthetic testing, hourly review): plain split/join replaced the secret
-// term wherever it appeared as a bare substring, including inside a completely different,
-// unrelated compound word ("소금" inside "소금물" -> "비밀 재료물", "마늘" inside "마늘빵" ->
-// "비밀 재료빵") - producing broken, nonsensical Korean in the published post body. A Hangul-aware
-// boundary check now only replaces the term when it stands as its own word (optionally followed
-// by a grammatical particle, which is common and correct: "소금을" -> "비밀 재료를"). Since "비밀
-// 재료" always ends in a vowel (료), a particle carried over from a consonant-ending secret term
-// would itself be grammatically wrong (을/이/은/과 need 를/가/는/와 after a vowel), so the matched
-// particle is remapped rather than copied verbatim.
+// Replaces the secret term only as a standalone word (not inside 소금물/마늘빵), remapping a trailing
+// particle to fit the vowel-ending replacement (소금을 → 비밀 재료를).
 const SCRUB_PARTICLE_ALT = '이랑|은|는|이|가|을|를|과|와|도|만|의|에|로|나|랑|야';
 
 const SCRUB_PARTICLE_REMAP = { 을: '를', 이: '가', 은: '는', 과: '와', 이랑: '랑' };
 
-// REGRESSION (found live, 2026-09-15): a real published post still read "비밀 재료 별로라던
-// 남편이..." / "...비밀 재료 맨날 혼자 먹었는데" in the BODY, despite the prompt above (line ~478)
-// explicitly telling the model never to label the ingredient "비밀 재료" in the body. The model
-// itself didn't write that literal phrase - this scrubber did: whenever the model named the real
-// secret ingredient in the body (which happens often, since it has to describe using it), this
-// safety net swapped it back to the hardcoded literal "비밀 재료", silently re-introducing the
-// exact labeling the user asked to remove. The comment's ingredient list still legitimately needs
-// a fixed placeholder label (it's a structured "🥘 재료" list, not prose), so `replacement`
-// defaults to '비밀 재료' there - but the body call sites below now pass '이거', matching the same
-// identity-hiding demonstrative pronoun style ("이거"/"이게"/"그거") personas.js's
-// CURIOSITY_BLOCK already uses, so a leaked term reads as natural hidden-identity prose instead of
-// a label.
+// Body call sites pass '이거' (reads as natural hidden-identity prose); the comment's ingredient
+// list uses the default '비밀 재료' placeholder.
 function scrubSecret(text, secret, product, replacement = '비밀 재료') {
   let out = String(text || '').trim();
   for (const v of [secret, product]) {
@@ -41,22 +24,9 @@ function scrubSecret(text, secret, product, replacement = '비밀 재료') {
   return out;
 }
 
-// REGRESSION (found via synthetic testing, hourly review, 2026-09-14): both functions matched
-// "재료"/"만드는 법" etc. ANYWHERE in the text with no anchoring, so an ordinary casual sentence
-// merely mentioning the bare word ("이 재료 진짜 신선하고 만들기도 쉬움", with no actual heading
-// structure at all) made hasIngredientHeading()+hasMethodHeading() both return true. Worse,
-// normalizeRecipeHeadings() used the exact same unanchored pattern to REPLACE the first match -
-// on a perfectly well-formed "🥘 재료\n...\n\n🍳 만드는 법\n..." recipe, the unanchored \s* before
-// each label greedily ate the newline that followed it, turning "🥘 재료\n계란 2개" into "🥘
-// 재료계란 2개" (label glued onto the first line with no separator) EVERY SINGLE TIME this ran -
-// which is on every recipe-mode commentLead, since repairRecipeComment() below calls this first
-// unconditionally. That self-inflicted corruption then failed recipeQuality.js's badRecipe()
-// format check (which correctly requires a literal newline), forcing an unnecessary extra AI
-// rewrite round-trip for every recipe post regardless of whether the original was already fine -
-// wasted Anthropic budget on every single recipe autopilot run. Anchored all three to only match
-// when the label stands ALONE on its own line (optionally with the emoji/bullet prefix and/or a
-// trailing colon), using horizontal-only whitespace so a run of "\n\n" between sections is never
-// consumed as part of the match.
+// Recipe headings count only when the label stands alone on its own line (optional emoji/bullet and
+// colon), so a sentence that merely mentions "재료" is not a heading and normalizing never glues the
+// label onto the next line.
 function hasIngredientHeading(text) {
   return /^[ \t]*(?:🥘|✅|▪|■)?[ \t]*재료[ \t]*[:：]?[ \t]*$/im.test(String(text || ''));
 }

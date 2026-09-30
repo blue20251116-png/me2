@@ -1,42 +1,8 @@
 'use strict';
 
-// Keep Railway/container flags minimal. --single-process forces Chromium into
-// an atypical process model and was present on every observed SIGTRAP launch.
-// The parent isolatedTask circuit breaker now owns service-wide crash control.
-//
-// 2026-09-10: production logs showed repeated `pthread_create: Resource
-// temporarily unavailable (11)` (EAGAIN) with 2GB+ RAM available, pointing at
-// a process/thread-count ceiling (container PID/ulimit), not memory — and the
-// GPU process specifically crash-looped 6x before Chromium gave up entirely
-// ("GPU process isn't usable. Goodbye"), which then cascaded into the
-// isolatedTask circuit breaker blocking every other account for 5 minutes.
-// --in-process-gpu folds GPU work into the browser process instead of
-// spawning (and crash-looping) a separate one; --renderer-process-limit=1
-// caps renderer process count directly. Both are standalone Chromium flags
-// that don't touch --disable-features, so they can't silently cancel
-// Playwright's own default feature disables the way appending another
-// --disable-features=... value would. Deliberately not revisiting
-// --single-process — that was already tried and reverted per the note above.
-//
-// REGRESSION (found live, 2026-09-22): the exact same SIGTRAP/pthread_create
-// class of crash reappeared - now hitting essentially every account on every
-// 10-minute prefill tick, cascading through the isolatedTask circuit breaker
-// and blocking ALL new material generation account-wide (browser logs came
-// back completely empty, meaning Chromium died before it could log anything -
-// the same instant-death signature as the Sep 10 ulimit/PID-ceiling issue).
-// The account count has grown substantially since Sep 10 (a dozen-plus
-// distinct accounts now ticking in the same single Node process), so the same
-// container-wide process/thread ceiling is plausibly being hit again even
-// though concurrent Chromium launches were already serialized to 1 at a time
-// by both this guard and isolatedTask.js's own MAX_BROWSER_WORKERS. Added
-// --no-zygote: Chromium normally keeps one long-lived "zygote" helper process
-// alive purely to fork() new renderer/GPU processes faster - a whole extra
-// process plus its own thread pool that this app's use case (short-lived,
-// serialized, single-page scraping tasks) gets no benefit from. --no-zygote
-// makes Chromium fork+exec each child directly instead, trading a little
-// per-launch speed for one fewer persistent process and its threads - a
-// smaller, additive step below --single-process (already tried and reverted
-// above) rather than a repeat of it.
+// Container-safe Chromium flags. Railway containers hit a process/thread ceiling (pthread_create
+// EAGAIN, SIGTRAP on launch), so these minimise helper processes: GPU work in-process, one renderer,
+// no zygote. --single-process was tried and reverted (it crashed on every launch).
 const SAFE_ARGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
