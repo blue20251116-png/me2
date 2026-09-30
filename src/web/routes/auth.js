@@ -63,15 +63,9 @@ router.post('/api/auth/signup', (req, res) => {
 
 router.post('/api/auth/login', require('../loginRateLimit'), (req, res, next) => {
   const { email, password } = req.body || {};
-  // Signup used to store the email exactly as typed while setup-admin lowercased it, so
-  // "User@x.com" signups could not log in as "user@x.com". Legacy mixed-case rows still match
-  // on the exact form as a fallback.
-  const user =
-    getUserByEmail(
-      String(email || '')
-        .trim()
-        .toLowerCase()
-    ) || (typeof email === 'string' && email ? getUserByEmail(email) : undefined);
+  // getUserByEmail is case-insensitive and prefers an exact-case match, so legacy mixed-case rows
+  // keep working.
+  const user = getUserByEmail(email);
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: '이메일 또는 비밀번호가 올바르지 않습니다' });
   }

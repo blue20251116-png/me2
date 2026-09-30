@@ -34,10 +34,15 @@ router.delete('/api/upload-media/:filename', requireAccount, (req, res) => {
   }
   const flatPath = path.join(uploadsDir, filename);
   if (fs.existsSync(flatPath)) {
+    // Carousel posts keep their media URL-encoded inside image_url (and in media_items_json),
+    // so match the bare filename too.
     const like = `%/uploads/${filename}`;
+    const bare = `%${filename}%`;
     const referenced = db
-      .prepare('SELECT 1 FROM posts WHERE image_url LIKE ? OR extra_image_url LIKE ? OR video_url LIKE ? LIMIT 1')
-      .get(like, like, like);
+      .prepare(
+        'SELECT 1 FROM posts WHERE image_url LIKE ? OR extra_image_url LIKE ? OR video_url LIKE ? OR image_url LIKE ? OR media_items_json LIKE ? LIMIT 1'
+      )
+      .get(like, like, like, bare, bare);
     if (referenced) return res.status(409).json({ error: '예약된 글이 사용 중인 파일은 삭제할 수 없습니다' });
     fs.unlinkSync(flatPath);
   }

@@ -25,10 +25,9 @@ test(
     const server = createApp().listen(0, '127.0.0.1');
     await new Promise(resolve => server.once('listening', resolve));
     const base = `http://127.0.0.1:${server.address().port}`;
-    const browser = await chromium.launch({
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
-    });
+    let browser;
     try {
+      browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined });
       const setup = await fetch(`${base}/api/auth/setup-admin`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -84,7 +83,9 @@ test(
 
       assert.deepEqual(pageErrors, [], `uncaught page errors:\n${pageErrors.join('\n')}`);
     } finally {
-      await browser.close();
+      // Always release the browser and the port, so a launch failure fails fast instead of hanging.
+      if (browser) await browser.close().catch(() => {});
+      server.closeAllConnections?.();
       server.close();
     }
   }

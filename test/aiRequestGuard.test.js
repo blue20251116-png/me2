@@ -211,3 +211,18 @@ test('retryAfterMs falls back to a sane default when neither a header nor parsea
   assert.equal(retryAfterMs({ message: 'rate_limit_error' }), 1800);
   assert.equal(retryAfterMs({}), 1800);
 });
+
+test('isAiBudgetOrCreditError recognises budget/credit exhaustion and nothing else', () => {
+  const { isAiBudgetOrCreditError } = require('../src/integrations/aiRequestGuard');
+  assert.equal(typeof isAiBudgetOrCreditError, 'function');
+  assert.ok(isAiBudgetOrCreditError({ code: 'OPENAI_HOURLY_BUDGET_EXCEEDED' }));
+  assert.ok(isAiBudgetOrCreditError({ __openAiNoRetry: true }));
+  assert.ok(
+    isAiBudgetOrCreditError({
+      response: { data: { error: { message: 'You exceeded your quota: insufficient_quota' } } },
+    })
+  );
+  assert.ok(isAiBudgetOrCreditError(new Error('Your credit balance is too low')));
+  assert.ok(!isAiBudgetOrCreditError(new Error('Request failed with status code 500')));
+  assert.ok(!isAiBudgetOrCreditError(undefined));
+});

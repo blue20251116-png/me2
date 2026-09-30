@@ -212,6 +212,44 @@ test('upload delete is scoped to the caller and referenced files are protected',
   assert.equal((await alice('DELETE', `/api/upload-media/in-use.jpg?accountId=${ids.bob}`)).status, 403);
 });
 
+test('files used inside a carousel (media bundle) cannot be deleted either', async () => {
+  const { UPLOADS_DIR } = require('../src/config/paths');
+  const { encodeMediaBundle } = require('../src/threads/mediaBundle');
+  fs.writeFileSync(path.join(UPLOADS_DIR, 'carousel-1.jpg'), 'x');
+  db.prepare('INSERT INTO posts(account_id,text,scheduled_at,image_url) VALUES(?,?,?,?)').run(
+    ids.alice,
+    '캐러셀',
+    new Date().toISOString(),
+    encodeMediaBundle([
+      { type: 'IMAGE', url: 'https://example.test/uploads/carousel-1.jpg' },
+      { type: 'IMAGE', url: 'https://example.test/uploads/other.jpg' },
+    ])
+  );
+  assert.equal((await alice('DELETE', `/api/upload-media/carousel-1.jpg?accountId=${ids.alice}`)).status, 409);
+  assert.ok(fs.existsSync(path.join(UPLOADS_DIR, 'carousel-1.jpg')));
+});
+
+test('a legacy mixed-case email blocks a lowercase duplicate signup and can still log in', async () => {
+  const { hashPassword } = require('../src/web/auth');
+  db.prepare(
+    "INSERT INTO users(email,password_hash,name,role,status,expires_at) VALUES('Legacy@Example.com',?,'l','user','active',?)"
+  ).run(hashPassword('legacy-pass-1'), new Date(Date.now() + 86400000).toISOString());
+  assert.equal(
+    (await anon('POST', '/api/auth/signup', { email: 'legacy@example.com', password: 'x', name: 'x||THREADS:x' }))
+      .status,
+    400
+  );
+  const legacy = client();
+  assert.equal(
+    (await legacy('POST', '/api/auth/login', { email: 'Legacy@Example.com', password: 'legacy-pass-1' })).status,
+    200
+  );
+  assert.equal(
+    (await legacy('POST', '/api/auth/login', { email: 'legacy@example.com', password: 'legacy-pass-1' })).status,
+    200
+  );
+});
+
 test('product scraping refuses internal addresses', async () => {
   const r = await alice('POST', '/api/scrape-product', { url: 'http://169.254.169.254/latest/meta-data/' });
   assert.equal(r.status, 422);

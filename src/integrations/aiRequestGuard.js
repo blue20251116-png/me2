@@ -287,8 +287,19 @@ function guardedPost(url, data, config) {
   return task;
 }
 
+// True when the AI call failed because the hourly request budget or the provider credits are
+// exhausted - retrying another candidate would only fail the same way.
+function isAiBudgetOrCreditError(e) {
+  if (e?.code === 'OPENAI_HOURLY_BUDGET_EXCEEDED' || e?.__openAiNoRetry) return true;
+  const msg = `${e?.message || ''} ${e?.response?.data?.error?.message || ''}`;
+  return /OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(
+    msg
+  );
+}
+
 module.exports = {
   guardedPost,
+  isAiBudgetOrCreditError,
   truncateString,
   capContent,
   countTextChars,

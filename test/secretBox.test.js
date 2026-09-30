@@ -79,3 +79,38 @@ test('db boot migration encrypts plaintext credentials and removes legacy plaint
   assert.equal(out.yt, 'YT');
   assert.equal(out.legacy, 0);
 });
+
+test('an empty secret.key (older non-atomic write) is replaced without losing data encrypted under it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'me2-emptykey-'));
+  const env = { ...process.env, ME2_DATA_DIR: dir, NODE_ENV: 'test' };
+  delete env.ME2_SECRET_KEY;
+  fs.writeFileSync(path.join(dir, 'secret.key'), '');
+  const out = execFileSync(
+    process.execPath,
+    [
+      '-e',
+      `const b=require('./src/infra/secretBox');
+       // Simulate a value written while the key file was empty (key = sha256('')).
+       const crypto=require('crypto');const iv=crypto.randomBytes(12);
+       const c=crypto.createCipheriv('aes-256-gcm',crypto.createHash('sha256').update('').digest(),iv);
+       const ct=Buffer.concat([c.update('old-value','utf8'),c.final()]);
+       const legacy='enc:v1:'+iv.toString('base64')+':'+c.getAuthTag().toString('base64')+':'+ct.toString('base64');
+       const fresh=b.encryptSecret('new-value');
+       console.log('RESULT:'+JSON.stringify({old:b.decryptSecret(legacy),reenc:b.needsReencrypt(legacy),fresh:b.decryptSecret(fresh),freshPrimary:!b.needsReencrypt(fresh)}));`,
+    ],
+    { cwd: path.join(__dirname, '..'), env, encoding: 'utf8' }
+  );
+  const r = JSON.parse(
+    out
+      .split('\n')
+      .find(l => l.startsWith('RESULT:'))
+      .slice(7)
+  );
+  assert.deepEqual(r, { old: 'old-value', reenc: true, fresh: 'new-value', freshPrimary: true });
+  const key = fs.readFileSync(path.join(dir, 'secret.key'), 'utf8').trim();
+  assert.ok(key.length >= 16, 'a real key replaced the empty file');
+  assert.ok(
+    fs.readdirSync(dir).some(f => f.startsWith('secret.key.invalid-')),
+    'the bad file is kept aside'
+  );
+});

@@ -20,23 +20,50 @@ let cachedKeys = null;
 // [primary, ...fallbacks]. Encryption always uses the primary; decryption tries every key, so
 // setting ME2_SECRET_KEY later still reads values written with the auto-generated file key (and
 // db.js re-encrypts them with the new primary at boot).
+const hashKey = material => crypto.createHash('sha256').update(material).digest();
+
+// Creates the key file atomically: write a temp file, then hard-link it into place (fails if
+// another process won the race, in which case its key is used). A crash mid-write can therefore
+// never leave an empty secret.key behind.
+function createKeyFile(keyFile) {
+  fs.mkdirSync(path.dirname(keyFile), { recursive: true });
+  const tmp = `${keyFile}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, crypto.randomBytes(32).toString('base64'), { mode: 0o600 });
+  try {
+    fs.linkSync(tmp, keyFile);
+    console.warn('[Secrets] ME2_SECRET_KEY 미설정 → 데이터 폴더에 암호화 키(secret.key)를 새로 만들었습니다');
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
 function loadKeys() {
   if (cachedKeys) return cachedKeys;
   const keys = [];
   const fromEnv = String(process.env.ME2_SECRET_KEY || '').trim();
-  if (fromEnv) keys.push(crypto.createHash('sha256').update(fromEnv).digest());
+  if (fromEnv) keys.push(hashKey(fromEnv));
   const keyFile = path.join(DATA_DIR, 'secret.key');
-  if (!fromEnv && !fs.existsSync(keyFile)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    try {
-      fs.writeFileSync(keyFile, crypto.randomBytes(32).toString('base64'), { mode: 0o600, flag: 'wx' });
-      console.warn('[Secrets] ME2_SECRET_KEY 미설정 → 데이터 폴더에 암호화 키(secret.key)를 새로 만들었습니다');
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
+  if (!fromEnv && !fs.existsSync(keyFile)) createKeyFile(keyFile);
+  if (fs.existsSync(keyFile)) {
+    let material = fs.readFileSync(keyFile, 'utf8').trim();
+    if (material.length < 16) {
+      // A too-short key (e.g. an empty file from an older non-atomic write) is not usable as the
+      // primary key. Keep it only as a fallback so anything already encrypted with it stays
+      // readable (and gets re-encrypted at boot), and move to a fresh key.
+      console.error('[Secrets] secret.key가 비어 있거나 손상돼 새 키로 교체합니다');
+      keys.push(null, hashKey(material)); // placeholder for the new file key, then the old one
+      fs.renameSync(keyFile, `${keyFile}.invalid-${Date.now()}`);
+      if (!fromEnv) createKeyFile(keyFile);
+      material = fs.existsSync(keyFile) ? fs.readFileSync(keyFile, 'utf8').trim() : '';
+      const idx = keys.indexOf(null);
+      if (material.length >= 16) keys[idx] = hashKey(material);
+      else keys.splice(idx, 1);
+    } else {
+      keys.push(hashKey(material));
     }
   }
-  if (fs.existsSync(keyFile))
-    keys.push(crypto.createHash('sha256').update(fs.readFileSync(keyFile, 'utf8').trim()).digest());
   cachedKeys = keys;
   return keys;
 }

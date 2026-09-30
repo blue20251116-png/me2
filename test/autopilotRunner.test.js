@@ -40,9 +40,8 @@ function harness({ generationError, preflightError, env = {} } = {}) {
     },
     '../config/paths': require('../src/config/paths'),
     '../config/publicUrl': require('../src/config/publicUrl'),
-    '../integrations/aiRequestGuard': {
-      isAiBudgetOrCreditError: require('../src/integrations/aiRequestGuard').isAiBudgetOrCreditError,
-    },
+    // The real function (a stub once hid that it wasn't exported at all).
+    '../integrations/aiRequestGuard': require('../src/integrations/aiRequestGuard'),
     '../infra/automationState': { setState() {}, budgetState: () => ({ available: true }) },
     '../threads/tokenRefresh': require('../src/threads/tokenRefresh'),
     '../infra/db': {

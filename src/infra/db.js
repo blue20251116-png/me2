@@ -175,6 +175,8 @@ function bootstrapAdmin() {
   assignOrphanAccountsToAdmin();
 }
 const migrations = [
+  `ALTER TABLE posts ADD COLUMN persona TEXT`,
+  `ALTER TABLE posts ADD COLUMN content_mode TEXT`,
   `ALTER TABLE posts ADD COLUMN comment_retry_count INTEGER DEFAULT 0`,
   `ALTER TABLE posts ADD COLUMN comment_next_retry_at TEXT`,
   `ALTER TABLE posts ADD COLUMN recipe_comment_text TEXT`,
@@ -406,8 +408,14 @@ function createUser(email, passwordHash, name) {
     );
   return userId;
 }
+// Case-insensitive (emails are case-insensitive in practice, and older rows were stored as typed).
+// If legacy rows differ only by case, the exact-case match wins.
 function getUserByEmail(email) {
-  return db.prepare('SELECT * FROM users WHERE email=?').get(email);
+  const e = String(email ?? '').trim();
+  if (!e) return undefined;
+  return db
+    .prepare('SELECT * FROM users WHERE lower(email)=lower(?) ORDER BY (email=?) DESC, id ASC LIMIT 1')
+    .get(e, e);
 }
 function getUserById(id) {
   return db.prepare('SELECT * FROM users WHERE id=?').get(id);
