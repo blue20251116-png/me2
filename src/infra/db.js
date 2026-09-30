@@ -1,4 +1,5 @@
 'use strict';
+const { encryptSecret, decryptSecret, isEncrypted, needsReencrypt } = require('./secretBox');
 const { DATA_DIR } = require('../config/paths');
 // Node.js 내장 SQLite 모듈 사용 (Node 22.5+ 필요, 별도 네이티브 빌드 불필요)
 const { DatabaseSync } = require('node:sqlite');
@@ -80,14 +81,19 @@ function updateSiteSettings(fields) {
     if ((key === 'pexels_api_key' || key === 'pixabay_api_key') && !value) continue;
     db.prepare(
       `INSERT INTO site_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`
-    ).run(key, value == null ? '' : String(value).trim());
+    ).run(key, storeSiteValue(key, value));
   }
 }
+const SITE_SECRET_KEYS = ['pexels_api_key', 'pixabay_api_key'];
+function storeSiteValue(key, value) {
+  const v = value == null ? '' : String(value).trim();
+  return SITE_SECRET_KEYS.includes(key) ? encryptSecret(v) : v;
+}
 function getPexelsApiKey() {
-  return db.prepare(`SELECT value FROM site_settings WHERE key='pexels_api_key'`).get()?.value || '';
+  return decryptSecret(db.prepare(`SELECT value FROM site_settings WHERE key='pexels_api_key'`).get()?.value || '');
 }
 function getPixabayApiKey() {
-  return db.prepare(`SELECT value FROM site_settings WHERE key='pixabay_api_key'`).get()?.value || '';
+  return decryptSecret(db.prepare(`SELECT value FROM site_settings WHERE key='pixabay_api_key'`).get()?.value || '');
 }
 // OpenAI 완전히 걷어내고 Claude(Anthropic)로 전환 (2026-09-13): 운영자가 등록하는 공용 키도
 // openai_api_key 대신 anthropic_api_key로 바꾼다 (aiCaption.js 등의 resolveModelKeys()가 이 값을
@@ -101,22 +107,24 @@ const SYSTEM_API_SETTING_KEYS = [
   'naver_client_secret',
   'youtube_api_key',
 ];
+const SYSTEM_SECRET_KEYS = ['threads_app_secret', 'anthropic_api_key', 'naver_client_secret', 'youtube_api_key'];
 function getSystemApiSettings() {
   const rows = db.prepare('SELECT key,value FROM system_api_settings').all();
   const out = {};
   for (const key of SYSTEM_API_SETTING_KEYS) out[key] = '';
-  for (const row of rows) if (SYSTEM_API_SETTING_KEYS.includes(row.key)) out[row.key] = row.value || '';
+  for (const row of rows)
+    if (SYSTEM_API_SETTING_KEYS.includes(row.key)) out[row.key] = decryptSecret(row.value || '') || '';
   return out;
 }
 function updateSystemApiSettings(fields) {
   for (const key of SYSTEM_API_SETTING_KEYS) {
     if (!(key in fields)) continue;
     const value = fields[key];
-    if (['threads_app_secret', 'anthropic_api_key', 'naver_client_secret', 'youtube_api_key'].includes(key) && !value)
-      continue;
+    if (SYSTEM_SECRET_KEYS.includes(key) && !value) continue;
+    const v = value == null ? '' : String(value).trim();
     db.prepare(
       `INSERT INTO system_api_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`
-    ).run(key, value == null ? '' : String(value).trim());
+    ).run(key, SYSTEM_SECRET_KEYS.includes(key) ? encryptSecret(v) : v);
   }
 }
 function hasAdmin() {
@@ -247,6 +255,46 @@ try {
 } catch (e) {
   console.error('[DB][INIT] 레거시 설정 이전 실패 (디스크 문제로 추정) - 프로세스는 계속 부팅합니다:', e.message);
 }
+// Idempotent boot migration: encrypt credentials stored in plaintext before encryption at rest
+// existed, re-encrypt values written with a fallback key after ME2_SECRET_KEY was set, and drop the plaintext copies left in the legacy settings table once
+// accounts exist (they are only read when no account exists yet).
+const LEGACY_SECRET_SETTING_KEYS = [
+  'THREADS_APP_SECRET',
+  'THREADS_ACCESS_TOKEN',
+  'COUPANG_ACCESS_KEY',
+  'COUPANG_SECRET_KEY',
+  'ANTHROPIC_API_KEY',
+];
+function encryptPlaintextSecrets() {
+  let changed = 0;
+  for (const row of db.prepare(`SELECT id,${ACCOUNT_SECRET_FIELDS.join(',')} FROM accounts`).all()) {
+    const plain = ACCOUNT_SECRET_FIELDS.filter(f => row[f] && (!isEncrypted(row[f]) || needsReencrypt(row[f])));
+    if (!plain.length) continue;
+    db.prepare(`UPDATE accounts SET ${plain.map(f => `${f}=?`).join(',')} WHERE id=?`).run(
+      ...plain.map(f => encryptSecret(decryptSecret(row[f]))),
+      row.id
+    );
+    changed += plain.length;
+  }
+  for (const [table, keys] of [
+    ['system_api_settings', SYSTEM_SECRET_KEYS],
+    ['site_settings', SITE_SECRET_KEYS],
+  ]) {
+    for (const row of db.prepare(`SELECT key,value FROM ${table}`).all()) {
+      if (!keys.includes(row.key) || !row.value || (isEncrypted(row.value) && !needsReencrypt(row.value))) continue;
+      db.prepare(`UPDATE ${table} SET value=? WHERE key=?`).run(encryptSecret(decryptSecret(row.value)), row.key);
+      changed++;
+    }
+  }
+  if (db.prepare('SELECT 1 FROM accounts LIMIT 1').get()) {
+    const placeholders = LEGACY_SECRET_SETTING_KEYS.map(() => '?').join(',');
+    changed += Number(
+      db.prepare(`DELETE FROM settings WHERE key IN (${placeholders})`).run(...LEGACY_SECRET_SETTING_KEYS).changes || 0
+    );
+  }
+  if (changed) console.log(`[Secrets] 평문으로 저장돼 있던 비밀값 ${changed}개를 암호화/정리했습니다`);
+}
+
 function listAccounts(userId) {
   return db
     .prepare(
@@ -257,8 +305,21 @@ function listAccounts(userId) {
 function listAllAccountsForSystem() {
   return db.prepare('SELECT id FROM accounts ORDER BY id ASC').all();
 }
+// Account columns holding credentials; encrypted at rest (infra/secretBox.js).
+const ACCOUNT_SECRET_FIELDS = [
+  'threads_app_secret',
+  'threads_access_token',
+  'coupang_access_key',
+  'coupang_secret_key',
+  'anthropic_api_key',
+  'openai_api_key',
+  'naver_client_secret',
+];
 function getAccount(id) {
-  return db.prepare('SELECT * FROM accounts WHERE id=?').get(id);
+  const row = db.prepare('SELECT * FROM accounts WHERE id=?').get(id);
+  if (!row) return row;
+  for (const f of ACCOUNT_SECRET_FIELDS) if (row[f] != null) row[f] = decryptSecret(row[f]) || null;
+  return row;
 }
 function countAccountsForUser(userId) {
   return db.prepare('SELECT COUNT(*) c FROM accounts WHERE user_id=?').get(userId).c;
@@ -297,7 +358,7 @@ function updateAccount(id, fields) {
   const entries = Object.entries(fields).filter(([k]) => ACCOUNT_UPDATABLE_FIELDS.includes(k));
   if (!entries.length) return;
   db.prepare(`UPDATE accounts SET ${entries.map(([k]) => `${k}=?`).join(',')} WHERE id=?`).run(
-    ...entries.map(([, v]) => v),
+    ...entries.map(([k, v]) => (ACCOUNT_SECRET_FIELDS.includes(k) ? encryptSecret(v) : v)),
     id
   );
 }
@@ -449,6 +510,12 @@ function findMediaSourceForProduct(accountId, productName) {
 function markMediaSourceUsed(id) {
   db.prepare(`UPDATE media_sources SET last_used_at=datetime('now'),use_count=use_count+1 WHERE id=?`).run(id);
 }
+try {
+  encryptPlaintextSecrets();
+} catch (e) {
+  console.error('[DB][INIT] 비밀값 암호화 마이그레이션 실패 - 다음 부팅 때 다시 시도합니다:', e.message);
+}
+
 module.exports = {
   db,
   DEFAULT_DISCLOSURE_TEMPLATE,
