@@ -35,6 +35,10 @@ npm run check     # 린트 + 포맷 검사 + 테스트 (CI와 동일)
 npm run format    # 코드 자동 정렬
 ```
 
+`test/frontendSmoke.test.js`는 실제 Chromium으로 화면을 열어봅니다. 브라우저가 없으면
+`npx playwright install chromium`으로 설치하거나, 설치된 Chromium 경로를 `PLAYWRIGHT_CHROMIUM_EXECUTABLE`에 지정하세요
+(`ME2_SKIP_BROWSER_TESTS=1`이면 건너뜀).
+
 ## 1. 로컬에서 먼저 확인해보기
 
 ```
