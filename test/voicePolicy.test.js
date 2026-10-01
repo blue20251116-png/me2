@@ -85,17 +85,17 @@ test('every persona carries a shared baseline curiosity-gap hook, not just the d
   }
 });
 
-test('every persona carries the shared "always pick the stronger version" intensity directive', () => {
-  // Content-style change requested by the user (2026-09-15): "sns 스레드바이럴 작가로 너무 밋밋해"
-  // (the persona reads too flat/bland for an SNS Threads viral writer) - "페르소나를 최대로
-  // 강화하자" (let's maximize the persona). Added a shared bullet (after every persona's own
-  // character block, same placement as the curiosity-gap directive above) that forces choosing
-  // the stronger/more intense version of any line over a safe, hedging one, regardless of which
-  // of the 5 personas gets picked.
+test('every persona carries the shared "strong words about my own scene, never sales copy" directive', () => {
+  // 2026-10-01: replaces the 2026-09-15 "always pick the stronger version" directive. The account's
+  // own posts built that way ("이거 하나면 완전 대박", "없으면 못 살 듯", "꼭 써봐야 해") got almost no
+  // views, while the viral benchmarks the user sent use strong words only about the writer's own
+  // scene ("미친 사람인가", "단종되면 시위할거임") and never tell the reader to buy.
   const { PERSONAS } = require('../src/content/personas');
   for (const persona of PERSONAS) {
     const guide = policy.voiceGuide(persona.block);
-    assert.match(guide, /무조건 더 센 쪽을 고른다/, `${persona.id} is missing the shared intensity directive`);
+    assert.match(guide, /센 표현은 써도 된다\. 단, 내 경험이나 구체적인 장면에 붙인다/, persona.id);
+    assert.match(guide, /읽는 사람에게 사라고 하는 판매 문구는 쓰지 않는다/, persona.id);
+    assert.doesNotMatch(guide, /무조건 더 센 쪽을 고른다/, persona.id);
   }
 });
 
@@ -123,27 +123,16 @@ test('every persona carries the shared real-viral-post technique list (numbers/t
   }
 });
 
-test('every persona carries the shared "reach depends on early replies" directive elevating the open-question ending', () => {
-  // Content-style change requested by the user (2026-09-20): "노출이 잘 안돼" (exposure/reach has
-  // been chronically low overall, not a single new bad post) - asked to patch the persona again.
-  // Threads' own reach mechanic rewards early reply velocity, and technique #4 above (a genuine
-  // open question instead of a neatly wrapped conclusion) is the one device most directly aimed at
-  // provoking a reply - so this promotes it from "one of five options" to "use nearly every time,
-  // absent a specific reason not to," with the reach rationale spelled out so the model has a
-  // concrete reason to actually prioritize it over the other four techniques.
+test('every persona ends on a reaction, an ongoing action, a funny vow or one easy question (question optional)', () => {
+  // 2026-10-01: replaces the 2026-09-20 "end with an open question nearly every time" directive.
+  // In the viral benchmarks most posts end on someone's reaction or a number, not a question; the
+  // one that ended on a question drew replies because it stated a debatable habit and asked "맞지?".
   const { PERSONAS } = require('../src/content/personas');
   for (const persona of PERSONAS) {
     const guide = policy.voiceGuide(persona.block);
-    assert.match(
-      guide,
-      /노출이 안 되는 가장 큰 원인은 발행 직후 댓글이 안 달리는 것이다/,
-      `${persona.id} is missing the reach-via-replies directive`
-    );
-    assert.match(
-      guide,
-      /거의 매번 쓴다/,
-      `${persona.id} is missing the "use almost every time" elevation of the open-question ending`
-    );
+    assert.match(guide, /질문은 필수가 아니다/, persona.id);
+    assert.match(guide, /주변 사람의 반응/, persona.id);
+    assert.doesNotMatch(guide, /거의 매번 쓴다/, persona.id);
   }
 });
 
@@ -188,7 +177,7 @@ test('hard format is a line-count ceiling - there is no per-line character limit
   // 120 must NOT be flagged, matching this file's own "don't cut a complete sentence to hit
   // a count" principle for MAX_LINE_CHARS above.
   const finishesJustOverTarget =
-    '이 정리함 진짜 미쳤다 방 어질러놓는 게 습관이었는데 이거 하나로 다 정리되니까 너무 신기함 진짜 인정 이건 무조건 사야됨 없어서 못 살 뻔했잖아 진짜 이거 알려준 친구한테 감사인사 백만번 하고 싶은 심정임 진짜로 완전 강추';
+    '이 정리함 진짜 미쳤다 방 어질러놓는 게 습관이었는데 서랍 세 칸이 한 번에 정리되니까 너무 신기함 진짜 인정 친구가 알려준 건데 그날 바로 두 개 더 샀잖아 진짜 친구한테 감사인사 백만번 하고 싶은 심정임 진짜로 남편도 놀람ㅋㅋ';
   assert.ok(
     Array.from(finishesJustOverTarget).length > 120 &&
       Array.from(finishesJustOverTarget).length <= policy.MAX_BODY_CHARS,
@@ -237,8 +226,8 @@ test('blank-line paragraph breaks are allowed and count toward the line boundary
   assertThreadsShape(policy.assertVoice(text));
   assert.deepEqual(policy.voiceProblems(text), []);
 
-  const parts = Array.from({ length: policy.MAX_LINES }, (_, i) => (i % 2 === 0 ? `${i}번째 줄` : ''));
-  if (!parts[parts.length - 1]) parts[parts.length - 1] = '마지막 줄'; // must not end on a blank line
+  // MAX_LINES physical lines (blank lines included) grouped into at most MAX_PARAGRAPHS paragraphs.
+  const parts = Array.from({ length: policy.MAX_LINES }, (_, i) => ([3, 6, 9].includes(i) ? '' : `${i}번째 줄`));
   const atTheBoundary = parts.join('\n');
   assert.equal(atTheBoundary.split('\n').length, policy.MAX_LINES);
   assertThreadsShape(policy.assertVoice(atTheBoundary));
@@ -738,7 +727,7 @@ test('the persona guide never recommends an example that trips any of its own sa
 });
 
 test('old style blacklist is gone while safety checks remain', () => {
-  for (const expressive of ['여러분은 어때?', '대박임 ㅋㅋ', '강력 추천', '원문에서는 이렇대', 'ㅋㅋㅋㅋㅋㅋ'])
+  for (const expressive of ['여러분은 어때?', '대박임 ㅋㅋ', '미친 사람인가;;', '원문에서는 이렇대', 'ㅋㅋㅋㅋㅋㅋ'])
     assert.deepEqual(policy.voiceProblems(expressive), []);
 
   assert.ok(policy.voiceProblems('한 달 만에 12kg 빠졌어').includes('고위험 효능 주장'));
@@ -997,7 +986,7 @@ test('recipe comment reveal is conditional, not a global requirement', () => {
 });
 
 test('short posts are valid; ten lines are never mandatory', () => {
-  for (const text of ['이거 뭐임ㅋㅋ', '처음엔 평범했는데\n마지막이 미쳤음', '이거 하나로 끝']) {
+  for (const text of ['이거 뭐임ㅋㅋ', '처음엔 평범했는데\n마지막이 미쳤음', '2천원으로 고민 끝']) {
     assertThreadsShape(policy.assertVoice(text));
   }
 });
