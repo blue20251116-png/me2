@@ -54,6 +54,15 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
         );
         continue;
       }
+      // Reposting media with a burned-in ad label or another creator's watermark gets demoted by
+      // Threads (unoriginal content) and is someone else's work, so such a source is not used.
+      if (vision?.mediaFlags?.adLabel || vision?.mediaFlags?.watermark) {
+        lastError = new Error('원본 미디어에 광고 표시 또는 다른 계정 워터마크가 있음');
+        console.log(
+          `[AutopilotV3][MEDIA FLAG SKIP] @${material.username || '-'} adLabel=${vision.mediaFlags.adLabel} watermark=${vision.mediaFlags.watermark} → 다음 소재`
+        );
+        continue;
+      }
       const analysis = await analyzeMaterial(accountId, material, target, vision);
       if (preferredMode === 'product' && analysis.mode === 'lifestyle' && analysis.searchTerms.length > 0) {
         analysis.mode = 'product';

@@ -19,7 +19,7 @@ function grounded(term, evidence) {
 }
 
 function commerceTargetPrompt() {
-  return `너는 Threads 쇼핑 소재의 실제 판매/추천 대상을 식별하는 검수자다. 본문과 작성자 댓글을 우선 보고, 이미지가 제공되면 보조 근거로만 사용한다. 화면에 보이는 주변 물건을 판매 대상으로 착각하지 않는다. 음식이면 완성요리와 실제 제휴 핵심재료/소스/조미료를 구분한다. 브랜드/모델은 근거가 있을 때만 쓴다. searchTerms는 쿠팡에서 실제 상품을 찾기 좋은 검색어 최대 2개다. 단순 주제어(예: 운동, 다이어트, 일상)만 쓰지 말고 실제 구매 가능한 물건/식품명이어야 한다. confidence는 반드시 0~100 사이 정수로 쓰고, 판매 대상이 본문·작성자 댓글·이미지 중 둘 이상의 근거로 명확하면 70 이상을 준다. JSON만 출력: {"kind":"product|food|recipe|lifestyle","soldObject":"","dish":"","promotedIngredient":"","searchTerms":[""],"confidence":0,"evidence":""}`;
+  return `너는 Threads 쇼핑 소재의 실제 판매/추천 대상을 식별하는 검수자다. 본문과 작성자 댓글을 우선 보고, 이미지가 제공되면 보조 근거로만 사용한다. 화면에 보이는 주변 물건을 판매 대상으로 착각하지 않는다. 음식이면 완성요리와 실제 제휴 핵심재료/소스/조미료를 구분한다. 브랜드/모델은 근거가 있을 때만 쓴다. searchTerms는 쿠팡에서 실제 상품을 찾기 좋은 검색어 최대 2개다. 단순 주제어(예: 운동, 다이어트, 일상)만 쓰지 말고 실제 구매 가능한 물건/식품명이어야 한다. confidence는 반드시 0~100 사이 정수로 쓰고, 판매 대상이 본문·작성자 댓글·이미지 중 둘 이상의 근거로 명확하면 70 이상을 준다. 이미지가 있으면 mediaFlags도 판단한다: adLabel은 이미지 안에 "광고", "AD", "유료광고", "협찬" 같은 광고 표시 글자가 박혀 있으면 true, watermark는 다른 계정의 @아이디·채널 로고·워터마크가 박혀 있으면 true다. 이미지가 없으면 둘 다 false. JSON만 출력: {"kind":"product|food|recipe|lifestyle","soldObject":"","dish":"","promotedIngredient":"","searchTerms":[""],"confidence":0,"evidence":"","mediaFlags":{"adLabel":false,"watermark":false}}`;
 }
 
 function commerceTargetText(m) {
@@ -53,6 +53,7 @@ function normalizeVisionResult(d) {
       return n;
     })(),
     evidence: clean(d?.evidence).slice(0, 300),
+    mediaFlags: { adLabel: d?.mediaFlags?.adLabel === true, watermark: d?.mediaFlags?.watermark === true },
   };
 }
 
@@ -301,4 +302,4 @@ async function analyzeMaterial(accountId, m, target, vision) {
   };
 }
 
-module.exports = { identifyCommerceTarget, analyzeMaterial };
+module.exports = { identifyCommerceTarget, analyzeMaterial, normalizeVisionResult };
