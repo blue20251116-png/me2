@@ -23,7 +23,8 @@ src/
                         threadsScraper + scraper/(브라우저 수집, 격리 프로세스 전용), topicTag, tokenRefresh …
   integrations/         aiClient+aiRequestGuard(OpenAI 호출·예산), 쿠팡, 네이버, Pexels/Pixabay, YouTube
   infra/                SQLite, 세션, 브라우저 격리 실행(browserTasks·isolatedTask), HTTP 타임아웃
-public/                 대시보드 화면
+public/                 대시보드 화면: app/(계정·AI 글쓰기·YouTube·오토파일럿·미디어·글 예약·글 목록·설정) + app.js(시작)
+                        escape.js(HTML 이스케이프), 관리자·가입 화면
 test/                   자동 테스트
 docs/                   문체 규칙 등 문서
 ```

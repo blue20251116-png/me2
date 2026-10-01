@@ -92,9 +92,16 @@
       }
     },
     {
-      "files": ["public/app.js"],
-      "globals": {
-        "loadReachReport": "readonly"
+      "files": ["public/app.js", "public/app/*.js"],
+      "rules": {
+        "no-unused-vars": [
+          "error",
+          {
+            "vars": "local",
+            "args": "none",
+            "caughtErrors": "none"
+          }
+        ]
       }
     }
   ]
