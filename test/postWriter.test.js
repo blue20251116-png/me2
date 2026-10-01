@@ -97,3 +97,20 @@ test('normalizeRecipeHeadings still normalizes bare/colon-variant standalone hea
     '🥘 재료\n계란 2개\n\n🍳 만드는 법\n1. 볶는다'
   );
 });
+
+// Production 2026-10-01: ~9 of 45 sources were discarded with "원문에 근거한 레시피 댓글을 완성하지
+// 못했습니다" because the model wrote headings inline / in markdown, which the standalone check rejected.
+test('normalizeRecipeHeadings accepts inline, markdown and serving-note headings', () => {
+  for (const input of [
+    '🥘 재료: 계란 2개, 햄 1장\n🍳 만드는 법: 1. 볶는다',
+    '**재료**\n계란\n\n**만드는 법**\n1. 볶기',
+    '[재료]\n계란\n[만드는 법]\n볶기',
+    '재료 (2인분)\n계란\n만드는법\n볶기',
+  ]) {
+    const out = normalizeRecipeHeadings(input);
+    assert.ok(hasIngredientHeading(out) && hasMethodHeading(out), input);
+  }
+  assert.equal(normalizeRecipeHeadings('🥘 재료: 계란 2개'), '🥘 재료\n계란 2개');
+  const sentence = normalizeRecipeHeadings('재료 진짜 신선함\n만들기 쉬움');
+  assert.equal(hasIngredientHeading(sentence) || hasMethodHeading(sentence), false);
+});

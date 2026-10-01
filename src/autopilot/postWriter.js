@@ -38,13 +38,24 @@ function hasMethodHeading(text) {
   );
 }
 
+// The model often writes a heading with its content on the same line ("🥘 재료: 계란 2개, 햄"),
+// in markdown ("**재료**", "[만드는 법]") or with a serving note ("재료 (2인분)"). Those used to fail
+// the standalone-heading check and the post was discarded (production 2026-10-01: ~9 of 45 sources),
+// so they are rewritten into the canonical form with the content moved to the next line. A sentence
+// that merely starts with the word ("재료 진짜 신선함") still does not count: after the label only a
+// colon (+ content) or nothing may follow.
+const HEADING_OPEN = '[ \\t]*(?:🥘|🍳|✅|▪|■|[-•*#]+)?[ \\t]*(?:\\*\\*|\\[|【)?[ \\t]*';
+const HEADING_CLOSE = '[ \\t]*(?:\\([^)\\n]*\\))?[ \\t]*(?:\\*\\*|\\]|】)?[ \\t]*(?:[:：][ \\t]*(.*?))?[ \\t]*$';
+const INGREDIENT_HEADING_LINE = new RegExp(`^${HEADING_OPEN}재료${HEADING_CLOSE}`, 'm');
+const METHOD_HEADING_LINE = new RegExp(
+  `^${HEADING_OPEN}(?:만드는[ \\t]*법|조리[ \\t]*방법|만들기)${HEADING_CLOSE}`,
+  'm'
+);
+
 function normalizeRecipeHeadings(text) {
   let out = String(text || '').trim();
-  out = out.replace(/^[ \t]*(?:🥘[ \t]*)?재료[ \t]*[:：]?[ \t]*$/im, '🥘 재료');
-  out = out.replace(
-    /^[ \t]*(?:🍳[ \t]*)?(?:만드는[ \t]*법|조리[ \t]*방법|만들기)[ \t]*[:：]?[ \t]*$/im,
-    '🍳 만드는 법'
-  );
+  out = out.replace(INGREDIENT_HEADING_LINE, (m, rest) => (rest ? `🥘 재료\n${rest}` : '🥘 재료'));
+  out = out.replace(METHOD_HEADING_LINE, (m, rest) => (rest ? `🍳 만드는 법\n${rest}` : '🍳 만드는 법'));
   return out;
 }
 
