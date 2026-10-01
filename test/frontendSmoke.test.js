@@ -103,6 +103,21 @@ test(
       );
       assert.match(await page.locator('#reachReport').innerText(), /발행된 글이 쌓이면|평균 조회수/);
 
+      // The dashboard code is split across public/app/*.js: drive a full flow through them.
+      // Compose tab → schedule a post → it shows up on the posts tab; settings tab loads.
+      await page.click('.nav-btn[data-tab="compose"]');
+      await page.fill('#composeForm textarea[name=text]', '스모크 테스트 글 <b>굵게</b>');
+      await page.fill('#composeForm input[name=scheduled_at]', '2099-01-01T09:00');
+      await page.click('#composeForm button[type=submit]');
+      await page.waitForFunction(() => document.querySelector('#composeMsg')?.textContent.includes('예약 등록 완료'));
+      await page.click('.nav-btn[data-tab="posts"]');
+      await page.waitForFunction(() =>
+        document.querySelector('#postsTableBody')?.textContent.includes('스모크 테스트 글')
+      );
+      assert.equal(await page.locator('#postsTableBody b').count(), 0, 'post text is rendered as text, not HTML');
+      await page.click('.nav-btn[data-tab="settings"]');
+      await page.waitForFunction(() => document.querySelector('#tab-settings')?.classList.contains('active'));
+
       assert.deepEqual(pageErrors, [], `uncaught page errors:\n${pageErrors.join('\n')}`);
     } finally {
       // Always release the browser and the port, so a launch failure fails fast instead of hanging.
