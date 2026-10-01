@@ -13,7 +13,7 @@ const {
 const { collectQualifiedThreadsMaterials } = require('./materials');
 const { confidence01, productMatchOk, buildSoldFirstTerms, findProduct } = require('./productMatching');
 const { generatePost } = require('./postWriter');
-const { identifyCommerceTarget, analyzeMaterial } = require('./vision');
+const { identifyCommerceTarget, analyzeMaterial, mediaFlagSkipReason } = require('./vision');
 
 async function buildThreadsFirstAutopilot(accountId, { target }) {
   const materials = await collectQualifiedThreadsMaterials(3);
@@ -54,10 +54,11 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
         );
         continue;
       }
-      // Reposting media with a burned-in ad label or another creator's watermark gets demoted by
-      // Threads (unoriginal content) and is someone else's work, so such a source is not used.
-      if (vision?.mediaFlags?.adLabel || vision?.mediaFlags?.watermark) {
-        lastError = new Error('원본 미디어에 광고 표시 또는 다른 계정 워터마크가 있음');
+      // Reposting another creator's watermarked media gets demoted by Threads (unoriginal content)
+      // and is someone else's work, so such a source is not used (see mediaFlagSkipReason).
+      const mediaSkip = mediaFlagSkipReason(vision?.mediaFlags);
+      if (mediaSkip) {
+        lastError = new Error(mediaSkip);
         console.log(
           `[AutopilotV3][MEDIA FLAG SKIP] @${material.username || '-'} adLabel=${vision.mediaFlags.adLabel} watermark=${vision.mediaFlags.watermark} → 다음 소재`
         );

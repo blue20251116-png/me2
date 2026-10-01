@@ -1103,3 +1103,21 @@ test('persona prompts no longer seed 실화냐/미쳤다 or tell the model to op
   const openingExamples = curiosity.block.split('\n').find(l => /\[오프닝 패턴 예시/.test(l));
   assert.doesNotMatch(openingExamples, /"이거 뭔데|"이게 대체/);
 });
+
+// Production 2026-10-01: drafts were discarded for "문단 과다 분절"/"문단 과다" even after the AI
+// repair (it fixes one by causing the other). Regrouping lines locally keeps the post, wording intact.
+test('over-fragmented paragraphs are regrouped locally instead of discarding the post', async () => {
+  const { reviewSourceVoice, voiceProblems } = require('../src/content/voicePolicy');
+  const frag = [
+    '남동생이 다이소 꿀템이라고 알려줌',
+    '유모차 먼지 때문에 고민이었는데',
+    '2천원짜리로 끝냄',
+    '옆에 엄마들이 어디서 샀냐고 물어봄',
+    '한 통 더 사러 간다ㅋㅋ',
+    '다들 이럴 때 어떻게 해?',
+  ].join('\n\n');
+  assert.deepEqual(voiceProblems(frag), ['문단 과다 분절', '문단 과다']);
+  const out = await reviewSourceVoice(frag, {});
+  assert.deepEqual(voiceProblems(out), []);
+  assert.equal(out.replace(/\s/g, ''), frag.replace(/\s/g, ''));
+});

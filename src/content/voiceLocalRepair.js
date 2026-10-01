@@ -32,4 +32,23 @@ function repairConnectorOnlyBreaks(text, maxLineChars = 40) {
     .trim();
 }
 
-module.exports = { repairConnectorOnlyBreaks };
+// Regroups the lines into 2-3 line paragraphs. Fixes "문단 과다 분절" (every line its own paragraph)
+// and "문단 과다" (more than maxParagraphs) without another AI call; wording is left untouched.
+function regroupParagraphs(text, maxParagraphs = 5) {
+  const lines = String(text || '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+  if (lines.length < 3) return lines.join('\n');
+  for (let size = 2; size <= lines.length; size++) {
+    const groups = [];
+    for (let i = 0; i < lines.length; i += size) groups.push(lines.slice(i, i + size));
+    // A trailing one-line paragraph joins the previous one so no paragraph stands alone.
+    if (groups.length > 1 && groups[groups.length - 1].length === 1) groups[groups.length - 2].push(...groups.pop());
+    if (groups.length <= maxParagraphs) return groups.map(g => g.join('\n')).join('\n\n');
+  }
+  return lines.join('\n');
+}
+
+module.exports = { repairConnectorOnlyBreaks, regroupParagraphs };

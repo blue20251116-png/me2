@@ -1,6 +1,6 @@
 'use strict';
 
-const { repairConnectorOnlyBreaks } = require('./voiceLocalRepair');
+const { repairConnectorOnlyBreaks, regroupParagraphs } = require('./voiceLocalRepair');
 const { CONNECTOR_ONLY, DANGLING_PUNCTUATION_START, DANGLING_BOUND_NOUN_START } = require('./voiceLineGuards');
 const { PERSONAS } = require('./personas');
 const DEFAULT_PERSONA_BLOCK = PERSONAS.find(p => p.id === 'reaction').block;
@@ -249,6 +249,7 @@ async function reviewSourceVoice(text, context = {}, request) {
       problems = repairedProblems;
     }
   }
+  ({ out, problems } = tryParagraphRegroup(out, problems, context));
   if (!problems.length) return out;
   if (typeof request !== 'function') reject(problems);
   const evidence = [context.sourceText, context.authorReplies, context.visualEvidence]
@@ -265,8 +266,18 @@ async function reviewSourceVoice(text, context = {}, request) {
     if (candidate) out = candidate;
     problems = voiceProblems(out, context);
   }
+  // The AI repair often fixes one paragraph problem by causing the other; a last local regroup
+  // keeps an otherwise good post instead of discarding it.
+  ({ out, problems } = tryParagraphRegroup(out, problems, context));
   if (problems.length) reject(problems);
   return out;
+}
+const PARAGRAPH_PROBLEMS = ['문단 과다 분절', '문단 과다', '문단 구분 없음'];
+function tryParagraphRegroup(out, problems, context) {
+  if (!problems.some(p => PARAGRAPH_PROBLEMS.includes(p))) return { out, problems };
+  const repaired = formatVoice(regroupParagraphs(out, MAX_PARAGRAPHS));
+  const repairedProblems = voiceProblems(repaired, context);
+  return repairedProblems.length < problems.length ? { out: repaired, problems: repairedProblems } : { out, problems };
 }
 module.exports = {
   MAX_LINES,

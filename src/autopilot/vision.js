@@ -302,4 +302,16 @@ async function analyzeMaterial(accountId, m, target, vision) {
   };
 }
 
-module.exports = { identifyCommerceTarget, analyzeMaterial, normalizeVisionResult };
+// Which media flags drop a source. A watermark (another creator's @id/logo burned into the image)
+// always does. adLabel does not by default: almost every Coupang-affiliate source carries the
+// "쿠팡 파트너스 … 수수료" disclosure in its text/comments, and the low-detail vision call reads that
+// as an in-image ad label - in production (2026-10-01) it rejected about half of all candidates
+// (25 of ~45 in 30 minutes, watermark=false every time) and starved publishing. Set
+// AUTOPILOT_SKIP_AD_LABEL=1 to skip ad-labelled sources again.
+function mediaFlagSkipReason(flags, env = process.env) {
+  if (flags?.watermark) return '원본 미디어에 다른 계정 워터마크가 있음';
+  if (flags?.adLabel && String(env.AUTOPILOT_SKIP_AD_LABEL || '') === '1') return '원본 미디어에 광고 표시가 있음';
+  return null;
+}
+
+module.exports = { identifyCommerceTarget, analyzeMaterial, normalizeVisionResult, mediaFlagSkipReason };

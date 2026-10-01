@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { voiceProblems, voiceGuide } = require('../src/content/voicePolicy');
 const { PERSONAS } = require('../src/content/personas');
-const { normalizeVisionResult } = require('../src/autopilot/vision');
+const { normalizeVisionResult, mediaFlagSkipReason } = require('../src/autopilot/vision');
 
 const LOW_VIEW_POSTS = {
   sofa: `좁은 집에서 살다 보니 소파랑 매트리스 따로 사면 후회할 일 많더라ㅋㅋ
@@ -95,4 +95,13 @@ test('vision reports burned-in ad labels and watermarks so the source can be ski
     watermark: false,
   });
   assert.deepEqual(normalizeVisionResult({}).mediaFlags, { adLabel: false, watermark: false });
+});
+
+// Production 2026-10-01: adLabel fired on about half of all candidates (the affiliate disclosure text
+// reads as an "ad label"), with watermark=false every time, and publishing nearly stopped.
+test('only a watermark drops a source by default; adLabel needs AUTOPILOT_SKIP_AD_LABEL=1', () => {
+  assert.equal(mediaFlagSkipReason({ adLabel: true, watermark: false }, {}), null);
+  assert.match(mediaFlagSkipReason({ adLabel: false, watermark: true }, {}), /워터마크/);
+  assert.match(mediaFlagSkipReason({ adLabel: true }, { AUTOPILOT_SKIP_AD_LABEL: '1' }), /광고 표시/);
+  assert.equal(mediaFlagSkipReason(undefined, {}), null);
 });
