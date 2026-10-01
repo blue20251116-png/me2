@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { sanitizePublishedThreadsText, applyCoupangReplyPreviewGuard } = require('../src/threads/publishText');
+const { sanitizePublishedThreadsText, prepareReplyLinks } = require('../src/threads/publishText');
 
 test('sanitizePublishedThreadsText strips a lone trailing sentence period', () => {
   assert.equal(sanitizePublishedThreadsText('이거 실화냐.'), '이거 실화냐');
@@ -118,44 +118,35 @@ test('sanitizePublishedThreadsText strips a trailing period stuck to a URL endin
   );
 });
 
-test('applyCoupangReplyPreviewGuard produces a clickable (unbroken) URL even when the source text ends the link with a period', () => {
-  const result = applyCoupangReplyPreviewGuard('이 상품 진짜 좋아요 https://link.coupang.com/a/abc123.');
-  const urls = [...result.text.matchAll(/https?:\/\/\S+/g)].map(m => m[0]);
-  assert.equal(urls.length, 2);
-  for (const u of urls) assert.ok(!u.endsWith('.'), `URL must not end with a stray period: ${u}`);
-  assert.ok(urls[0].endsWith('abc123'), 'the original link must be recoverable without the trailing period');
+test('reply links lose their scheme (no preview card) and keep a clean ending', () => {
+  const result = prepareReplyLinks('이 상품 진짜 좋아요 https://link.coupang.com/a/abc123.', 'bare');
+  assert.equal(result.text, '이 상품 진짜 좋아요 link.coupang.com/a/abc123');
+  assert.equal(result.linkCount, 1);
 });
 
-test('applyCoupangReplyPreviewGuard suppresses the preview for any single URL, not just link.coupang.com', () => {
-  // Regression: the guard only matched the link.coupang.com domain, but
-  // scheduler.js's makeAffiliateLink() can put a plain www.coupang.com product
-  // URL in the comment instead - when the account has no working Coupang
-  // Partners deeplink credentials (createDeeplink() passes the original URL
-  // through unchanged), or when classifyCoupangUrl()'s lptag/subid/aff query
-  // heuristic already treats a plain coupang.com URL as "already affiliate"
-  // and returns it as-is. In either case the old regex found zero matches and
-  // silently skipped suppression entirely, so Threads' normal single-URL
-  // auto-preview card showed up on the comment untouched.
-  const cases = [
-    'https://link.coupang.com/a/abc123',
-    'https://www.coupang.com/vp/products/12345?itemId=1&vendorItemId=2',
-    'https://www.coupang.com/vp/products/12345?aff=someid',
-  ];
-  for (const url of cases) {
-    const result = applyCoupangReplyPreviewGuard(`이 상품 진짜 좋아요\n${url}`);
-    assert.equal(result.guardApplied, true, `guard should apply for: ${url}`);
-    assert.equal(result.urlCount, 2, `must end up with 2 URLs for: ${url}`);
-    assert.ok(result.text.includes(url), 'the original URL must be preserved untouched');
+test('reply links: any domain, repeated URLs dropped, text without links untouched', () => {
+  const plain = 'https://www.coupang.com/vp/products/12345?itemId=1&vendorItemId=2';
+  assert.equal(prepareReplyLinks(`좋아요\n${plain}`, 'bare').text, `좋아요\n${plain.slice('https://'.length)}`);
+
+  const repeated = prepareReplyLinks('a https://link.coupang.com/a/x\nhttps://link.coupang.com/a/x', 'bare');
+  assert.equal(repeated.text, 'a link.coupang.com/a/x');
+  assert.equal(repeated.linkCount, 1);
+
+  assert.deepEqual(prepareReplyLinks('그냥 텍스트 댓글', 'bare'), {
+    text: '그냥 텍스트 댓글',
+    linkCount: 0,
+    style: 'bare',
+  });
+});
+
+test('THREADS_REPLY_LINK_STYLE=full keeps the scheme as an instant rollback', () => {
+  const previous = process.env.THREADS_REPLY_LINK_STYLE;
+  process.env.THREADS_REPLY_LINK_STYLE = 'full';
+  try {
+    assert.equal(prepareReplyLinks('링크 https://link.coupang.com/a/x').text, '링크 https://link.coupang.com/a/x');
+  } finally {
+    if (previous === undefined) delete process.env.THREADS_REPLY_LINK_STYLE;
+    else process.env.THREADS_REPLY_LINK_STYLE = previous;
   }
-});
-
-test('applyCoupangReplyPreviewGuard leaves text with no URL, or already 2+ URLs, alone', () => {
-  const noUrl = applyCoupangReplyPreviewGuard('그냥 텍스트 댓글');
-  assert.equal(noUrl.guardApplied, false);
-  assert.equal(noUrl.urlCount, 0);
-  assert.equal(noUrl.text, '그냥 텍스트 댓글');
-
-  const alreadyTwo = applyCoupangReplyPreviewGuard('https://a.com/1\nhttps://b.com/2');
-  assert.equal(alreadyTwo.guardApplied, false);
-  assert.equal(alreadyTwo.urlCount, 2);
+  assert.equal(prepareReplyLinks('링크 https://link.coupang.com/a/x').text, '링크 link.coupang.com/a/x');
 });

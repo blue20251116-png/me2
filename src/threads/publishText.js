@@ -43,22 +43,34 @@ function sanitizePublishedThreadsText(value) {
     .trim();
 }
 
-// Threads may turn the first URL of a text reply into a link-preview card. When the affiliate
-// comment has exactly one URL, append the same URL with a #fragment (same destination - fragments
-// are never sent to the server) so the reply carries two URLs. Any domain: some accounts post a
-// plain www.coupang.com URL instead of a link.coupang.com deeplink.
-function applyCoupangReplyPreviewGuard(value) {
+// Threads turns the first http(s) URL of a text post into a link-preview card, which shows the
+// product before anyone taps. The Threads API has no switch to turn that off, so replies carry
+// their links without the scheme ("link.coupang.com/a/..."). Repeated URLs are dropped.
+// THREADS_REPLY_LINK_STYLE=full keeps the scheme (an instant rollback if bare links stop being
+// tappable).
+function replyLinkStyle() {
+  return String(process.env.THREADS_REPLY_LINK_STYLE || 'bare').toLowerCase() === 'full' ? 'full' : 'bare';
+}
+function prepareReplyLinks(value, style = replyLinkStyle()) {
   const text = sanitizePublishedThreadsText(value);
-  const matches = [...text.matchAll(/https?:\/\/\S+/gi)];
-  if (matches.length !== 1) return { text, guardApplied: false, urlCount: matches.length };
-
-  const original = matches[0][0];
-  const alternate = original.includes('#') ? `${original}preview2` : `${original}#preview2`;
-  return {
-    text: `${text}\n${alternate}`.trim(),
-    guardApplied: true,
-    urlCount: 2,
-  };
+  const seen = new Set();
+  let linkCount = 0;
+  const out = text
+    .split('\n')
+    .map(line =>
+      line.replace(/https?:\/\/(\S+)/gi, (whole, rest) => {
+        const key = rest.toLowerCase();
+        if (seen.has(key)) return '';
+        seen.add(key);
+        linkCount++;
+        return style === 'full' ? whole : rest;
+      })
+    )
+    .map(line => line.replace(/[ \t]+$/, ''))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return { text: out, linkCount, style };
 }
 
 // Moves the Coupang Partners disclosure line to the top of the comment.
@@ -84,6 +96,7 @@ module.exports = {
   stripStrayDashArtifacts,
   stripEmoji,
   sanitizePublishedThreadsText,
-  applyCoupangReplyPreviewGuard,
+  prepareReplyLinks,
+  replyLinkStyle,
   ensureCoupangDisclosureFirst,
 };
