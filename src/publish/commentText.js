@@ -123,21 +123,14 @@ function sanitizeCommentPrefix(value) {
   }
   return clean.join('\n').trim();
 }
-function buildDoubleLinkComment(account, prefix, link, maxLength = 450) {
+// The affiliate comment: optional prefix (recipe/notes), the link once, then the disclosure.
+// threadsApi.publishReply strips the link's scheme so Threads shows no preview card.
+function buildLinkComment(account, prefix, link, maxLength = 450) {
   const cap = Math.min(450, Math.max(1, Number(maxLength) || 450));
   const l = extractFirstHttpUrl(link);
   if (!l) throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');
   const disclosure = isCoupangLink(l) ? DEFAULT_COUPANG_DISCLOSURE : '';
-  // Regression: this used to repeat the exact same URL string twice ([l, l, disclosure]) to make
-  // Threads see "2 URLs" and skip its single-link auto-preview card - an independently-written
-  // duplicate of the same idea threadsApi.js's applyCoupangReplyPreviewGuard() already implements
-  // with a differentiated #fragment variant instead of a literal repeat. Two identical copies of
-  // the same link may well still read as "one link" to Threads' crawler (which is presumably why
-  // the preview kept showing up), so this now uses the same fragment-variant technique instead -
-  // keeping the exact same length budget (still 2 URL-worth of space reserved in `cap`), only
-  // changing what the second URL string looks like.
-  const alternate = l.includes('#') ? `${l}preview2` : `${l}#preview2`;
-  const tail = [l, alternate, disclosure].filter(Boolean).join('\n\n');
+  const tail = [l, disclosure].filter(Boolean).join('\n\n');
   if (tail.length > cap) throw new Error('쿠팡 링크 자체가 너무 길어 댓글을 만들 수 없습니다: ' + tail.length + '자');
   const available = Math.max(0, cap - tail.length - 2);
   const safePrefix = sanitizeCommentPrefix(prefix);
@@ -151,13 +144,13 @@ async function buildCommentText(account, post) {
   if (hasCoupangKeys(account) && post.recipe_comment_text && !post.link)
     throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');
   if (!post.link) return compactRecipePrefix(sanitizeCommentPrefix(post.recipe_comment_text || ''), 450);
-  return buildDoubleLinkComment(account, post.recipe_comment_text || '', post.link, 450);
+  return buildLinkComment(account, post.recipe_comment_text || '', post.link, 450);
 }
 
 module.exports = {
   hasCoupangKeys,
   isCoupangLink,
-  buildDoubleLinkComment,
+  buildLinkComment,
   buildCommentText,
   DEFAULT_COUPANG_DISCLOSURE,
 };

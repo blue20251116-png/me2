@@ -10,11 +10,7 @@ const { editVideo } = require('../content/videoEditor');
 const { pickTopicTag, isTopicTagRejection } = require('./topicTag');
 const { normalizeMediaItems, decodeMediaBundle } = require('./mediaBundle');
 const { cacheImage } = require('./imageCache');
-const {
-  sanitizePublishedThreadsText,
-  applyCoupangReplyPreviewGuard,
-  ensureCoupangDisclosureFirst,
-} = require('./publishText');
+const { sanitizePublishedThreadsText, prepareReplyLinks, ensureCoupangDisclosureFirst } = require('./publishText');
 const {
   GRAPH_BASE,
   sleep,
@@ -435,16 +431,16 @@ async function publishReply(accountId, parentMediaId, text, options = {}) {
   text = ensureCoupangDisclosureFirst(beforeDisclosure);
   if (text !== beforeDisclosure)
     console.log(`[Threads][COUPANG DISCLOSURE FIRST] account=${accountId} parentMediaId=${parentMediaId}`);
-  const guarded = applyCoupangReplyPreviewGuard(text);
+  const prepared = prepareReplyLinks(text);
   if (options.creationId) {
     const status = await getContainerStatus(options.creationId, accessToken);
     if (status.status === 'PUBLISHED')
       throw Object.assign(new Error('기존 댓글이 이미 발행됨: 결과 확인 필요'), { code: 'COMMENT_OUTCOME_UNKNOWN' });
     return publishContainer(options.creationId, accessToken, 3, 2500);
   }
-  text = guarded.text;
+  text = prepared.text;
   console.log(
-    `[Threads][REPLY_PREVIEW_GUARD] account=${accountId} parentMediaId=${parentMediaId} applied=${guarded.guardApplied ? 'yes' : 'no'} coupangUrls=${guarded.urlCount} text=${JSON.stringify(text)}`
+    `[Threads][REPLY_LINKS] account=${accountId} parentMediaId=${parentMediaId} style=${prepared.style} links=${prepared.linkCount} text=${JSON.stringify(text)}`
   );
   let creationId;
   try {
