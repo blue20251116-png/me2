@@ -1,15 +1,104 @@
 (() => {
-  const panel=document.getElementById('benchmarkPanel'); if(!panel)return;
-  panel.innerHTML=`<h2 class="settings-title">Threads 벤치마킹 계정</h2><div class="settings-form"><p style="font-size:12.5px;color:var(--text-dim);margin:0;line-height:1.55;">아이디만 등록하면 됩니다. 줄바꿈·쉼표로 여러 개를 한 번에 붙여넣을 수 있고 중복은 자동 제외합니다.</p><label>Threads 아이디 대량등록<textarea id="benchmarkUsernames" rows="6" placeholder="temissue&#10;jjune713&#10;itsmini_00"></textarea></label><button id="benchmarkAddBtn" type="button">한꺼번에 등록</button><p id="benchmarkMsg" style="font-size:12px;margin:0"></p><input id="benchmarkSearch" placeholder="등록 계정 검색" /><div style="display:flex;justify-content:space-between;align-items:center"><strong style="font-size:12.5px">등록된 계정</strong><span id="benchmarkCount" style="font-size:12px;color:var(--text-dim)"></span></div><div id="benchmarkList"></div></div>`;
-  const input=document.getElementById('benchmarkUsernames'),list=document.getElementById('benchmarkList'),msg=document.getElementById('benchmarkMsg'),count=document.getElementById('benchmarkCount'),search=document.getElementById('benchmarkSearch');
-  let all=[];
-  function norm(v){return String(v||'').trim().replace(/^@+/,'').toLowerCase()}
-  function dedupe(rows){const seen=new Set(),out=[];for(const a of rows||[]){const k=norm(a.username);if(!k||seen.has(k))continue;seen.add(k);out.push(a)}return out}
-  function chunks(items,size){const out=[];for(let i=0;i<items.length;i+=size)out.push(items.slice(i,i+size));return out}
-  function row(a){return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid var(--border)"><a href="https://www.threads.com/@${a.username}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;font-weight:700">@${a.username}</a><button class="admin-btn" type="button" data-delete="${a.id}">삭제</button></div>`}
-  function render(){const q=norm(search.value),rows=q?all.filter(a=>norm(a.username).includes(q)):all;count.textContent=`${rows.length} / 전체 ${all.length}개`;if(!rows.length){list.innerHTML='<div class="empty">등록된 계정이 없습니다</div>';return}list.innerHTML=chunks(rows,10).map((g,i)=>`<details ${i===0?'open':''} style="border:1px solid var(--border);border-radius:9px;margin-top:8px;background:var(--surface-2);overflow:hidden"><summary style="cursor:pointer;padding:10px 12px;font-size:12.5px;font-weight:700;display:flex;justify-content:space-between"><span>${i*10+1}~${i*10+g.length}번</span><span style="font-size:11px;color:var(--text-dim)">${g.length}개</span></summary><div style="padding:0 12px 6px;background:var(--surface)">${g.map(row).join('')}</div></details>`).join('');list.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(!confirm('이 벤치마킹 계정을 삭제할까요?'))return;const r=await fetch('/api/admin/benchmark-accounts/'+b.dataset.delete,{method:'DELETE'});if(r.ok)load()})}
-  async function load(){const r=await fetch('/api/admin/benchmark-accounts'),d=await r.json();if(!r.ok){msg.textContent=d.error||'불러오기 실패';return}all=dedupe(d.accounts||[]);render()}
-  search.oninput=render;
-  document.getElementById('benchmarkAddBtn').onclick=async()=>{const raw=input.value.trim();if(!raw){msg.textContent='아이디를 붙여넣어주세요';return}const seen=new Set(),unique=[];for(const token of raw.split(/[\s,;]+/)){const v=String(token||'').trim().replace(/^@+/,'');const k=v.toLowerCase();if(!v||seen.has(k))continue;seen.add(k);unique.push(v)}if(!unique.length)return;msg.textContent='등록 중…';const r=await fetch('/api/admin/benchmark-accounts/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({usernames:unique.join('\n')})}),d=await r.json();if(!r.ok){msg.textContent=d.error||'등록 실패';return}input.value='';msg.textContent=`등록 완료 · 신규 ${d.added}개 · 중복 ${d.skipped}개`;load()};
+  const panel = document.getElementById('benchmarkPanel');
+  if (!panel) return;
+  panel.innerHTML = `<h2 class="settings-title">Threads 벤치마킹 계정</h2><div class="settings-form"><p style="font-size:12.5px;color:var(--text-dim);margin:0;line-height:1.55;">아이디만 등록하면 됩니다. 줄바꿈·쉼표로 여러 개를 한 번에 붙여넣을 수 있고 중복은 자동 제외합니다.</p><label>Threads 아이디 대량등록<textarea id="benchmarkUsernames" rows="6" placeholder="temissue&#10;jjune713&#10;itsmini_00"></textarea></label><button id="benchmarkAddBtn" type="button">한꺼번에 등록</button><p id="benchmarkMsg" style="font-size:12px;margin:0"></p><input id="benchmarkSearch" placeholder="등록 계정 검색" /><div style="display:flex;justify-content:space-between;align-items:center"><strong style="font-size:12.5px">등록된 계정</strong><span id="benchmarkCount" style="font-size:12px;color:var(--text-dim)"></span></div><div id="benchmarkList"></div></div>`;
+  const input = document.getElementById('benchmarkUsernames'),
+    list = document.getElementById('benchmarkList'),
+    msg = document.getElementById('benchmarkMsg'),
+    count = document.getElementById('benchmarkCount'),
+    search = document.getElementById('benchmarkSearch');
+  let all = [];
+  function norm(v) {
+    return String(v || '')
+      .trim()
+      .replace(/^@+/, '')
+      .toLowerCase();
+  }
+  function dedupe(rows) {
+    const seen = new Set(),
+      out = [];
+    for (const a of rows || []) {
+      const k = norm(a.username);
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      out.push(a);
+    }
+    return out;
+  }
+  function chunks(items, size) {
+    const out = [];
+    for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+    return out;
+  }
+  function row(a) {
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid var(--border)"><a href="https://www.threads.com/@${encodeURIComponent(a.username)}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none;font-weight:700">@${escapeHtml(a.username)}</a><button class="admin-btn" type="button" data-delete="${Number(a.id)}">삭제</button></div>`;
+  }
+  function render() {
+    const q = norm(search.value),
+      rows = q ? all.filter(a => norm(a.username).includes(q)) : all;
+    count.textContent = `${rows.length} / 전체 ${all.length}개`;
+    if (!rows.length) {
+      list.innerHTML = '<div class="empty">등록된 계정이 없습니다</div>';
+      return;
+    }
+    list.innerHTML = chunks(rows, 10)
+      .map(
+        (g, i) =>
+          `<details ${i === 0 ? 'open' : ''} style="border:1px solid var(--border);border-radius:9px;margin-top:8px;background:var(--surface-2);overflow:hidden"><summary style="cursor:pointer;padding:10px 12px;font-size:12.5px;font-weight:700;display:flex;justify-content:space-between"><span>${i * 10 + 1}~${i * 10 + g.length}번</span><span style="font-size:11px;color:var(--text-dim)">${g.length}개</span></summary><div style="padding:0 12px 6px;background:var(--surface)">${g.map(row).join('')}</div></details>`
+      )
+      .join('');
+    list.querySelectorAll('[data-delete]').forEach(
+      b =>
+        (b.onclick = async () => {
+          if (!confirm('이 벤치마킹 계정을 삭제할까요?')) return;
+          const r = await fetch('/api/admin/benchmark-accounts/' + b.dataset.delete, { method: 'DELETE' });
+          if (r.ok) load();
+        })
+    );
+  }
+  async function load() {
+    const r = await fetch('/api/admin/benchmark-accounts'),
+      d = await r.json();
+    if (!r.ok) {
+      msg.textContent = d.error || '불러오기 실패';
+      return;
+    }
+    all = dedupe(d.accounts || []);
+    render();
+  }
+  search.oninput = render;
+  document.getElementById('benchmarkAddBtn').onclick = async () => {
+    const raw = input.value.trim();
+    if (!raw) {
+      msg.textContent = '아이디를 붙여넣어주세요';
+      return;
+    }
+    const seen = new Set(),
+      unique = [];
+    for (const token of raw.split(/[\s,;]+/)) {
+      const v = String(token || '')
+        .trim()
+        .replace(/^@+/, '');
+      const k = v.toLowerCase();
+      if (!v || seen.has(k)) continue;
+      seen.add(k);
+      unique.push(v);
+    }
+    if (!unique.length) return;
+    msg.textContent = '등록 중…';
+    const r = await fetch('/api/admin/benchmark-accounts/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usernames: unique.join('\n') }),
+      }),
+      d = await r.json();
+    if (!r.ok) {
+      msg.textContent = d.error || '등록 실패';
+      return;
+    }
+    input.value = '';
+    msg.textContent = `등록 완료 · 신규 ${d.added}개 · 중복 ${d.skipped}개`;
+    load();
+  };
   load();
 })();

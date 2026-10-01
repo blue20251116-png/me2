@@ -17,7 +17,9 @@
       if (u.protocol !== 'https:') return false;
       const h = u.hostname.toLowerCase();
       return h === 'naver.me' || h.endsWith('.naver.me') || h === 'naver.com' || h.endsWith('.naver.com');
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   }
 
   function renderPreview() {
@@ -33,38 +35,58 @@
     if (!url) {
       if (lastMirroredNaver && coupangInput.value.trim() === lastMirroredNaver) coupangInput.value = '';
       lastMirroredNaver = '';
-      if (msg) { msg.textContent = ''; msg.className = 'msg'; }
+      if (msg) {
+        msg.textContent = '';
+        msg.className = 'msg';
+      }
       return;
     }
     if (!isNaverUrl(url)) {
-      if (msg) { msg.textContent = 'naver.me 또는 네이버 도메인의 커넥트 링크를 입력해주세요.'; msg.className = 'msg error'; }
+      if (msg) {
+        msg.textContent = 'naver.me 또는 네이버 도메인의 커넥트 링크를 입력해주세요.';
+        msg.className = 'msg error';
+      }
       return;
     }
     coupangInput.value = url;
     lastMirroredNaver = url;
-    if (msg) { msg.textContent = '네이버 커넥트 링크 적용됨 · 예약 발행 시 커넥트 고지문과 함께 댓글로 등록됩니다.'; msg.className = 'msg'; }
+    if (msg) {
+      msg.textContent = '네이버 커넥트 링크 적용됨 · 예약 발행 시 커넥트 고지문과 함께 댓글로 등록됩니다.';
+      msg.className = 'msg';
+    }
     renderPreview();
   }
 
   naverInput.addEventListener('input', syncNaverLink);
   naverInput.addEventListener('change', syncNaverLink);
   autoComment?.addEventListener('change', () => setTimeout(renderPreview, 0));
-  form.addEventListener('submit', (e) => {
-    const url = naverInput.value.trim();
-    if (!url) return;
-    if (!isNaverUrl(url)) {
-      e.preventDefault(); e.stopImmediatePropagation();
-      if (msg) { msg.textContent = '네이버 커넥트 링크 형식을 확인해주세요.'; msg.className = 'msg error'; }
-      naverInput.focus(); return;
-    }
-    coupangInput.value = url;
-    lastMirroredNaver = url;
-  }, true);
+  form.addEventListener(
+    'submit',
+    e => {
+      const url = naverInput.value.trim();
+      if (!url) return;
+      if (!isNaverUrl(url)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (msg) {
+          msg.textContent = '네이버 커넥트 링크 형식을 확인해주세요.';
+          msg.className = 'msg error';
+        }
+        naverInput.focus();
+        return;
+      }
+      coupangInput.value = url;
+      lastMirroredNaver = url;
+    },
+    true
+  );
 
   coupangInput.addEventListener('input', () => {
     const current = coupangInput.value.trim();
     if (naverInput.value.trim() && current !== naverInput.value.trim()) {
-      naverInput.value = ''; lastMirroredNaver = ''; if (msg) msg.textContent = '';
+      naverInput.value = '';
+      lastMirroredNaver = '';
+      if (msg) msg.textContent = '';
     }
   });
 })();

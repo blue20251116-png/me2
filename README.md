@@ -5,6 +5,48 @@
 쿠팡파트너스 Open API와도 연동되어 있어 키워드 검색만으로 상품 사진·가격·파트너스 링크를
 자동으로 가져와 글을 채울 수 있습니다.
 
+## 0. 프로젝트 구조
+
+```
+src/
+  index.js              진입점 (npm start): 환경변수 → HTTP 타임아웃 → DB 정리 작업 → 웹 서버
+  config/               paths.js(데이터 위치, 항상 루트의 db/), publicUrl.js(공개 주소)
+  web/                  app.js(미들웨어·라우터 연결 순서), server.js(서버+백그라운드 작업 시작),
+                        middleware.js, routes/(system·auth·admin·accounts·media·content·posts·threads)
+  publish/              scheduler.js(발행 큐·인사이트·오래된 글 정리), publishQueue.js, slots.js(발행 시간대),
+                        commentText.js(쿠팡 댓글+고지문)
+  autopilot/            runner.js(10분마다 예약 채우기) → pipeline.js(전체 흐름 한눈에)
+                        → materialEngine.js(1회 시도) = materials·vision·productMatching·postWriter
+                        stages/(레시피 검증·상품 연결·최종 문체 검사 등 단계별 함수)
+  content/              voicePolicy(문체 정책·검사), personas(페르소나), 수동 글쓰기 도구들
+  threads/              threadsApi(발행), threadsAuth(로그인·토큰), threadsCollector(소재 읽기, 캐시·429 대응)
+                        threadsScraper + scraper/(브라우저 수집, 격리 프로세스 전용), topicTag, tokenRefresh …
+  integrations/         aiClient+aiRequestGuard(OpenAI 호출·예산), 쿠팡, 네이버, Pexels/Pixabay, YouTube
+  infra/                SQLite, 세션, 브라우저 격리 실행(browserTasks·isolatedTask), HTTP 타임아웃
+public/                 대시보드 화면
+test/                   자동 테스트
+docs/                   문체 규칙 등 문서
+```
+
+개발할 때:
+
+```
+npm run check          # 린트 + 포맷 검사 + 테스트 (CI와 동일)
+npm run format         # 코드 자동 정렬
+npm run test:coverage  # 테스트 + 파일별 커버리지
+```
+
+보안·운영 기본값:
+- 모든 응답에 CSP·X-Frame-Options·nosniff 헤더 (`src/web/securityHeaders.js`)
+- 로그인은 IP당 15분 30회, 가입은 1시간 10회로 제한 (`src/web/loginRateLimit.js`)
+- 화면에서 서버 데이터를 HTML로 넣을 때는 항상 `escapeHtml`/`safeUrl` (`public/escape.js`)
+- API 키·토큰은 DB에 AES-256-GCM으로 암호화 저장 (`ME2_SECRET_KEY`)
+- 재배포(SIGTERM) 시 진행 중인 발행을 마치고 DB를 닫은 뒤 종료 (`src/web/shutdown.js`)
+
+`test/frontendSmoke.test.js`는 실제 Chromium으로 화면을 열어봅니다. 브라우저가 없으면
+`npx playwright install chromium`으로 설치하거나, 설치된 Chromium 경로를 `PLAYWRIGHT_CHROMIUM_EXECUTABLE`에 지정하세요
+(`ME2_SKIP_BROWSER_TESTS=1`이면 건너뜀).
+
 ## 1. 로컬에서 먼저 확인해보기
 
 ```
@@ -72,7 +114,7 @@ npm start
    - 또는 이미 갖고 있는 링크를 **쿠팡파트너스 링크** 입력란에 직접 붙여넣어도 됨
      (이 경우 og:image 스크래핑으로 사진만 보조로 가져옴, API 검색보다 덜 안정적)
 2. 본문 작성 + 발행 예정 시각 입력 → 예약 등록
-3. 서버가 1분마다 예정 시각이 지난 글을 자동 발행 (`scheduler.js`)
+3. 서버가 1분마다 예정 시각이 지난 글을 자동 발행 (`src/publish/scheduler.js`)
 4. **링크가 있는 경우**, 본문 발행 3초 후 자동으로 그 글에 답글(댓글)을 달아
    "쿠팡 파트너스 활동의 일환..." 안내문구 + 링크를 등록합니다 (본문에는 링크가 들어가지 않음)
    - 안내문구 템플릿은 **연결 설정** 탭에서 직접 수정 가능 (`{link}` 자리에 실제 링크 삽입)
@@ -94,8 +136,14 @@ Railway/Render에서 Node 버전을 지정할 수 있으면 22 이상으로 맞�
   페이지 구조를 바꾸면 실패할 수 있습니다 — 이 경우 이미지 URL을 직접 입력하면 됩니다
   (API 검색을 쓰면 이 문제 자체가 없음)
 - 이미지 첨부 시 `image_url`은 외부에서 접근 가능한 공개 URL이어야 함 (직접 업로드 불가, 링크만 가능)
-- Threads 장기 액세스 토큰 유효기간은 60일 — 만료 전 갱신 로직은 `threadsApi.js`의
-  `refreshLongLivedToken`에 준비되어 있음 (현재는 자동 스케줄 미적용, 필요하면 추가 가능)
+- Threads 장기 액세스 토큰 유효기간은 60일 — 매일 04:17(KST)에 만료 10일 이내 토큰을 자동 갱신합니다
+  (`src/threads/tokenRefresh.js`). 이미 만료된 토큰은 갱신이 불가능하므로 "스레드 계정으로 연결하기"를 다시 눌러야 합니다.
+- 발행 시 글 내용에 맞는 스레드 **주제 태그**(육아/운동/요리/살림/뷰티 등, `src/threads/topicTag.js`)가 자동으로 붙습니다.
+  Threads가 태그를 거부하면 태그 없이 자동 재시도하므로 발행이 막히지는 않습니다.
+- 자동발행 슬롯은 07:00~24:00(KST) 사이에만 배치됩니다 (`AUTOPILOT_ACTIVE_START_HOUR/END_HOUR`로 조정).
+- 계정·관리자 설정에 저장하는 API 키와 스레드 토큰은 DB에 **암호화(AES-256-GCM)** 되어 저장됩니다.
+  Railway Variables에 `ME2_SECRET_KEY`(긴 무작위 문자열)를 설정하는 것을 권장합니다. 설정하지 않으면
+  `db/secret.key`를 자동으로 만들어 쓰며, 이 파일을 지우면 저장된 키를 다시 입력해야 합니다.
 - 계정마다 Threads 연결은 처음 한 번만 하면 됩니다 (계정별 OAuth) — 이후 계정 칩을 눌러
   전환할 때는 재연결 없이 바로 그 계정 기준으로 화면이 바뀝니다. 여러 계정 동시 관리는
   정식으로 지원됩니다 (11번 항목 참고)
@@ -362,5 +410,5 @@ Secret 값들은 저장 후 다시 화면에 표시되지 않고, 입력칸을 �
 - 회원가입 승인 알림(이메일 등)은 없습니다 — 관리자가 직접 `/admin`에 들어가서 확인해야 합니다.
 - 결제 자동화는 없습니다 — 관리자가 오픈카톡으로 입금을 확인한 뒤 "30일 부여" 버튼으로
   수동 부여하는 구조입니다.
-- 세션 저장소가 메모리 기반이라, 서버가 재시작되면(재배포 등) 로그인이 풀립니다. 회원이
-  많아지면 Redis 같은 별도 세션 저장소로 옮기는 걸 고려해야 합니다.
+- 세션은 SQLite(`db/`)에 저장되어 재배포해도 로그인이 유지됩니다. 다만 서버 1대 기준이라,
+  여러 대로 늘리려면 세션·발행 큐를 공용 저장소로 옮겨야 합니다.

@@ -2,16 +2,10 @@
 let accounts = [];
 let activeAccountId = Number(localStorage.getItem('activeAccountId')) || null;
 
-function qs(params) {
-  return new URLSearchParams(params).toString();
-}
-
 // accountId를 항상 붙여서 fetch하는 헬퍼
 async function apiFetch(url, options = {}) {
   const hasQuery = url.includes('?');
-  const withAccount = activeAccountId
-    ? `${url}${hasQuery ? '&' : '?'}accountId=${activeAccountId}`
-    : url;
+  const withAccount = activeAccountId ? `${url}${hasQuery ? '&' : '?'}accountId=${activeAccountId}` : url;
   return fetch(withAccount, options);
 }
 
@@ -25,13 +19,13 @@ async function loadAccounts() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ label: '계정 1' }),
-    }).then((r) => r.json());
+    }).then(r => r.json());
     activeAccountId = created.id;
     localStorage.setItem('activeAccountId', activeAccountId);
-    accounts = await fetch('/api/accounts').then((r) => r.json());
+    accounts = await fetch('/api/accounts').then(r => r.json());
   }
 
-  if (!activeAccountId || !accounts.find((a) => a.id === activeAccountId)) {
+  if (!activeAccountId || !accounts.find(a => a.id === activeAccountId)) {
     activeAccountId = accounts[0].id;
     localStorage.setItem('activeAccountId', activeAccountId);
   }
@@ -43,9 +37,9 @@ function renderAccountStrip() {
   const strip = document.getElementById('accountStrip');
   strip.innerHTML = accounts
     .map(
-      (a) => `
+      a => `
     <button class="account-chip ${a.id === activeAccountId ? 'active' : ''} ${a.connected ? 'connected' : ''}" data-id="${a.id}">
-      <span class="dot"></span>${a.label}
+      <span class="dot"></span>${escapeHtml(a.label)}
     </button>`
     )
     .join('');
@@ -54,7 +48,7 @@ function renderAccountStrip() {
     strip.innerHTML += `<button class="account-chip add-chip" id="addAccountChip">+ 계정 추가</button>`;
   }
 
-  strip.querySelectorAll('.account-chip[data-id]').forEach((chip) => {
+  strip.querySelectorAll('.account-chip[data-id]').forEach(chip => {
     chip.addEventListener('click', () => switchAccount(Number(chip.dataset.id)));
   });
 
@@ -99,7 +93,7 @@ async function refreshActiveTabData() {
 }
 
 // ---- 계정 이름 변경/삭제 (연결 설정 탭) ----
-document.getElementById('renameAccountForm').addEventListener('submit', async (e) => {
+document.getElementById('renameAccountForm').addEventListener('submit', async e => {
   e.preventDefault();
   const label = e.target.label.value.trim();
   const msg = document.getElementById('accountManageMsg');
@@ -122,7 +116,7 @@ document.getElementById('renameAccountForm').addEventListener('submit', async (e
 });
 
 document.getElementById('deleteAccountBtn').addEventListener('click', async () => {
-  const account = accounts.find((a) => a.id === activeAccountId);
+  const account = accounts.find(a => a.id === activeAccountId);
   if (!account) return;
   if (!confirm(`"${account.label}" 계정을 삭제할까요? 이 계정의 예약/발행 기록도 모두 함께 삭제됩니다.`)) return;
 
@@ -134,15 +128,15 @@ document.getElementById('deleteAccountBtn').addEventListener('click', async () =
 });
 
 function updateCurrentAccountLabel() {
-  const account = accounts.find((a) => a.id === activeAccountId);
+  const account = accounts.find(a => a.id === activeAccountId);
   document.getElementById('currentAccountLabel').textContent = account?.label || '–';
 }
 
 // ---- 탭 전환 (하단 네비게이션) ----
-document.querySelectorAll('.nav-btn').forEach((btn) => {
+document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
     document.querySelector('.app-content').scrollTop = 0;
@@ -179,6 +173,7 @@ function fmtTime(iso) {
 
 async function loadDashboard() {
   if (!activeAccountId) return;
+  if (typeof loadReachReport === 'function') loadReachReport().catch(() => {});
   const res = await apiFetch('/api/dashboard');
   const data = await res.json();
 
@@ -193,12 +188,11 @@ async function loadDashboard() {
   document.getElementById('statViews').textContent = data.totalViews.toLocaleString('ko-KR');
   document.getElementById('statViewsSub').textContent = `${data.postedTodayCount}개 글 합계`;
 
-  document.getElementById('panelHeadSummary').textContent =
-    `완료 ${data.postedTodayCount} · 예정 ${data.pendingToday}`;
+  document.getElementById('panelHeadSummary').textContent = `완료 ${data.postedTodayCount} · 예정 ${data.pendingToday}`;
 
   const grid = document.getElementById('hourlyGrid');
   grid.innerHTML = '';
-  data.hourly.forEach((h) => {
+  data.hourly.forEach(h => {
     const cell = document.createElement('div');
     cell.className = `hour-cell ${h.count > 0 ? 'has-posts' : 'empty'}`;
     cell.innerHTML = `
@@ -213,7 +207,7 @@ async function loadDashboard() {
     detail.innerHTML =
       '오늘 발행: ' +
       data.postedToday
-        .map((p) => `${fmtTime(p.posted_at)} · 조회 ${p.insights?.views ?? 0}`)
+        .map(p => `${escapeHtml(fmtTime(p.posted_at))} · 조회 ${Number(p.insights?.views) || 0}`)
         .join(' &nbsp;|&nbsp; ');
   } else {
     detail.textContent = '오늘 아직 발행된 글이 없습니다.';
@@ -262,15 +256,15 @@ async function runAiGenerate() {
         (t, i) => `
       <div class="ai-candidate" data-idx="${i}">
         <span class="pick-label">버전 ${i + 1} · 클릭하면 본문에 채워짐</span>
-        <p>${t.replace(/</g, '&lt;')}</p>
+        <p>${escapeHtml(t)}</p>
       </div>`
       )
       .join('');
     candidatesBox.classList.remove('hidden');
 
-    candidatesBox.querySelectorAll('.ai-candidate').forEach((card) => {
+    candidatesBox.querySelectorAll('.ai-candidate').forEach(card => {
       card.addEventListener('click', () => {
-        candidatesBox.querySelectorAll('.ai-candidate').forEach((c) => c.classList.remove('selected'));
+        candidatesBox.querySelectorAll('.ai-candidate').forEach(c => c.classList.remove('selected'));
         card.classList.add('selected');
         textArea.value = data.texts[Number(card.dataset.idx)];
       });
@@ -325,9 +319,9 @@ async function searchCoupangProducts() {
       .map(
         (p, i) => `
       <div class="product-card">
-        <img src="${p.image}" alt="" onerror="this.style.visibility='hidden'" />
+        <img src="${escapeHtml(safeUrl(p.image))}" alt="" onerror="this.style.visibility='hidden'" />
         <div class="p-info">
-          <div class="p-name">${(p.name || '').replace(/</g, '&lt;')}</div>
+          <div class="p-name">${escapeHtml(p.name)}</div>
           <div class="p-price">${fmtPrice(p.price)}</div>
         </div>
         <button type="button" class="pick-btn" data-idx="${i}">이 상품 선택</button>
@@ -335,7 +329,7 @@ async function searchCoupangProducts() {
       )
       .join('');
 
-    resultsBox.querySelectorAll('.pick-btn').forEach((btn) => {
+    resultsBox.querySelectorAll('.pick-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const p = data.products[Number(btn.dataset.idx)];
         applyPickedProduct(p);
@@ -387,12 +381,12 @@ function renderYoutubeResults(videos) {
     .map(
       (v, i) => `
     <div class="youtube-card">
-      <img src="${v.thumbnail}" alt="" onerror="this.style.visibility='hidden'" />
+      <img src="${escapeHtml(safeUrl(v.thumbnail))}" alt="" onerror="this.style.visibility='hidden'" />
       <div class="yt-info">
-        <div class="yt-title">${(v.title || '').replace(/</g, '&lt;')}</div>
-        <div class="yt-meta">${(v.channelTitle || '').replace(/</g, '&lt;')} · 조회수 ${fmtViews(v.views)} · ${v.duration || ''} · ${fmtYoutubeDate(v.publishedAt)}</div>
+        <div class="yt-title">${escapeHtml(v.title)}</div>
+        <div class="yt-meta">${escapeHtml(v.channelTitle)} · 조회수 ${fmtViews(v.views)} · ${escapeHtml(v.duration)} · ${fmtYoutubeDate(v.publishedAt)}</div>
         <div class="yt-actions">
-          <a href="${v.url}" target="_blank" rel="noopener noreferrer">YouTube에서 보기</a>
+          <a href="${escapeHtml(safeUrl(v.url) || '#')}" target="_blank" rel="noopener noreferrer">YouTube에서 보기</a>
           <button type="button" class="use-btn" data-idx="${i}">이 소재 사용</button>
         </div>
       </div>
@@ -400,7 +394,7 @@ function renderYoutubeResults(videos) {
     )
     .join('');
 
-  resultsBox.querySelectorAll('.use-btn').forEach((btn) => {
+  resultsBox.querySelectorAll('.use-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const v = videos[Number(btn.dataset.idx)];
       selectedYoutubeSource = {
@@ -467,7 +461,7 @@ async function searchYoutubeVideos() {
 }
 
 document.getElementById('youtubeSearchBtn').addEventListener('click', searchYoutubeVideos);
-document.getElementById('youtubeSearchInput').addEventListener('keydown', (e) => {
+document.getElementById('youtubeSearchInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') {
     e.preventDefault();
     searchYoutubeVideos();
@@ -481,7 +475,12 @@ document.getElementById('clearYoutubeSourceBtn').addEventListener('click', () =>
 // ---- 완전 자동발행(오토파일럿) ----
 function fmtDateTime(iso) {
   if (!iso) return '';
-  return new Date(iso).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleString('ko-KR', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 async function loadAutopilotStatus() {
@@ -564,9 +563,7 @@ document.getElementById('autopilotToggleBtn').addEventListener('click', async ()
       await apiFetch(`/api/accounts/${activeAccountId}/autopilot/stop`, { method: 'POST' });
     } else {
       if (
-        !confirm(
-          '자동발행을 켜면 앞으로 60~75분마다 AI가 알아서 상품을 고르고 글을 써서 예약·발행합니다. 계속할까요?'
-        )
+        !confirm('자동발행을 켜면 앞으로 60~75분마다 AI가 알아서 상품을 고르고 글을 써서 예약·발행합니다. 계속할까요?')
       ) {
         btn.disabled = false;
         return;
@@ -612,7 +609,8 @@ document.getElementById('aiAutoCompleteBtn').addEventListener('click', async () 
 
     // 검색창/결과 목록에도 반영해서 뭘 골랐는지 보이게
     document.getElementById('productSearchInput').value = keyword;
-    document.getElementById('productSearchMsg').textContent = `AI가 "${keyword}"${trendNote}로 검색해서 이 상품을 골랐어요: ${picked.name}`;
+    document.getElementById('productSearchMsg').textContent =
+      `AI가 "${keyword}"${trendNote}로 검색해서 이 상품을 골랐어요: ${picked.name}`;
     document.getElementById('productSearchMsg').className = 'msg';
     // 본문 작성 폼의 타겟도 자동완성에서 고른 타겟과 맞춰줌
     document.getElementById('composeTargetSelect').value = target;
@@ -658,7 +656,7 @@ function applyPickedProduct(p) {
 }
 
 document.getElementById('productSearchBtn').addEventListener('click', searchCoupangProducts);
-document.getElementById('productSearchInput').addEventListener('keydown', (e) => {
+document.getElementById('productSearchInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') {
     e.preventDefault();
     searchCoupangProducts();
@@ -669,7 +667,7 @@ document.getElementById('productSearchInput').addEventListener('keydown', (e) =>
 let uploadedFilename = null; // 삭제 API 호출용
 let uploadedVideoUrl = ''; // "영상 그대로 게시" 모드로 되돌아갈 때 복원할 원본 영상 URL
 
-document.getElementById('mediaUploadInput').addEventListener('change', async (e) => {
+document.getElementById('mediaUploadInput').addEventListener('change', async e => {
   const file = e.target.files[0];
   if (!file) return;
 
@@ -725,7 +723,7 @@ async function removeUploadedMedia() {
   const form = document.getElementById('composeForm');
   if (uploadedFilename) {
     try {
-      await fetch(`/api/upload-media/${uploadedFilename}`, { method: 'DELETE' });
+      await apiFetch(`/api/upload-media/${encodeURIComponent(uploadedFilename)}`, { method: 'DELETE' });
     } catch {
       /* 서버에서 이미 지워졌어도 무시 */
     }
@@ -787,7 +785,7 @@ async function resetVideoFrameUI() {
   applyImageComposition();
 }
 
-document.querySelectorAll('input[name="videoUsageMode"]').forEach((radio) => {
+document.querySelectorAll('input[name="videoUsageMode"]').forEach(radio => {
   radio.addEventListener('change', () => {
     const btn = document.getElementById('extractFramesBtn');
     const toggleRow = document.getElementById('aiVisionToggleRow');
@@ -870,14 +868,14 @@ async function runAiFrameRecommendation() {
     if (!res.ok) throw new Error(data.error);
 
     frameRecommendations = {};
-    (data.recommendations || []).forEach((r) => {
+    (data.recommendations || []).forEach(r => {
       frameRecommendations[r.frameId] = r;
     });
     recommendedFrameIds = data.recommended || [];
 
     // 추천 결과를 기본 선택으로 반영 (사용자가 이후 자유롭게 바꿀 수 있음)
     selectedFrameUrls = recommendedFrameIds
-      .map((id) => currentFrames.find((f) => f.id === id)?.url)
+      .map(id => currentFrames.find(f => f.id === id)?.url)
       .filter(Boolean)
       .slice(0, MAX_SELECTED_FRAMES);
 
@@ -912,7 +910,7 @@ function frameBadgeHtml(frameId) {
   const rank = recommendedFrameIds.indexOf(frameId);
   const label = CATEGORY_LABELS[rec.category] || rec.category;
   const star = rank >= 0 ? '⭐'.repeat(1) + (rank + 1) + '순위 ' : '';
-  return `<span class="frame-badge">${star}${label} ${rec.score}점</span>`;
+  return `<span class="frame-badge">${star}${escapeHtml(label)} ${Number(rec.score) || 0}점</span>`;
 }
 
 function renderFrameCandidates() {
@@ -920,7 +918,7 @@ function renderFrameCandidates() {
   const box = document.getElementById('frameCandidatesBox');
 
   grid.innerHTML = currentFrames
-    .map((f) => {
+    .map(f => {
       const rec = frameRecommendations[f.id];
       const isBad = rec && rec.category === 'bad';
       const isRecommended = recommendedFrameIds.includes(f.id);
@@ -933,8 +931,8 @@ function renderFrameCandidates() {
         .filter(Boolean)
         .join(' ');
       return `
-    <div class="${classes}" data-url="${f.url}" data-id="${f.id}">
-      <img src="${f.url}" alt="" />
+    <div class="${classes}" data-url="${escapeHtml(f.url)}" data-id="${escapeHtml(f.id)}">
+      <img src="${escapeHtml(safeUrl(f.url))}" alt="" />
       ${frameBadgeHtml(f.id)}
       <span class="frame-time">${fmtFrameTime(f.time)}</span>
       <span class="frame-check"></span>
@@ -943,7 +941,7 @@ function renderFrameCandidates() {
     .join('');
   box.classList.remove('hidden');
 
-  grid.querySelectorAll('.frame-thumb').forEach((thumb) => {
+  grid.querySelectorAll('.frame-thumb').forEach(thumb => {
     thumb.addEventListener('click', () => {
       const url = thumb.dataset.url;
       const status = document.getElementById('extractFramesStatus');
@@ -1003,7 +1001,7 @@ function applyImageComposition() {
   }
 }
 
-document.querySelectorAll('input[name="imageComposition"]').forEach((radio) => {
+document.querySelectorAll('input[name="imageComposition"]').forEach(radio => {
   radio.addEventListener('change', applyImageComposition);
 });
 
@@ -1046,19 +1044,19 @@ document.getElementById('showDetailImagesBtn').addEventListener('click', async (
       .map(
         (src, i) => `
       <div class="detail-img-thumb ${src === currentImg ? 'selected' : ''}" data-idx="${i}">
-        <img src="${src}" alt="" onerror="this.parentElement.style.display='none'" />
+        <img src="${escapeHtml(safeUrl(src))}" alt="" onerror="this.parentElement.style.display='none'" />
       </div>`
       )
       .join('');
     gallery.classList.remove('hidden');
 
-    gallery.querySelectorAll('.detail-img-thumb').forEach((thumb) => {
+    gallery.querySelectorAll('.detail-img-thumb').forEach(thumb => {
       thumb.addEventListener('click', () => {
         const src = currentDetailImages[Number(thumb.dataset.idx)];
         const form = document.getElementById('composeForm');
         form.image_url.value = src;
         document.getElementById('imagePreviewImg').src = src;
-        gallery.querySelectorAll('.detail-img-thumb').forEach((t) => t.classList.remove('selected'));
+        gallery.querySelectorAll('.detail-img-thumb').forEach(t => t.classList.remove('selected'));
         thumb.classList.add('selected');
       });
     });
@@ -1140,7 +1138,7 @@ function updateCommentPreview() {
 document.getElementById('autoCommentToggle').addEventListener('change', updateCommentPreview);
 
 // ---- 글 예약 폼 ----
-document.getElementById('composeForm').addEventListener('submit', async (e) => {
+document.getElementById('composeForm').addEventListener('submit', async e => {
   e.preventDefault();
   const form = e.target;
   const msg = document.getElementById('composeMsg');
@@ -1224,9 +1222,11 @@ function friendlyPostError(message) {
   const raw = String(message || '');
   if (raw === 'THREADS_TOKEN_MISSING') return 'Threads 연동이 끊어졌습니다. 계정 설정에서 다시 로그인해주세요.';
   if (raw === 'PUBLISH_LIMIT_OR_SUBSCRIPTION') return '일일 발행 한도 또는 구독 상태를 확인해주세요.';
-  if (raw === 'ACCOUNTING_REVIEW_REQUIRED') return 'Threads에는 올라갔지만 처리 확인이 필요합니다. 관리자에게 문의해주세요.';
+  if (raw === 'ACCOUNTING_REVIEW_REQUIRED')
+    return 'Threads에는 올라갔지만 처리 확인이 필요합니다. 관리자에게 문의해주세요.';
   if (/^PUBLISH_OUTCOME_UNKNOWN/.test(raw)) return '발행 결과를 확인하지 못했습니다. Threads 앱에서 직접 확인해주세요.';
-  if (/^OPENAI_HOURLY_BUDGET_EXCEEDED/.test(raw) || /credit balance is too low|insufficient_quota/i.test(raw)) return 'AI 요청 한도 또는 크레딧 부족일 수 있습니다. OpenAI API 키/크레딧을 확인해주세요.';
+  if (/^OPENAI_HOURLY_BUDGET_EXCEEDED/.test(raw) || /credit balance is too low|insufficient_quota/i.test(raw))
+    return 'AI 요청 한도 또는 크레딧 부족일 수 있습니다. OpenAI API 키/크레딧을 확인해주세요.';
   return raw;
 }
 
@@ -1237,22 +1237,22 @@ async function loadPosts() {
   const tbody = document.getElementById('postsTableBody');
   tbody.innerHTML = rows
     .map(
-      (p) => `
+      p => `
     <tr>
       <td>
-        <span class="status-pill status-${p.status}">${statusLabel[p.status]}</span>
-        ${p.status === 'failed' && p.error_message ? `<div class="post-error-text">${friendlyPostError(p.error_message).replace(/</g, '&lt;')}</div>` : ''}
+        <span class="status-pill status-${escapeHtml(p.status)}">${escapeHtml(statusLabel[p.status] || p.status)}</span>
+        ${p.status === 'failed' && p.error_message ? `<div class="post-error-text">${escapeHtml(friendlyPostError(p.error_message))}</div>` : ''}
       </td>
-      <td class="text-cell">${(p.text || '').replace(/</g, '&lt;')}</td>
+      <td class="text-cell">${escapeHtml(p.text)}</td>
       <td>${fmtTime(p.status === 'posted' ? p.posted_at : p.scheduled_at)}</td>
       <td>–</td>
       <td><span class="status-pill status-${p.comment_status === 'posted' ? 'posted' : p.comment_status === 'failed' ? 'failed' : p.comment_status === 'pending' ? 'pending' : 'none'}">${commentStatusLabel[p.comment_status] || '해당없음'}</span></td>
-      <td>${p.status === 'pending' ? `<button class="del-btn" data-id="${p.id}">삭제</button>` : ''}</td>
+      <td>${p.status === 'pending' ? `<button class="del-btn" data-id="${Number(p.id)}">삭제</button>` : ''}</td>
     </tr>`
     )
     .join('');
 
-  tbody.querySelectorAll('.del-btn').forEach((btn) => {
+  tbody.querySelectorAll('.del-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       await apiFetch(`/api/posts/${btn.dataset.id}`, { method: 'DELETE' });
       loadPosts();
@@ -1282,7 +1282,9 @@ async function loadSettings() {
   cForm.COUPANG_SECRET_KEY.placeholder = data.hasCoupangSecret ? '저장됨 (변경 시에만 입력)' : '';
 
   const aForm = document.getElementById('anthropicForm');
-  aForm.ANTHROPIC_API_KEY.placeholder = data.hasAnthropicKey ? '저장됨 (변경 시에만 입력)' : 'sk-... (변경 시에만 입력)';
+  aForm.ANTHROPIC_API_KEY.placeholder = data.hasAnthropicKey
+    ? '저장됨 (변경 시에만 입력)'
+    : 'sk-... (변경 시에만 입력)';
 
   const nForm = document.getElementById('naverForm');
   nForm.NAVER_CLIENT_ID.value = data.NAVER_CLIENT_ID || '';
@@ -1294,7 +1296,7 @@ async function loadSettings() {
   document.getElementById('connectBtn').href = `/auth/login?accountId=${activeAccountId}`;
 }
 
-document.getElementById('anthropicForm').addEventListener('submit', async (e) => {
+document.getElementById('anthropicForm').addEventListener('submit', async e => {
   e.preventDefault();
   const form = e.target;
   const msg = document.getElementById('anthropicMsg');
@@ -1338,8 +1340,7 @@ async function clearAiKey(clearField) {
 
 document.getElementById('clearAnthropicKeyBtn').addEventListener('click', () => clearAiKey('CLEAR_ANTHROPIC_KEY'));
 
-
-document.getElementById('naverForm').addEventListener('submit', async (e) => {
+document.getElementById('naverForm').addEventListener('submit', async e => {
   e.preventDefault();
   const form = e.target;
   const msg = document.getElementById('naverMsg');
@@ -1382,7 +1383,7 @@ document.getElementById('clearNaverKeyBtn').addEventListener('click', async () =
   }
 });
 
-document.getElementById('coupangForm').addEventListener('submit', async (e) => {
+document.getElementById('coupangForm').addEventListener('submit', async e => {
   e.preventDefault();
   const form = e.target;
   const msg = document.getElementById('coupangMsg');
@@ -1406,7 +1407,7 @@ document.getElementById('coupangForm').addEventListener('submit', async (e) => {
   }
 });
 
-document.getElementById('disclosureForm').addEventListener('submit', async (e) => {
+document.getElementById('disclosureForm').addEventListener('submit', async e => {
   e.preventDefault();
   const msg = document.getElementById('disclosureMsg');
   const template = e.target.template.value;
@@ -1427,7 +1428,7 @@ document.getElementById('disclosureForm').addEventListener('submit', async (e) =
   }
 });
 
-document.getElementById('settingsForm').addEventListener('submit', async (e) => {
+document.getElementById('settingsForm').addEventListener('submit', async e => {
   e.preventDefault();
   const form = e.target;
   await apiFetch(`/api/accounts/${activeAccountId}/settings`, {

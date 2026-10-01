@@ -1,0 +1,310 @@
+'use strict';
+
+const axios = require('axios');
+const crypto = require('crypto');
+const { budgetState, reserveRequest } = require('../infra/automationState');
+
+// Every OpenAI chat/completions call goes through guardedPost() (called explicitly by
+// aiClient.js - this used to be a global axios.post override loaded with `node -r`). It enforces
+// concurrency 1, a minimum gap between calls, an hourly request cap shared across restarts
+// (automationState), a cache for low-temperature analysis calls, an input-size cap, one retry on
+// a TPM 429, and in-flight dedupe of identical concurrent requests per credential.
+// Env names keep their historical OPENAI_* prefix because they are already set on Railway.
+const AI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+// Resolved per call so tests (and nothing else) can stub the transport.
+const originalPost = (...args) => axios.post(...args);
+const inFlight = new Map();
+let queue = Promise.resolve();
+let lastStartAt = 0;
+const MIN_GAP_MS = Math.max(1000, Number(process.env.OPENAI_MIN_GAP_MS || 3000));
+const ANALYSIS_CACHE_MS = Math.max(5 * 60 * 1000, Number(process.env.OPENAI_ANALYSIS_CACHE_MS || 24 * 60 * 60 * 1000));
+const MAX_TEXT_CHARS = Math.max(6000, Number(process.env.OPENAI_MAX_TEXT_CHARS || 18000));
+const analysisCache = new Map();
+const MAX_CACHE = 1000;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+function isAiChatUrl(url) {
+  return String(url || '') === AI_CHAT_URL;
+}
+function errorMessage(e) {
+  return String(e?.response?.data?.error?.message || e?.message || '');
+}
+function isTpm429(e) {
+  if (Number(e?.response?.status || 0) !== 429) return false;
+  const type = String(e?.response?.data?.error?.type || '');
+  return /rate_limit/i.test(type) || /tokens per min|TPM|rate limit reached/i.test(errorMessage(e));
+}
+function isNoCredits(e) {
+  const status = Number(e?.response?.status || 0);
+  if (status !== 429 && status !== 400) return false;
+  return /no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(errorMessage(e));
+}
+// Wait time for a 429: the standard retry-after header first, then OpenAI's "try again in Xs" text.
+function retryAfterMs(e) {
+  const headerSeconds = Number(e?.response?.headers?.['retry-after']);
+  if (Number.isFinite(headerSeconds) && headerSeconds > 0) return Math.ceil(headerSeconds * 1000);
+  const msg = errorMessage(e);
+  const m = msg.match(/try again in\s+([0-9.]+)\s*(ms|s)/i);
+  if (m) return m[2].toLowerCase() === 's' ? Math.ceil(Number(m[1]) * 1000) : Math.ceil(Number(m[1]));
+  return 1800;
+}
+function isCacheableAnalysis(data) {
+  const t = Number(data?.temperature);
+  return Number.isFinite(t) && t <= 0.2 && Array.isArray(data?.messages);
+}
+function cacheKey(data) {
+  const stable = JSON.stringify({
+    model: data?.model,
+    temperature: data?.temperature,
+    max_tokens: data?.max_tokens,
+    system: data?.system,
+    messages: data?.messages,
+  });
+  return crypto.createHash('sha256').update(stable).digest('hex');
+}
+function pruneCache() {
+  const now = Date.now();
+  for (const [k, v] of analysisCache) if (now - v.at > ANALYSIS_CACHE_MS) analysisCache.delete(k);
+  while (analysisCache.size > MAX_CACHE) analysisCache.delete(analysisCache.keys().next().value);
+}
+function assertHourlyBudget() {
+  const state = budgetState();
+  if (state.available) return;
+  // Error code/flag names kept as OPENAI_* even after the Claude migration: this exact code/flag
+  // is checked directly by qualityHold.js, scheduler.js (formerly
+  // autopilotTimedPrefillPatch.js), automationState.js, and materialEngine.js/
+  // recipeQuality.js's own catch blocks (formerly injected by runtimeStabilityPatch.js,
+  // now baked in directly) - renaming here without touching all of them would silently break
+  // the no-retry-on-budget-exceeded behavior everywhere else.
+  const e = new Error(`OPENAI_HOURLY_BUDGET_EXCEEDED: ${state.used}/${state.limit} requests in last hour`);
+  e.code = 'OPENAI_HOURLY_BUDGET_EXCEEDED';
+  e.__openAiNoRetry = true;
+  e.retryAt = state.retryAt;
+  console.warn(
+    `[AI][HARD BUDGET] hourly cap reached ${state.used}/${state.limit} retryAt=${new Date(state.retryAt).toISOString()}`
+  );
+  throw e;
+}
+function countTextChars(value) {
+  if (typeof value === 'string') return value.length;
+  if (Array.isArray(value)) return value.reduce((n, v) => n + countTextChars(v), 0);
+  if (!value || typeof value !== 'object') return 0;
+  let total = 0;
+  for (const [k, v] of Object.entries(value)) {
+    if (/image_url|url/i.test(k) && typeof v === 'string') continue;
+    total += countTextChars(v);
+  }
+  return total;
+}
+// Keeps the head and tail of an over-long field and never returns more than `max` characters.
+function truncateString(s, max) {
+  const text = String(s || '');
+  if (text.length <= max) return text;
+  if (max <= 50) return text.slice(0, Math.max(0, max));
+  const markerLen = 70;
+  const available = Math.max(0, max - markerLen);
+  const head = Math.floor(available * 0.72);
+  const tail = available - head;
+  const dropped = text.length - head - tail;
+  return `${text.slice(0, head)}\n...[AI cost guard truncated ${dropped} chars]...\n${text.slice(-tail)}`;
+}
+function capContent(value, state) {
+  if (typeof value === 'string') {
+    const remaining = Math.max(0, MAX_TEXT_CHARS - state.used);
+    if (!remaining) return '';
+    const next = truncateString(value, remaining);
+    state.used += next.length;
+    return next;
+  }
+  if (Array.isArray(value)) return value.map(v => capContent(v, state));
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (/image_url|url/i.test(k)) out[k] = v;
+    else out[k] = capContent(v, state);
+  }
+  return out;
+}
+// Caps total input text (system prompt + messages) at MAX_TEXT_CHARS to bound per-call cost.
+function capRequestText(data) {
+  if (!data) return data;
+  const before = countTextChars({ system: data.system, messages: data.messages });
+  if (before <= MAX_TEXT_CHARS) return data;
+  const state = { used: 0 };
+  const cloned = { ...data };
+  if (data.system) cloned.system = capContent(data.system, state);
+  if (Array.isArray(data.messages)) cloned.messages = capContent(data.messages, state);
+  const after = countTextChars({ system: cloned.system, messages: cloned.messages });
+  console.warn(`[AI][INPUT CAP] text chars ${before} -> ${after} cap=${MAX_TEXT_CHARS}`);
+  return cloned;
+}
+
+// Image count, for the usage log.
+function countImages(data) {
+  if (!data || !Array.isArray(data.messages)) return 0;
+  let count = 0;
+  for (const message of data.messages) {
+    if (!Array.isArray(message?.content)) continue;
+    for (const part of message.content) if (part?.type === 'image' || part?.type === 'image_url') count++;
+  }
+  return count;
+}
+
+function classifyPurpose(data) {
+  const text = [
+    typeof data?.system === 'string' ? data.system : '',
+    Array.isArray(data?.messages)
+      ? data.messages.map(m => (typeof m?.content === 'string' ? m.content : '')).join('\n')
+      : '',
+  ]
+    .join('\n')
+    .slice(0, 12000);
+  if (/YouTube.*검색|검색할 핵심 키워드|YouTube 검색 키워드/i.test(text)) return 'youtube_keyword';
+  if (/쿠팡.*검색.*키워드|상품 키워드.*제안|검색 키워드 5개/i.test(text)) return 'product_keyword';
+  if (/이미지|사진|vision|보이는 상품|영상 프레임/i.test(text)) return 'vision_analysis';
+  if (/레시피|재료|조리|요리/i.test(text)) return 'recipe_or_food';
+  if (/Threads|쓰레드|게시물|본문|말투|문체/i.test(text)) return 'post_generation';
+  return 'other';
+}
+function logUsage(response, data, attempt = 1) {
+  const usage = response?.data?.usage || {};
+  const prompt = Number(usage.prompt_tokens || usage.input_tokens || 0);
+  const completion = Number(usage.completion_tokens || usage.output_tokens || 0);
+  const total = Number(usage.total_tokens || prompt + completion || 0);
+  const cached = Number(
+    usage.prompt_tokens_details?.cached_tokens ||
+      usage.input_tokens_details?.cached_tokens ||
+      usage.cache_read_input_tokens ||
+      0
+  );
+  const uncached = Math.max(0, prompt - cached);
+  const chars = countTextChars({ system: data?.system, messages: data?.messages });
+  const purpose = classifyPurpose(data);
+  const images = countImages(data);
+  const model = String(response?.data?.model || data?.model || 'unknown');
+  console.log(
+    `[AI][USAGE] purpose=${purpose} model=${model} attempt=${attempt} input=${prompt} cached=${cached} uncached=${uncached} output=${completion} total=${total} textChars=${chars} images=${images}`
+  );
+}
+
+async function runGuardedRequest(url, rawData, config) {
+  // A response timeout alone does not bound DNS/connect/TLS stalls.
+  const timeout = Number(config?.timeout) > 0 ? Math.min(Number(config.timeout), 60000) : 60000;
+  config = {
+    ...config,
+    timeout,
+    signal: config?.signal
+      ? AbortSignal.any([config.signal, AbortSignal.timeout(timeout)])
+      : AbortSignal.timeout(timeout),
+  };
+  const data = capRequestText(rawData);
+  let key = null;
+  if (isCacheableAnalysis(data)) {
+    key = cacheKey(data);
+    const hit = analysisCache.get(key);
+    if (hit && Date.now() - hit.at <= ANALYSIS_CACHE_MS) {
+      console.log('[AI][ANALYSIS CACHE HIT] request reused');
+      return hit.response;
+    }
+  }
+
+  assertHourlyBudget();
+  const now = Date.now();
+  const wait = Math.max(0, MIN_GAP_MS - (now - lastStartAt));
+  if (wait) await sleep(wait);
+  assertHourlyBudget();
+  lastStartAt = Date.now();
+  reserveRequest();
+
+  let response;
+  let attempt = 1;
+  try {
+    response = await originalPost(url, data, config);
+  } catch (e) {
+    if (isNoCredits(e)) {
+      e.__openAiNoRetry = true;
+      throw e;
+    }
+    if (!isTpm429(e)) throw e;
+
+    let retryMs = Math.max(1500, Math.min(6000, retryAfterMs(e) + 500));
+    console.warn(`[AI][RATE LIMIT GUARD] 429 → ${retryMs}ms 대기 후 1회 재시도`);
+    await sleep(retryMs);
+    assertHourlyBudget();
+    lastStartAt = Date.now();
+    reserveRequest();
+    attempt = 2;
+    response = await originalPost(url, data, config);
+  }
+
+  if (response) logUsage(response, data, attempt);
+
+  if (key && response) {
+    analysisCache.set(key, { at: Date.now(), response });
+    pruneCache();
+    console.log(`[AI][ANALYSIS CACHE SAVE] ttl=${Math.round(ANALYSIS_CACHE_MS / 3600000)}h size=${analysisCache.size}`);
+  }
+  return response;
+}
+
+// Dedupe key: identical payload AND identical credential (Authorization or x-api-key), so two
+// accounts' identical requests are never merged.
+function requestKey(data, config) {
+  const credential = String(
+    config?.headers?.['x-api-key'] || config?.headers?.Authorization || config?.headers?.authorization || ''
+  );
+  const credentialScope = crypto.createHash('sha256').update(credential).digest('hex');
+  const stable = JSON.stringify({
+    credentialScope,
+    model: data?.model,
+    temperature: data?.temperature,
+    max_tokens: data?.max_tokens,
+    system: data?.system,
+    messages: data?.messages,
+  });
+  return crypto.createHash('sha256').update(stable).digest('hex');
+}
+
+function guardedPost(url, data, config) {
+  if (!isAiChatUrl(url)) return originalPost(url, data, config);
+
+  const key = requestKey(data, config);
+  const existing = inFlight.get(key);
+  if (existing) {
+    console.log(`[AI][IN-FLIGHT DEDUPE] key=${key.slice(0, 10)} reused=yes`);
+    return existing;
+  }
+
+  const task = queue
+    .then(() => runGuardedRequest(url, data, config))
+    .finally(() => {
+      if (inFlight.get(key) === task) inFlight.delete(key);
+    });
+  queue = task.catch(() => {});
+  inFlight.set(key, task);
+  return task;
+}
+
+// True when the AI call failed because the hourly request budget or the provider credits are
+// exhausted - retrying another candidate would only fail the same way.
+function isAiBudgetOrCreditError(e) {
+  if (e?.code === 'OPENAI_HOURLY_BUDGET_EXCEEDED' || e?.__openAiNoRetry) return true;
+  const msg = `${e?.message || ''} ${e?.response?.data?.error?.message || ''}`;
+  return /OPENAI_HOURLY_BUDGET_EXCEEDED|no credits remaining|add credits|credit balance is too low|insufficient_quota/i.test(
+    msg
+  );
+}
+
+module.exports = {
+  guardedPost,
+  isAiBudgetOrCreditError,
+  truncateString,
+  capContent,
+  countTextChars,
+  capRequestText,
+  MAX_TEXT_CHARS,
+  retryAfterMs,
+  AI_CHAT_URL,
+};

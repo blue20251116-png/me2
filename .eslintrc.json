@@ -1,0 +1,101 @@
+{
+  "root": true,
+  "env": {
+    "node": true,
+    "es2022": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 2024,
+    "sourceType": "script"
+  },
+  "extends": "eslint:recommended",
+  "rules": {
+    "no-unused-vars": [
+      "error",
+      {
+        "args": "none",
+        "caughtErrors": "none",
+        "varsIgnorePattern": "^_"
+      }
+    ],
+    "no-empty": [
+      "error",
+      {
+        "allowEmptyCatch": true
+      }
+    ],
+    "no-control-regex": "off",
+    "no-useless-escape": "off",
+    "no-misleading-character-class": "off",
+    "no-constant-condition": [
+      "error",
+      {
+        "checkLoops": false
+      }
+    ],
+    "strict": ["error", "global"]
+  },
+  "overrides": [
+    {
+      "files": [
+        "src/threads/threadsScraper.js",
+        "src/threads/scraper/*.js",
+        "src/threads/mediaImporter.js",
+        "src/autopilot/stages/videoTrigger.js",
+        "src/autopilot/stages/sourceExactProduct.js"
+      ],
+      "globals": {
+        "document": "readonly",
+        "window": "readonly",
+        "location": "readonly",
+        "getComputedStyle": "readonly",
+        "HTMLVideoElement": "readonly"
+      }
+    },
+    {
+      "files": ["public/**/*.js"],
+      "env": {
+        "browser": true,
+        "node": false
+      },
+      "globals": {
+        "escapeHtml": "readonly",
+        "safeUrl": "readonly"
+      }
+    },
+    {
+      "files": ["public/threadsMaterialUi.js"],
+      "globals": {
+        "apiFetch": "readonly",
+        "loadDashboard": "readonly"
+      }
+    },
+    {
+      "files": ["public/**/*.js"],
+      "rules": {
+        "strict": "off"
+      }
+    },
+    {
+      "files": ["public/reachReport.js"],
+      "globals": {
+        "apiFetch": "readonly",
+        "activeAccountId": "readonly"
+      },
+      "rules": {
+        "no-unused-vars": [
+          "error",
+          {
+            "varsIgnorePattern": "^loadReachReport$"
+          }
+        ]
+      }
+    },
+    {
+      "files": ["public/app.js"],
+      "globals": {
+        "loadReachReport": "readonly"
+      }
+    }
+  ]
+}

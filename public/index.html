@@ -20,6 +20,7 @@
       <section id="tab-dashboard" class="tab-panel active">
         <div class="stat-grid"><div class="stat-card amber"><span class="stat-label">오늘 발송 예정 글</span><span id="statPending" class="stat-value">–</span><span id="statNextTime" class="stat-sub">다음 발행 시각 없음</span></div><div class="stat-card green"><span class="stat-label">오늘 포스팅 완료</span><span id="statPosted" class="stat-value">–</span><span id="statTotal" class="stat-sub">전체 예약 –개</span></div><div class="stat-card blue"><span class="stat-label">오늘 올린 글 조회수</span><span id="statViews" class="stat-value">–</span><span id="statViewsSub" class="stat-sub">–개 글 합계</span></div></div>
         <div class="panel"><div class="panel-head"><h2>오늘 포스팅 목록</h2><span id="panelHeadSummary" class="panel-head-sub">완료 – · 예정 –</span></div><div id="hourlyGrid" class="hourly-grid"></div><div id="hourDetail" class="hour-detail"></div></div>
+        <div class="panel" id="reachPanel"><div class="panel-head"><h2>성과 분석</h2><span id="reachPeriod" class="panel-head-sub"></span></div><div id="reachReport" class="reach-report"><p class="hint">불러오는 중…</p></div></div>
       </section>
       <section id="tab-compose" class="tab-panel">
         <div class="panel narrow autopilot-panel"><h2>🚀 완전 자동발행</h2><p class="hint">켜두면 서버가 알아서 60~75분마다 무작위 간격으로 상품을 고르고 글을 써서 예약·발행까지 합니다. 사람이 붙어있지 않아도 계속 돌아가요.</p><div class="autopilot-row"><span id="autopilotStatusText" class="autopilot-status-text">상태 확인 중…</span><button type="button" id="autopilotToggleBtn" class="btn-secondary">시작</button></div><p id="autopilotDetail" class="hint"></p><label class="checkbox-row" style="margin-top:10px;"><input type="checkbox" id="autopilotYoutubeToggle" checked />관련 쇼츠 콘텐츠 참고 <span class="label-note">선택한 상품과 관련된 YouTube 콘텐츠를 찾아 글 소재에 참고합니다</span></label><label>콘텐츠 탐색 방식<select id="autopilotYoutubeOrderSelect"><option value="relevance">상품 관련도 우선</option><option value="viewCount">조회수 높은 콘텐츠 우선</option><option value="date">최신 콘텐츠 우선</option></select></label><label class="checkbox-row" style="margin-top:10px;"><input type="checkbox" id="autopilotFrameMediaToggle" />업로드 영상 프레임 자동 사용 <span class="label-note">현재 상품과 연결된 업로드 영상이 있을 경우 AI 추천 프레임을 게시 이미지로 사용합니다. 없으면 자동으로 상품 이미지를 사용합니다.</span></label></div>
@@ -90,8 +91,11 @@
       }
     })();
   </script>
+  <script src="/escape.js"></script>
   <script src="app.js"></script>
   <script src="naverConnect.js"></script>
   <script src="threadsMaterialUi.js"></script>
+  <script src="/liveInsights.js?v=1"></script>
+  <script src="/reachReport.js?v=1"></script>
 </body>
 </html>

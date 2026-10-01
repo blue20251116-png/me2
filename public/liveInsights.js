@@ -43,7 +43,8 @@
       <div class="live-chart-wrap"><canvas id="liveViewsCanvas"></canvas><div id="liveEmpty" class="live-empty">조회수 데이터를 기다리는 중이에요.</div></div>
       <div class="live-insights-foot"><span id="liveReactions">좋아요 – · 답글 – · 리포스트 –</span><span id="liveUpdatedAt">1분마다 자동 갱신</span></div>`;
     const statGrid = dashboard.querySelector('.stat-grid');
-    if (statGrid?.nextSibling) dashboard.insertBefore(panel, statGrid.nextSibling); else dashboard.appendChild(panel);
+    if (statGrid?.nextSibling) dashboard.insertBefore(panel, statGrid.nextSibling);
+    else dashboard.appendChild(panel);
     document.getElementById('livePostSelect')?.addEventListener('change', renderSelected);
     return panel;
   }
@@ -55,7 +56,8 @@
     if (!iso) return '–';
     const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
     if (mins < 60) return `${mins}분`;
-    const h = Math.floor(mins / 60), m = mins % 60;
+    const h = Math.floor(mins / 60),
+      m = mins % 60;
     return m ? `${h}시간 ${m}분` : `${h}시간`;
   }
   function deltaFive(history) {
@@ -63,12 +65,16 @@
     const last = history[history.length - 1];
     const cutoff = new Date(last.captured_at).getTime() - 5 * 60000;
     let base = history[0];
-    for (const p of history) { if (new Date(p.captured_at).getTime() <= cutoff) base = p; else break; }
+    for (const p of history) {
+      if (new Date(p.captured_at).getTime() <= cutoff) base = p;
+      else break;
+    }
     return Math.max(0, Number(last.views || 0) - Number(base.views || 0));
   }
   function perMinute(history) {
     if (!history || history.length < 2) return 0;
-    const first = history[0], last = history[history.length - 1];
+    const first = history[0],
+      last = history[history.length - 1];
     const mins = Math.max(1, (new Date(last.captured_at) - new Date(first.captured_at)) / 60000);
     return Math.max(0, (Number(last.views || 0) - Number(first.views || 0)) / mins);
   }
@@ -83,24 +89,55 @@
     canvas.height = Math.max(1, Math.round(rect.height * dpr));
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    const w = rect.width, h = rect.height;
-    ctx.clearRect(0,0,w,h);
-    if (!history || history.length < 2) { if (empty) empty.style.display='flex'; return; }
-    if (empty) empty.style.display='none';
-    const pad = {l:44,r:14,t:18,b:30};
-    const iw=w-pad.l-pad.r, ih=h-pad.t-pad.b;
-    const vals=history.map(x=>Number(x.views||0));
-    const min=Math.min(...vals), max=Math.max(...vals), span=Math.max(1,max-min);
-    const gridColor=getComputedStyle(document.documentElement).getPropertyValue('--border').trim()||'rgba(128,128,128,.2)';
-    const textColor=getComputedStyle(document.documentElement).getPropertyValue('--text-dim').trim()||'#888';
-    const lineColor=getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()||'#7c5cff';
-    ctx.font='11px sans-serif'; ctx.fillStyle=textColor; ctx.strokeStyle=gridColor; ctx.lineWidth=1;
-    for(let i=0;i<=4;i++){const y=pad.t+ih*i/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();const v=Math.round(max-span*i/4);ctx.fillText(fmt(v),4,y+4);}
-    ctx.strokeStyle=lineColor;ctx.lineWidth=2.5;ctx.beginPath();
-    history.forEach((p,i)=>{const x=pad.l+iw*(i/(history.length-1));const y=pad.t+ih*(1-(Number(p.views||0)-min)/span);if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();
-    const first=new Date(history[0].captured_at), last=new Date(history[history.length-1].captured_at);
-    ctx.fillStyle=textColor;ctx.fillText(first.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}),pad.l,h-9);
-    const label=last.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});const tw=ctx.measureText(label).width;ctx.fillText(label,w-pad.r-tw,h-9);
+    const w = rect.width,
+      h = rect.height;
+    ctx.clearRect(0, 0, w, h);
+    if (!history || history.length < 2) {
+      if (empty) empty.style.display = 'flex';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    const pad = { l: 44, r: 14, t: 18, b: 30 };
+    const iw = w - pad.l - pad.r,
+      ih = h - pad.t - pad.b;
+    const vals = history.map(x => Number(x.views || 0));
+    const min = Math.min(...vals),
+      max = Math.max(...vals),
+      span = Math.max(1, max - min);
+    const gridColor =
+      getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || 'rgba(128,128,128,.2)';
+    const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-dim').trim() || '#888';
+    const lineColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#7c5cff';
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = textColor;
+    ctx.strokeStyle = gridColor;
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.t + (ih * i) / 4;
+      ctx.beginPath();
+      ctx.moveTo(pad.l, y);
+      ctx.lineTo(w - pad.r, y);
+      ctx.stroke();
+      const v = Math.round(max - (span * i) / 4);
+      ctx.fillText(fmt(v), 4, y + 4);
+    }
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    history.forEach((p, i) => {
+      const x = pad.l + iw * (i / (history.length - 1));
+      const y = pad.t + ih * (1 - (Number(p.views || 0) - min) / span);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    const first = new Date(history[0].captured_at),
+      last = new Date(history[history.length - 1].captured_at);
+    ctx.fillStyle = textColor;
+    ctx.fillText(first.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }), pad.l, h - 9);
+    const label = last.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+    const tw = ctx.measureText(label).width;
+    ctx.fillText(label, w - pad.r - tw, h - 9);
   }
 
   function renderSelected() {
@@ -114,8 +151,11 @@
     document.getElementById('liveFiveMin').textContent = `+${fmt(deltaFive(history))}`;
     document.getElementById('livePerMin').textContent = `+${fmt(Math.round(perMinute(history)))}`;
     document.getElementById('liveElapsed').textContent = elapsedText(post.posted_at);
-    document.getElementById('liveReactions').textContent = `좋아요 ${fmt(post.likes)} · 답글 ${fmt(post.replies)} · 리포스트 ${fmt(post.reposts)}`;
-    document.getElementById('liveUpdatedAt').textContent = payload.updatedAt ? `마지막 갱신 ${new Date(payload.updatedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}` : '1분마다 자동 갱신';
+    document.getElementById('liveReactions').textContent =
+      `좋아요 ${fmt(post.likes)} · 답글 ${fmt(post.replies)} · 리포스트 ${fmt(post.reposts)}`;
+    document.getElementById('liveUpdatedAt').textContent = payload.updatedAt
+      ? `마지막 갱신 ${new Date(payload.updatedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`
+      : '1분마다 자동 갱신';
     draw(history);
   }
 
@@ -131,22 +171,39 @@
       const select = document.getElementById('livePostSelect');
       const old = selectedPostId || Number(select?.value) || null;
       if (!data.posts?.length) {
-        if(select) select.innerHTML='<option value="">오늘 발행된 글 없음</option>';
-        document.getElementById('liveEmpty').style.display='flex';
+        if (select) select.innerHTML = '<option value="">오늘 발행된 글 없음</option>';
+        document.getElementById('liveEmpty').style.display = 'flex';
         return;
       }
-      select.innerHTML = data.posts.map((p,i)=>`<option value="${p.id}">${i===0?'최근 · ':''}${new Date(p.posted_at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})} · ${String(p.text||'').replace(/[<>]/g,'').slice(0,22)}</option>`).join('');
-      selectedPostId = data.posts.some(p=>Number(p.id)===Number(old)) ? old : data.posts[0].id;
-      select.value=String(selectedPostId);
+      select.innerHTML = data.posts
+        .map(
+          (p, i) =>
+            `<option value="${p.id}">${i === 0 ? '최근 · ' : ''}${new Date(p.posted_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} · ${String(
+              p.text || ''
+            )
+              .replace(/[<>]/g, '')
+              .slice(0, 22)}</option>`
+        )
+        .join('');
+      selectedPostId = data.posts.some(p => Number(p.id) === Number(old)) ? old : data.posts[0].id;
+      select.value = String(selectedPostId);
       renderSelected();
     } catch (e) {
-      const empty=document.getElementById('liveEmpty'); if(empty){empty.textContent='실시간 조회수를 불러오지 못했어요.';empty.style.display='flex';}
+      const empty = document.getElementById('liveEmpty');
+      if (empty) {
+        empty.textContent = '실시간 조회수를 불러오지 못했어요.';
+        empty.style.display = 'flex';
+      }
     }
   }
 
   ensurePanel();
   loadLiveInsights();
   setInterval(loadLiveInsights, 60000);
-  window.addEventListener('resize', () => { if(payload) renderSelected(); });
-  document.addEventListener('click', e => { if(e.target.closest?.('.account-chip[data-id]')) setTimeout(loadLiveInsights, 500); });
+  window.addEventListener('resize', () => {
+    if (payload) renderSelected();
+  });
+  document.addEventListener('click', e => {
+    if (e.target.closest?.('.account-chip[data-id]')) setTimeout(loadLiveInsights, 500);
+  });
 })();
