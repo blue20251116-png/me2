@@ -189,13 +189,25 @@ async function extractVisionFrames(videoUrl, count) {
   }
 }
 
-async function buildVideoVisionMedia(m) {
+// Images sent per source to the vision call. Each image costs ~2.8k input tokens at low detail on
+// gpt-4o-mini, about 3x the text, so images were ~98% of autopilot AI input (production log
+// 2026-10-01: 52 vision calls, 44 images, 175k tokens for 2 published posts). The body text and the
+// author's replies are the primary evidence (the prompt treats images as supporting), so one image
+// is enough to confirm the object and catch a watermark. AUTOPILOT_VISION_IMAGES=2|3 restores more.
+function visionImageLimit(env = process.env) {
+  const n = Number(env.AUTOPILOT_VISION_IMAGES);
+  return Number.isInteger(n) && n >= 1 && n <= 3 ? n : 1;
+}
+
+async function buildVideoVisionMedia(m, max = visionImageLimit()) {
   const originals = (Array.isArray(m?.images) ? m.images : []).filter(Boolean);
   const videos = (Array.isArray(m?.videos) ? m.videos : []).filter(v => /^https?:\/\//i.test(String(v || '')));
-  if (!videos.length) return { images: originals.slice(0, 3), frameCount: 0 };
-  const wanted = originals.length ? 2 : 3;
+  if (!videos.length) return { images: originals.slice(0, max), frameCount: 0 };
+  const wanted = originals.length ? max - 1 : max;
+  // With room for only one image and a photo available, skip frame extraction (no ffmpeg run).
+  if (wanted <= 0) return { images: originals.slice(0, max), frameCount: 0 };
   const frames = await extractVisionFrames(videos[0], wanted);
-  if (!frames.length) return { images: originals.slice(0, 3), frameCount: 0 };
+  if (!frames.length) return { images: originals.slice(0, max), frameCount: 0 };
   const images = originals.length ? [originals[0], ...frames] : frames;
   console.log(
     '[AutopilotV3][VIDEO VISION MIX] originals=' +
@@ -203,9 +215,9 @@ async function buildVideoVisionMedia(m) {
       ' frames=' +
       frames.length +
       ' total=' +
-      Math.min(3, images.length)
+      Math.min(max, images.length)
   );
-  return { images: images.slice(0, 3), frameCount: frames.length };
+  return { images: images.slice(0, max), frameCount: frames.length };
 }
 
 async function identifyCommerceTarget(accountId, m) {
@@ -314,4 +326,11 @@ function mediaFlagSkipReason(flags, env = process.env) {
   return null;
 }
 
-module.exports = { identifyCommerceTarget, analyzeMaterial, normalizeVisionResult, mediaFlagSkipReason };
+module.exports = {
+  identifyCommerceTarget,
+  analyzeMaterial,
+  normalizeVisionResult,
+  mediaFlagSkipReason,
+  visionImageLimit,
+  buildVideoVisionMedia,
+};

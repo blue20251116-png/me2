@@ -6,7 +6,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { voiceProblems, voiceGuide } = require('../src/content/voicePolicy');
 const { PERSONAS } = require('../src/content/personas');
-const { normalizeVisionResult, mediaFlagSkipReason } = require('../src/autopilot/vision');
+const {
+  normalizeVisionResult,
+  mediaFlagSkipReason,
+  visionImageLimit,
+  buildVideoVisionMedia,
+} = require('../src/autopilot/vision');
 
 const LOW_VIEW_POSTS = {
   sofa: `좁은 집에서 살다 보니 소파랑 매트리스 따로 사면 후회할 일 많더라ㅋㅋ
@@ -104,4 +109,18 @@ test('only a watermark drops a source by default; adLabel needs AUTOPILOT_SKIP_A
   assert.match(mediaFlagSkipReason({ adLabel: false, watermark: true }, {}), /워터마크/);
   assert.match(mediaFlagSkipReason({ adLabel: true }, { AUTOPILOT_SKIP_AD_LABEL: '1' }), /광고 표시/);
   assert.equal(mediaFlagSkipReason(undefined, {}), null);
+});
+
+// Cost: images were ~98% of autopilot AI input tokens; one image per source is the default.
+test('vision sends one image per source by default, configurable up to 3', async () => {
+  assert.equal(visionImageLimit({}), 1);
+  assert.equal(visionImageLimit({ AUTOPILOT_VISION_IMAGES: '3' }), 3);
+  assert.equal(visionImageLimit({ AUTOPILOT_VISION_IMAGES: '9' }), 1);
+  const photos = { images: ['a.jpg', 'b.jpg', 'c.jpg'], videos: ['https://x/v.mp4'] };
+  // A photo plus a video with a 1-image budget: the photo only, and no frame extraction is attempted.
+  assert.deepEqual(await buildVideoVisionMedia(photos, 1), { images: ['a.jpg'], frameCount: 0 });
+  assert.deepEqual(await buildVideoVisionMedia({ images: ['a.jpg', 'b.jpg'] }, 1), {
+    images: ['a.jpg'],
+    frameCount: 0,
+  });
 });
