@@ -10,6 +10,7 @@ const { editVideo } = require('../content/videoEditor');
 const { pickTopicTag, isTopicTagRejection } = require('./topicTag');
 const { normalizeMediaItems, decodeMediaBundle } = require('./mediaBundle');
 const { cacheImage } = require('./imageCache');
+const { rebaseUploadUrl } = require('../config/publicUrl');
 const { sanitizePublishedThreadsText, prepareReplyLinks, ensureCoupangDisclosureFirst } = require('./publishText');
 const {
   GRAPH_BASE,
@@ -143,8 +144,10 @@ async function postThreadsContainer(params, timeout) {
 }
 async function publishPost(accountId, { text, imageUrl, videoUrl, onCreated }) {
   text = sanitizePublishedThreadsText(text);
-  const bundle = decodeMediaBundle(imageUrl);
+  const bundle = decodeMediaBundle(imageUrl)?.map(item => ({ ...item, url: rebaseUploadUrl(item.url) }));
   if (bundle?.length) return publishMediaItemsPost(accountId, { text, mediaItems: bundle, onCreated });
+  imageUrl = rebaseUploadUrl(imageUrl);
+  videoUrl = rebaseUploadUrl(videoUrl);
   if (imageUrl) imageUrl = await cacheImage(imageUrl);
   const account = getAccount(accountId);
   if (!account) throw new Error('존재하지 않는 계정입니다');

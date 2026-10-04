@@ -1,8 +1,10 @@
 'use strict';
 
 const { guardedPost, AI_CHAT_URL } = require('./aiRequestGuard');
+const { callClaudeCli } = require('./claudeCliClient');
 
-// AI text/vision client. Calls OpenAI chat/completions (gpt-4o-mini by default) through
+// AI text/vision client. Calls OpenAI chat/completions (gpt-4o-mini by default) - or, with
+// AI_PROVIDER=claude-cli, the local Claude Code CLI (claudeCliClient.js) - through
 // aiRequestGuard.guardedPost(), which owns rate limiting, budget and dedupe.
 // The exported names callAI/callAIJson are historical (the app briefly used Claude);
 // callAI/callAIJson are the preferred aliases.
@@ -60,6 +62,11 @@ async function callAI(
   apiKey,
   { system, userContent, model = DEFAULT_MODEL, maxTokens = 1200, temperature = 0.7, timeout = 30000 } = {}
 ) {
+  if (process.env.AI_PROVIDER === 'claude-cli') {
+    const text = await callClaudeCli({ system, userContent, timeout });
+    if (!text) throw new Error('AI로부터 응답을 받지 못했습니다');
+    return text;
+  }
   const key = !apiKey || looksLikeAnthropicKey(apiKey) ? process.env.OPENAI_API_KEY || apiKey : apiKey;
   if (!key) throw new Error('OpenAI API 키가 설정되지 않았습니다');
   const messages = [];

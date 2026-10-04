@@ -20,4 +20,20 @@ function publicUploadUrl(filename) {
   return `${base}/uploads/${encodeURIComponent(filename)}`;
 }
 
-module.exports = { publicBaseUrl, publicUploadUrl };
+// Posts store absolute /uploads/ URLs at generation time. On the local PC the quick-tunnel host
+// changes on every restart, so a post made before a restart would hand Meta a dead URL
+// (THREADS_MEDIA_PROCESSING_FAILED). Re-point our own upload URLs at the current base at publish time.
+const OWN_HOST = /(^|\.)(trycloudflare\.com|up\.railway\.app|ngrok-free\.app|localhost)$/i;
+function rebaseUploadUrl(url) {
+  const base = publicBaseUrl();
+  if (!base || typeof url !== 'string') return url;
+  try {
+    const u = new URL(url);
+    if (!OWN_HOST.test(u.hostname) || !u.pathname.startsWith('/uploads/')) return url;
+    return `${base}${u.pathname}${u.search}`;
+  } catch {
+    return url;
+  }
+}
+
+module.exports = { publicBaseUrl, publicUploadUrl, rebaseUploadUrl };

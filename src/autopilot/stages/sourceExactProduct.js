@@ -253,6 +253,9 @@ async function resolveInBrowser(sourceUrl) {
       locale: 'ko-KR',
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36',
     });
+    // browserVisibleTitle() probes 6 locators; on a block/empty page each would wait Playwright's
+    // 30s default, blowing the 90s task budget and tripping the shared browser circuit for every account.
+    page.setDefaultTimeout(2000);
     await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
     await page.waitForTimeout(1000);
     let finalUrl = page.url();

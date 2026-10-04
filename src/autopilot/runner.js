@@ -465,27 +465,40 @@ function startAutopilotJob() {
       // withTimeout(), so this check runs BEFORE starting each account and budgets for that
       // account's worst-case duration up front - the tick can never run longer than
       // TICK_TIME_BUDGET_MS in total, keeping it well inside the 10-minute cron interval.
-      const TICK_TIME_BUDGET_MS = 8 * 60000;
-      for (const row of ordered) {
-        const budget = budgetState();
-        if (!budget.available) {
-          setState(0, 'waiting', 'AI_HOURLY_BUDGET', new Date(budget.retryAt).toISOString());
-          console.log(`[Autopilot][BUDGET WAIT] retryAt=${new Date(budget.retryAt).toISOString()}`);
-          return;
+      // AUTOPILOT_TICK_BUDGET_MS lifts this for slow backends (claude-cli): a longer tick only makes
+      // the noOverlap cron skip runs, and it must exceed ACCOUNT_REFILL_TIMEOUT_MS or no account runs.
+      const TICK_TIME_BUDGET_MS = Math.max(8 * 60000, Number(process.env.AUTOPILOT_TICK_BUDGET_MS) || 0);
+      // AUTOPILOT_ACCOUNT_CONCURRENCY (default 1) refills that many accounts in parallel - the local
+      // PC has room Railway did not; pair it with PLAYWRIGHT_MAX_CONCURRENCY / CLAUDE_CLI_CONCURRENCY.
+      const queue = [...ordered];
+      let stop = false;
+      const worker = async () => {
+        while (!stop && queue.length) {
+          const budget = budgetState();
+          if (!budget.available) {
+            setState(0, 'waiting', 'AI_HOURLY_BUDGET', new Date(budget.retryAt).toISOString());
+            console.log(`[Autopilot][BUDGET WAIT] retryAt=${new Date(budget.retryAt).toISOString()}`);
+            stop = true;
+            return;
+          }
+          if (Date.now() - startedAt + ACCOUNT_REFILL_TIMEOUT_MS > TICK_TIME_BUDGET_MS) return;
+          const accountId = Number(queue.shift().id);
+          autopilotLastAccountId = accountId;
+          try {
+            await withTimeout(
+              refillAccount(accountId),
+              ACCOUNT_REFILL_TIMEOUT_MS,
+              `account #${accountId} refill exceeded ${ACCOUNT_REFILL_TIMEOUT_MS}ms`
+            );
+          } catch (err) {
+            setState(accountId, 'retry', err.code || 'PREFLIGHT_FAILED');
+            console.error(`[Autopilot][ACCOUNT ERROR] #${accountId}: ${err.message}`);
+          }
         }
-        if (Date.now() - startedAt + ACCOUNT_REFILL_TIMEOUT_MS > TICK_TIME_BUDGET_MS) break;
-        autopilotLastAccountId = Number(row.id);
-        try {
-          await withTimeout(
-            refillAccount(autopilotLastAccountId),
-            ACCOUNT_REFILL_TIMEOUT_MS,
-            `account #${autopilotLastAccountId} refill exceeded ${ACCOUNT_REFILL_TIMEOUT_MS}ms`
-          );
-        } catch (err) {
-          setState(autopilotLastAccountId, 'retry', err.code || 'PREFLIGHT_FAILED');
-          console.error(`[Autopilot][ACCOUNT ERROR] #${autopilotLastAccountId}: ${err.message}`);
-        }
-      }
+      };
+      const concurrency = Math.max(1, Number(process.env.AUTOPILOT_ACCOUNT_CONCURRENCY) || 1);
+      await Promise.all(Array.from({ length: concurrency }, worker));
+      if (stop) return;
       setState(0, 'idle', 'refill complete');
     } finally {
       autopilotRefillTickRunning = false;
