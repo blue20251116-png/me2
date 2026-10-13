@@ -15,7 +15,10 @@ const { confidence01, productMatchOk, buildSoldFirstTerms, findProduct } = requi
 const { generatePost } = require('./postWriter');
 const { identifyCommerceTarget, analyzeMaterial, mediaFlagSkipReason } = require('./vision');
 
-async function buildThreadsFirstAutopilot(accountId, { target }) {
+// options.materialFilter / options.productFilter (accountMix.generationFilters, fixed-persona
+// accounts only) return a skip reason for a source or product this account must not use.
+async function buildThreadsFirstAutopilot(accountId, options = {}) {
+  const { target, materialFilter, productFilter } = options;
   const materials = await collectQualifiedThreadsMaterials(3);
   const preferredSlot = preferredContentSlot(accountId);
   const preferredMode = preferredSlot.mode;
@@ -30,6 +33,12 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
       console.log(
         `[AutopilotV3][TRY] ${idx + 1}/${materials.length} @${material.username || '-'} source=${material.url}`
       );
+      const filtered = typeof materialFilter === 'function' ? materialFilter(material) : null;
+      if (filtered) {
+        lastError = new Error(filtered);
+        console.log(`[AutopilotV3][PERSONA SKIP] @${material.username || '-'} ${filtered} → 다음 소재`);
+        continue;
+      }
       const sourceClaimsVideo = !!material.hasVideo || Number(material.videoCount || 0) > 0;
       const playableVideos = Array.isArray(material.videos) ? material.videos.filter(Boolean) : [];
       if (sourceClaimsVideo && !playableVideos.length) {
@@ -121,6 +130,20 @@ async function buildThreadsFirstAutopilot(accountId, { target }) {
         console.log(
           `[AutopilotV3][PRODUCT MATCH SKIP] @${material.username || '-'} sold="${vision?.soldObject || '-'}" product="${found.product.name || '-'}" → 다음 소재`
         );
+        continue;
+      }
+      const dupReason =
+        typeof productFilter === 'function'
+          ? productFilter({
+              product: found.product,
+              sourceUrl: material.url,
+              topic: analysis.topic,
+              searchTerm: found.searchTerm,
+            })
+          : null;
+      if (dupReason) {
+        lastError = new Error(dupReason);
+        console.log(`[AutopilotV3][DEDUPE SKIP] @${material.username || '-'} ${dupReason} → 다음 소재`);
         continue;
       }
       const generated = await generatePost(accountId, {

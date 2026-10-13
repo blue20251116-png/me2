@@ -3,6 +3,7 @@
 const { repairConnectorOnlyBreaks, regroupParagraphs } = require('./voiceLocalRepair');
 const { CONNECTOR_ONLY, DANGLING_PUNCTUATION_START, DANGLING_BOUND_NOUN_START } = require('./voiceLineGuards');
 const { PERSONAS } = require('./personas');
+const { bannedPhraseHits } = require('./accountPersonas');
 const DEFAULT_PERSONA_BLOCK = PERSONAS.find(p => p.id === 'reaction').block;
 const MAX_LINES = 14;
 // No per-line length limit: a complete sentence may be long. MAX_LINE_CHARS is only the merge
@@ -149,7 +150,8 @@ const CLICHE_OPENER = /^(?:이거|이게)\s*(?:진짜\s*|대체\s*|도대체\s*)
 const CLICHE_ANYWHERE = /실화(?:냐|임|야|인가|냐고|냐구|라니)/;
 // Self-identification hooks the user banned ("~하는 사람 나야 나", "그래 나예요", "나 말고 또 있나",
 // "나 같은 사람"): 139 of 5,531 posts used them after the 2026-10-04 persona examples, and they draw few views.
-const SELF_ID = /나\s*야\s*나|(?:그래|그게|여기)\s*나(?:예요|에요|임|야)(?![가-힣])|사람\s*(?:나임|여기\s*있음|접니다)|나\s*말고\s*(?:또\s*)?(?:있|없)|나\s*같은\s*사람|나만\s*그런(?:가|거)/;
+const SELF_ID =
+  /나\s*야\s*나|(?:그래|그게|여기)\s*나(?:예요|에요|임|야)(?![가-힣])|사람\s*(?:나임|여기\s*있음|접니다)|나\s*말고\s*(?:또\s*)?(?:있|없)|나\s*같은\s*사람|나만\s*그런(?:가|거)/;
 function clichePhrasing(t) {
   const firstLine = (t.split('\n').find(l => l.trim()) || '').trim();
   return CLICHE_OPENER.test(firstLine) || CLICHE_ANYWHERE.test(t) || SELF_ID.test(t);
@@ -194,7 +196,10 @@ function overFragmentedParagraphs(t) {
 function bodyTooLong(t) {
   return t.replace(/\n/g, '').length > MAX_BODY_CHARS;
 }
-function voiceProblems(text, { comment = false } = {}) {
+// bannedPhrases: per-account phrases that must not appear (accountPersonas.bannedPhrasesFor - the
+// stock lines and other fixed-persona accounts' signature phrases). Empty/absent for every other
+// account, so their checks are unchanged.
+function voiceProblems(text, { comment = false, bannedPhrases = null } = {}) {
   const t = normalizeVoice(text),
     reasons = [];
   if (!t && !comment) reasons.push('empty');
@@ -211,6 +216,7 @@ function voiceProblems(text, { comment = false } = {}) {
     if (thisOveruse(t)) reasons.push('이거 반복');
     if (tooManyParagraphs(t)) reasons.push('문단 과다');
     if (bodyTooLong(t)) reasons.push('본문 길이 초과');
+    if (bannedPhraseHits(t, bannedPhrases).length) reasons.push('다른 계정 말투');
   }
   if (highRiskClaim(t)) reasons.push('고위험 효능 주장');
   return [...new Set(reasons)];
@@ -262,8 +268,8 @@ async function reviewSourceVoice(text, context = {}, request) {
     .slice(0, 12000);
   for (let attempt = 1; attempt <= MAX_FORMAT_REPAIR_ATTEMPTS && problems.length; attempt++) {
     const corrected = await request(
-      `${voiceGuide()}\n형식 교정 전용이다. 핵심 의미와 후킹은 보존하되, 글자수를 맞추려고 완결된 문장을 자르지 마라 — 한 줄이 길어도 그 자체로 완결된 문장/절이면 그대로 둔다. 한 줄에 여러 문장이 억지로 욱여넣어져 있을 때만 자연스러운 문장/절 경계에서 나눠라. 각 물리적 줄은 그 줄만 읽어도 자연스럽게 완결돼야 한다. 최대 ${MAX_LINES}줄(빈 줄 포함)이다. "문단 구분 없음"이 수정 대상에 있으면 매 줄마다 그냥 줄바꿈만 하지 말고, 1~3줄 단위의 생각 덩어리가 끝나는 지점마다 반드시 빈 줄(줄바꿈 두 번)을 넣어 다음 덩어리와 시각적으로 구분해라 — 한 줄씩 뚝뚝 끊어지는 형태로 만들지 마라. 단, 문장마다 전부 빈 줄을 넣으라는 뜻은 아니다 — 같은 생각을 이야기하는 문장 2~3개는 빈 줄 없이 줄바꿈만으로 묶어서 한 덩어리로 만들고, 그 덩어리가 끝나는 지점에서만 빈 줄을 넣어라. "문단 과다 분절"이 수정 대상에 있으면 바로 이 반대 실수다 — 지금 모든 줄이 각각 빈 줄로 따로 떨어져 있어서 목록처럼 보인다는 뜻이니, 서로 이어지는 문장들을 최소 2~3개씩 빈 줄 없이 한 덩어리로 합쳐서 덩어리 개수 자체를 줄여라. "상투적 표현"이 수정 대상에 있으면 "실화냐"류 표현과 "~하는 사람 나야 나/나 말고 또 있나/나 같은 사람" 같은 자기 지목 문장을 전부 없애고, 첫 줄을 "이거/이게 ~냐"식 감탄 대신 소재 속 구체적인 사람·상황·결과로 시작하게 다시 써라 — 내용과 후킹 포인트는 그대로 두고 말투만 바꾼다. "참여 낚시"가 수정 대상에 있으면 댓글·좋아요·팔로우·공유를 요구하거나 댓글을 대가로 정보를 주겠다는 문장을 지우고, 그 자리를 읽는 사람이 자기 경험으로 바로 답할 수 있는 질문 한 줄로 바꿔라. "광고 문구"가 수정 대상에 있으면 "대박/미쳐버림/장난 아님/인생템/강추/이거 하나면/없으면 못 살/꼭 써봐야/멈출 수 없음/확인 필수" 같은 과장 카피를 지우고, 그 자리를 실제 장면(누가 어떻게 반응했는지, 숫자 하나)으로 바꿔라. "이거 반복"이 수정 대상에 있으면 상품을 가리키는 "이거/이걸/이게"를 두 번 이하로 줄이고 나머지는 상황 묘사로 바꿔라. "문단 과다"가 수정 대상에 있으면 이어지는 문단을 합치거나 덜 중요한 문장을 빼서 ${MAX_PARAGRAPHS}덩어리 이하로 만들어라. 새 고위험 사실을 만들지 마라. JSON만 출력: {"text":""}`,
-      `[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}\n[교정 시도]\n${attempt}/${MAX_FORMAT_REPAIR_ATTEMPTS}`
+      `${voiceGuide()}\n형식 교정 전용이다. 핵심 의미와 후킹은 보존하되, 글자수를 맞추려고 완결된 문장을 자르지 마라 — 한 줄이 길어도 그 자체로 완결된 문장/절이면 그대로 둔다. 한 줄에 여러 문장이 억지로 욱여넣어져 있을 때만 자연스러운 문장/절 경계에서 나눠라. 각 물리적 줄은 그 줄만 읽어도 자연스럽게 완결돼야 한다. 최대 ${MAX_LINES}줄(빈 줄 포함)이다. "문단 구분 없음"이 수정 대상에 있으면 매 줄마다 그냥 줄바꿈만 하지 말고, 1~3줄 단위의 생각 덩어리가 끝나는 지점마다 반드시 빈 줄(줄바꿈 두 번)을 넣어 다음 덩어리와 시각적으로 구분해라 — 한 줄씩 뚝뚝 끊어지는 형태로 만들지 마라. 단, 문장마다 전부 빈 줄을 넣으라는 뜻은 아니다 — 같은 생각을 이야기하는 문장 2~3개는 빈 줄 없이 줄바꿈만으로 묶어서 한 덩어리로 만들고, 그 덩어리가 끝나는 지점에서만 빈 줄을 넣어라. "문단 과다 분절"이 수정 대상에 있으면 바로 이 반대 실수다 — 지금 모든 줄이 각각 빈 줄로 따로 떨어져 있어서 목록처럼 보인다는 뜻이니, 서로 이어지는 문장들을 최소 2~3개씩 빈 줄 없이 한 덩어리로 합쳐서 덩어리 개수 자체를 줄여라. "상투적 표현"이 수정 대상에 있으면 "실화냐"류 표현과 "~하는 사람 나야 나/나 말고 또 있나/나 같은 사람" 같은 자기 지목 문장을 전부 없애고, 첫 줄을 "이거/이게 ~냐"식 감탄 대신 소재 속 구체적인 사람·상황·결과로 시작하게 다시 써라 — 내용과 후킹 포인트는 그대로 두고 말투만 바꾼다. "참여 낚시"가 수정 대상에 있으면 댓글·좋아요·팔로우·공유를 요구하거나 댓글을 대가로 정보를 주겠다는 문장을 지우고, 그 자리를 읽는 사람이 자기 경험으로 바로 답할 수 있는 질문 한 줄로 바꿔라. "광고 문구"가 수정 대상에 있으면 "대박/미쳐버림/장난 아님/인생템/강추/이거 하나면/없으면 못 살/꼭 써봐야/멈출 수 없음/확인 필수" 같은 과장 카피를 지우고, 그 자리를 실제 장면(누가 어떻게 반응했는지, 숫자 하나)으로 바꿔라. "이거 반복"이 수정 대상에 있으면 상품을 가리키는 "이거/이걸/이게"를 두 번 이하로 줄이고 나머지는 상황 묘사로 바꿔라. "문단 과다"가 수정 대상에 있으면 이어지는 문단을 합치거나 덜 중요한 문장을 빼서 ${MAX_PARAGRAPHS}덩어리 이하로 만들어라. "다른 계정 말투"가 수정 대상에 있으면 [이 계정에서 쓰면 안 되는 문구]에 적힌 표현을 전부 없애고 같은 뜻을 다른 말로 쓴다. 새 고위험 사실을 만들지 마라. JSON만 출력: {"text":""}`,
+      `[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}${bannedNote(out, context)}\n[교정 시도]\n${attempt}/${MAX_FORMAT_REPAIR_ATTEMPTS}`
     );
     const candidate = formatVoice(corrected?.text || '');
     if (candidate) out = candidate;
@@ -274,6 +280,10 @@ async function reviewSourceVoice(text, context = {}, request) {
   ({ out, problems } = tryParagraphRegroup(out, problems, context));
   if (problems.length) reject(problems);
   return out;
+}
+function bannedNote(text, context) {
+  const hits = bannedPhraseHits(text, context?.bannedPhrases);
+  return hits.length ? `\n[이 계정에서 쓰면 안 되는 문구]\n${hits.join('\n')}` : '';
 }
 const PARAGRAPH_PROBLEMS = ['문단 과다 분절', '문단 과다', '문단 구분 없음'];
 function tryParagraphRegroup(out, problems, context) {

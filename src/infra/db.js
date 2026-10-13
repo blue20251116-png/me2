@@ -197,6 +197,7 @@ const migrations = [
   `ALTER TABLE accounts ADD COLUMN naver_client_secret TEXT`,
   `ALTER TABLE accounts ADD COLUMN user_id INTEGER`,
   `ALTER TABLE posts ADD COLUMN extra_image_url TEXT`,
+  `ALTER TABLE posts ADD COLUMN dedupe_keys TEXT`,
   `ALTER TABLE accounts ADD COLUMN autopilot_youtube_source_enabled INTEGER DEFAULT 1`,
   `ALTER TABLE accounts ADD COLUMN autopilot_youtube_order TEXT DEFAULT 'relevance'`,
   `ALTER TABLE accounts ADD COLUMN autopilot_frame_media_enabled INTEGER DEFAULT 0`,

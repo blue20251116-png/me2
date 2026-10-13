@@ -2,6 +2,7 @@
 // When autopilot posts go out: KST day helpers, per-account daily targets, and deterministic,
 // staggered publish slots inside the active window.
 const { db, getAccount, getUserById } = require('../infra/db');
+const { isPersonaAccount, accountPersonaSettings } = require('../content/accountPersonas');
 
 function dayKeyKst(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -17,7 +18,22 @@ function kstMidnight(dayKey) {
 function addDay(dayKey, n) {
   return dayKeyKst(new Date(kstMidnight(dayKey).getTime() + n * 86400000));
 }
+// Fixed-persona owner accounts (config/accountPersonas.json) post a handful a day on their own,
+// wider-spaced chain inside an active window; null for every other account (global gap mode).
+function personaChainOptions(accountId) {
+  if (!isPersonaAccount(accountId)) return null;
+  const c = accountPersonaSettings();
+  return {
+    gapMin: c.gapMinutesMin,
+    gapMax: c.gapMinutesMax,
+    dailyMin: c.dailyPostsMin,
+    dailyMax: c.dailyPostsMax,
+    startHour: c.activeStartHour,
+    endHour: c.activeEndHour,
+  };
+}
 function targetForAccount(account) {
+  if (account?.id && isPersonaAccount(account.id)) return accountPersonaSettings().dailyPostsMax;
   if (!account?.user_id) return 25;
   const user = getUserById(account.user_id);
   if (user?.role === 'admin') return 25;
@@ -97,7 +113,13 @@ function chainSlots(accountId, target, need) {
   const last = db
     .prepare(`SELECT MAX(scheduled_at) m FROM posts WHERE account_id=? AND status IN ('pending','posted')`)
     .get(accountId)?.m;
-  const step = chainStepper(accountId, target, last ? Date.parse(last) : 0, day => countScheduledForDay(accountId, day));
+  const step = chainStepper(
+    accountId,
+    target,
+    last ? Date.parse(last) : 0,
+    day => countScheduledForDay(accountId, day),
+    personaChainOptions(accountId)
+  );
   const result = [];
   while (result.length < need) {
     const next = step();
@@ -108,22 +130,39 @@ function chainSlots(accountId, target, need) {
 }
 // Returns a function yielding the next chained slot (Date) or null past the 3-day horizon.
 // dayCount(day) gives how many posts the day already holds outside this chain.
-function chainStepper(accountId, target, prevMs, dayCount) {
+// opts (fixed-persona accounts only, see personaChainOptions): own gap range, own daily range and
+// an active window [startHour, endHour) KST - a slot outside it moves to the next window start.
+// Without opts the chain is exactly the global one (any hour, GAP_MIN..GAP_MAX, DAILY_MIN..MAX).
+function chainStepper(accountId, target, prevMs, dayCount, opts = null) {
   // 10-30 min out, randomized so idle accounts restarting together don't all post the same minute.
   const earliest = Date.now() + (10 + Math.floor(Math.random() * 21)) * 60000;
   const horizon = kstMidnight(addDay(dayKeyKst(), 3)).getTime();
   const perDay = new Map();
+  const gapMinMs = (opts ? opts.gapMin : GAP_MIN) * 60000;
+  const gapMs = () =>
+    opts ? (opts.gapMin + Math.floor(Math.random() * (opts.gapMax - opts.gapMin + 1))) * 60000 : randomGapMs();
+  const dayCap = day =>
+    opts
+      ? Math.min(target, opts.dailyMin + (accountHash(accountId, day) % (opts.dailyMax - opts.dailyMin + 1)))
+      : dailyCount(accountId, day, target);
+  const windowStart = day => kstMidnight(day).getTime() + (opts ? opts.startHour : 0) * 3600000;
   let prev = prevMs;
   return () => {
     for (;;) {
-      const next = floorToMinute(Math.max(prev + randomGapMs(), earliest));
+      let next = floorToMinute(Math.max(prev + gapMs(), earliest));
+      if (opts) {
+        const d = dayKeyKst(new Date(next));
+        const jitter = Math.floor(Math.random() * 30) * 60000;
+        if (next < windowStart(d)) next = windowStart(d) + jitter;
+        else if (next >= kstMidnight(d).getTime() + opts.endHour * 3600000) next = windowStart(addDay(d, 1)) + jitter;
+      }
       const day = dayKeyKst(new Date(next));
       if (!perDay.has(day)) perDay.set(day, dayCount(day));
-      if (perDay.get(day) >= dailyCount(accountId, day, target)) {
-        // Day is full: restart just after the next midnight, still keeping >= GAP_MIN from prev.
-        const resume = kstMidnight(addDay(day, 1)).getTime() + Math.floor(Math.random() * 30) * 60000;
+      if (perDay.get(day) >= dayCap(day)) {
+        // Day is full: restart just after the next midnight (or window start), still keeping >= the minimum gap from prev.
+        const resume = windowStart(addDay(day, 1)) + Math.floor(Math.random() * 30) * 60000;
         if (resume >= horizon) return null;
-        prev = Math.max(resume, prev + GAP_MIN * 60000) - GAP_MIN * 60000;
+        prev = Math.max(resume, prev + gapMinMs) - gapMinMs;
         continue;
       }
       if (next >= horizon) return null;
@@ -145,20 +184,32 @@ function rechainFuturePending() {
     const account = getAccount(accountId);
     if (!account) continue;
     const posts = db
-      .prepare(`SELECT id,scheduled_at FROM posts WHERE account_id=? AND status='pending' AND scheduled_at>? ORDER BY scheduled_at,id`)
+      .prepare(
+        `SELECT id,scheduled_at FROM posts WHERE account_id=? AND status='pending' AND scheduled_at>? ORDER BY scheduled_at,id`
+      )
       .all(accountId, cutoff);
     if (!posts.length) continue;
     const fixed = db
-      .prepare(`SELECT MAX(scheduled_at) m FROM posts WHERE account_id=? AND status IN ('pending','posted') AND scheduled_at<=?`)
+      .prepare(
+        `SELECT MAX(scheduled_at) m FROM posts WHERE account_id=? AND status IN ('pending','posted') AND scheduled_at<=?`
+      )
       .get(accountId, cutoff)?.m;
     const movable = new Set(posts.map(p => p.id));
-    const step = chainStepper(accountId, targetForAccount(account), fixed ? Date.parse(fixed) : 0, day => {
-      const [start, end] = dayBounds(day);
-      return db
-        .prepare(`SELECT id FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND status IN ('pending','posted')`)
-        .all(accountId, start, end)
-        .filter(r => !movable.has(r.id)).length;
-    });
+    const step = chainStepper(
+      accountId,
+      targetForAccount(account),
+      fixed ? Date.parse(fixed) : 0,
+      day => {
+        const [start, end] = dayBounds(day);
+        return db
+          .prepare(
+            `SELECT id FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND status IN ('pending','posted')`
+          )
+          .all(accountId, start, end)
+          .filter(r => !movable.has(r.id)).length;
+      },
+      personaChainOptions(accountId)
+    );
     for (const p of posts) {
       const next = step();
       if (!next) break;
@@ -168,7 +219,9 @@ function rechainFuturePending() {
       changed++;
     }
   }
-  console.log(`[Autopilot][GAP RECHAIN] done changed=${changed} gap=${GAP_MIN}-${GAP_MAX}m daily=${DAILY_MIN}-${DAILY_MAX}`);
+  console.log(
+    `[Autopilot][GAP RECHAIN] done changed=${changed} gap=${GAP_MIN}-${GAP_MAX}m daily=${DAILY_MIN}-${DAILY_MAX}`
+  );
 }
 function plannedSlots(dayKey, target, accountId) {
   const windowStart = ACTIVE_START_HOUR * 60;
@@ -247,6 +300,9 @@ module.exports = {
   kstMidnight,
   addDay,
   targetForAccount,
+  dayBounds,
+  personaChainOptions,
+  chainStepper,
   futurePendingCount,
   plannedSlots,
   chooseFutureSlots,

@@ -10,7 +10,9 @@ const { UPLOADS_DIR } = require('../config/paths');
 const { publicUploadUrl } = require('../config/publicUrl');
 const { db, getAccount, getUserById } = require('../infra/db');
 const coupangApi = require('../integrations/coupangApi');
-const { generateRecipe: generateContentOnlyRecipe } = require('../content/contentOnlyAutomation');
+const { generateRecipe: generateContentOnlyRecipe, generateDailyStory } = require('../content/contentOnlyAutomation');
+const { accountPersonaFor, bannedPhrasesFor } = require('../content/accountPersonas');
+const accountMix = require('./accountMix');
 const { buildAutopilotPost } = require('./pipeline');
 const { importThreadsVideo } = require('../threads/mediaImporter');
 const { encodeMediaBundle } = require('../threads/mediaBundle');
@@ -43,8 +45,29 @@ function saveAutopilotPost({
   scheduledAt = null,
   persona = null,
   contentMode = null,
+  dedupeKeys = null,
 }) {
   const formattedText = formatThreadsBody(text);
+  // dedupe_keys is only written for fixed-persona accounts (accountMix.js); every other account keeps
+  // the original INSERT unchanged.
+  if (dedupeKeys) {
+    db.prepare(
+      `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode,dedupe_keys) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?,?)`
+    ).run(
+      formattedText,
+      link || null,
+      imageUrl || null,
+      extraImageUrl || null,
+      videoUrl || null,
+      String(scheduledAt || new Date().toISOString()),
+      accountId,
+      recipeCommentText,
+      persona || null,
+      contentMode || null,
+      dedupeKeys
+    );
+    return;
+  }
   db.prepare(
     `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?)`
   ).run(
@@ -82,6 +105,24 @@ async function runContentOnlyAutopilot(account, target, scheduledAt = null) {
     contentMode: 'recipe',
   });
   recordAutopilotLast(account.id, r.keyword, target);
+}
+// Fixed-persona accounts: the link-free everyday post (no product, no Coupang link, text only).
+async function runDailyStoryAutopilot(account, target, scheduledAt = null) {
+  const r = await generateDailyStory(account.id, target);
+  saveAutopilotPost({
+    accountId: account.id,
+    text: r.text,
+    link: null,
+    imageUrl: null,
+    extraImageUrl: null,
+    videoUrl: null,
+    recipeCommentText: null,
+    scheduledAt,
+    persona: r.persona,
+    contentMode: 'daily',
+  });
+  recordAutopilotLast(account.id, r.keyword, target);
+  console.log(`[자동발행 예약][PERSONA DAILY] account #${account.id} persona=${r.persona} link=no`);
 }
 // 2026-09-16 (user request, viral-formula screenshot: "사진과 영상은 꼭 넣으세요"): media is
 // reached as missing only when chooseSourceMedia()'s whole fallback chain runs out - no Threads
@@ -306,6 +347,13 @@ async function ensureCoupangReady(accountId, account) {
 }
 async function runAutopilotOnceInner(account, scheduledAt = null) {
   const target = AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
+  // Fixed-persona owner accounts alternate link-free everyday posts with a capped number of linked
+  // posts per day (accountMix.decideSlotKind); every other account skips this (persona = null).
+  const persona = accountPersonaFor(account.id);
+  if (persona && accountMix.slotKind(account.id, scheduledAt) === 'daily') {
+    await runDailyStoryAutopilot(account, target, scheduledAt);
+    return;
+  }
   if (!hasCoupangKeys(account)) {
     await runContentOnlyAutopilot(account, target, scheduledAt);
     return;
@@ -317,7 +365,27 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
     e.isCoupangRateLimit = true;
     throw e;
   }
-  const result = await buildAutopilotPost(account.id, { target });
+  const result = await buildAutopilotPost(account.id, {
+    target,
+    ...(persona ? accountMix.generationFilters(account.id, scheduledAt) : {}),
+  });
+  let dedupeKeys = null;
+  if (persona) {
+    // Later stages (secret affiliate, source-exact product) may swap the product: re-check the final one.
+    const keys = accountMix.dedupeKeysFor({
+      product: result.product,
+      sourceUrl: result.sourceUrl,
+      topic: result.topic,
+      searchTerm: result.productSearchTerm,
+    });
+    const dup = accountMix.findDuplicate(account.id, keys, scheduledAt);
+    if (dup) throw accountMix.duplicateError(dup);
+    result.text = require('../content/voicePolicy').assertVoice(result.text, {
+      mode: result.mode,
+      bannedPhrases: bannedPhrasesFor(account.id),
+    });
+    dedupeKeys = accountMix.encodeKeys(keys);
+  }
   const affiliateLink = await makeAffiliateLink(account, result);
   const media = await chooseSourceMedia(result);
   assertHasMedia(media, { accountId: account.id, target, mode: result.mode, topic: result.topic });
@@ -332,6 +400,7 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
     scheduledAt,
     persona: result.persona,
     contentMode: result.mode,
+    dedupeKeys,
   });
   const last = result.productSearchTerm || result.secretTerm || result.topic;
   recordAutopilotLast(account.id, last, target);

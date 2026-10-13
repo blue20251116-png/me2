@@ -1,0 +1,20 @@
+{
+  "_comment": "Owner accounts that run as one fixed person each (src/content/accountPersonas.js). Accounts not listed here keep the random per-post persona, the plan's daily target and the global gap schedule. Override the file path with ME2_ACCOUNT_PERSONAS_FILE.",
+  "accounts": {
+    "1": "acct-home-keeper",
+    "2": "acct-newlywed-cat",
+    "3": "acct-busan-gut",
+    "10": "acct-working-mom",
+    "11": "acct-rookie-bride",
+    "13": "acct-solo-officetel",
+    "14": "acct-homecafe-freelancer"
+  },
+  "dailyPostsMin": 4,
+  "dailyPostsMax": 5,
+  "maxLinkedPerDay": 2,
+  "gapMinutesMin": 150,
+  "gapMinutesMax": 210,
+  "activeStartHour": 8,
+  "activeEndHour": 23,
+  "dedupeOwnDays": 7
+}

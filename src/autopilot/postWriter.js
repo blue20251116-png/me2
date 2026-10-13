@@ -2,6 +2,7 @@
 // Writing the Threads body and comment lead in the persona voice, recipe comment repair, secret-ingredient scrubbing.
 const { normalizeVoice, voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('../content/voicePolicy');
 const { pickPersona } = require('../content/personas');
+const { accountPersonaFor, bannedPhrasesFor } = require('../content/accountPersonas');
 const { personaScores } = require('../content/personaStats');
 const { callAiText, clean } = require('./aiCalls');
 
@@ -65,9 +66,17 @@ function normalizeThreadsLayout(text) {
 
 async function rewriteThreadsTone(accountId, text, { mode, material, comment = false, visualEvidence = '' }) {
   if (comment && !String(text || '').trim()) return '';
+  const bannedPhrases = bannedPhrasesFor(accountId);
   return reviewSourceVoice(
     text,
-    { mode, comment, sourceText: material?.sourceText, authorReplies: material?.authorReplies, visualEvidence },
+    {
+      mode,
+      comment,
+      sourceText: material?.sourceText,
+      authorReplies: material?.authorReplies,
+      visualEvidence,
+      ...(bannedPhrases.length ? { bannedPhrases } : {}),
+    },
     (system, user) => callAiText(accountId, system, user, { maxTokens: 1000, temperature: 0.15 })
   );
 }
@@ -102,8 +111,13 @@ async function generatePost(accountId, { material, analysis, product, target }) 
   ]
     .filter(Boolean)
     .join(' ');
-  const persona = pickPersona({ mode: analysis.mode, text: personaText, scores: personaScores(accountId) });
-  console.log(`[AutopilotV3][PERSONA] picked="${persona.name}"(${persona.id}) mode=${analysis.mode}`);
+  // Owner accounts listed in config/accountPersonas.json are one fixed person; everyone else keeps
+  // the per-post weighted pick.
+  const fixed = accountPersonaFor(accountId);
+  const persona = fixed || pickPersona({ mode: analysis.mode, text: personaText, scores: personaScores(accountId) });
+  console.log(
+    `[AutopilotV3][PERSONA] ${fixed ? 'fixed' : 'picked'}="${persona.name}"(${persona.id}) mode=${analysis.mode}`
+  );
   const d = await callAiText(
     accountId,
     `너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 아래 문체 정책에 따라 원 소재를 가장 바이럴한 각도로 재구성한다.
@@ -166,7 +180,8 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     }
   }
   if (analysis.mode === 'recipe') text = scrubSecret(text, analysis.secretTerm, productName, '이거');
-  text = assertVoice(text, { mode: analysis.mode });
+  const bannedPhrases = bannedPhrasesFor(accountId);
+  text = assertVoice(text, { mode: analysis.mode, ...(bannedPhrases.length ? { bannedPhrases } : {}) });
   console.log(`[AutopilotV3][SOURCE VOICE v2] text="${text.replace(/\n/g, ' / ')}"`);
   return { text, commentLead, persona: persona.id };
 }
