@@ -1078,6 +1078,22 @@ test('voiceProblems flags the worn-out "이거 실화냐 / 이거 뭔데" opener
   assert.ok(policy.voiceProblems('우리 딸 굽은 등 보고\n진짜 실화임').includes('상투적 표현'));
 });
 
+test('the cliché guard flags the banned self-identification hooks ("~하는 사람 나야 나")', () => {
+  // User 2026-10-13: "나야나 이런글 쓰지말랫는데 왜 쓰지" — 139 of 5,531 posts used these and they drew few views.
+  for (const t of [
+    '연근 하면 조림밖에 몰랐던 사람 나야 나;;',
+    '샤워하고 로션 귀찮아서 넘어가는 사람 나야나',
+    '해장국 먹으러 차 타고 오는 사람 그래 나예요',
+    '올해 휴가 안 가는 사람 나 말고 또 있나',
+    '은근 나 같은 사람 많을 것 같은데',
+  ]) {
+    assert.ok(policy.voiceProblems(t).includes('상투적 표현'), `should flag: ${t}`);
+  }
+  for (const t of ['나야말로 몰랐네', '그래 나예요섬 가봤어?']) {
+    assert.deepEqual(policy.voiceProblems(t).filter(r => r === '상투적 표현'), [], `should not flag: ${t}`);
+  }
+});
+
 test('the cliché guard does not flag concrete situation-first openers, including a plain "이거" start', () => {
   for (const t of [
     '우리 딸램 굽은 등 보고 식겁했잖아;;',
