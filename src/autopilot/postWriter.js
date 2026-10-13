@@ -3,6 +3,8 @@
 const { normalizeVoice, voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('../content/voicePolicy');
 const { pickPersona } = require('../content/personas');
 const { accountPersonaFor, bannedPhrasesFor } = require('../content/accountPersonas');
+const { FRAMES } = require('../content/postFrames');
+const { chooseFrameFor } = require('./accountMix');
 const { personaScores } = require('../content/personaStats');
 const { callAiText, clean } = require('./aiCalls');
 
@@ -64,7 +66,11 @@ function normalizeThreadsLayout(text) {
   return formatVoice(text);
 }
 
-async function rewriteThreadsTone(accountId, text, { mode, material, comment = false, visualEvidence = '' }) {
+async function rewriteThreadsTone(
+  accountId,
+  text,
+  { mode, material, comment = false, visualEvidence = '', frame = null, grounding = null }
+) {
   if (comment && !String(text || '').trim()) return '';
   const bannedPhrases = bannedPhrasesFor(accountId);
   return reviewSourceVoice(
@@ -76,6 +82,7 @@ async function rewriteThreadsTone(accountId, text, { mode, material, comment = f
       authorReplies: material?.authorReplies,
       visualEvidence,
       ...(bannedPhrases.length ? { bannedPhrases } : {}),
+      ...(frame ? { frame, grounding } : {}),
     },
     (system, user) => callAiText(accountId, system, user, { maxTokens: 1000, temperature: 0.15 })
   );
@@ -115,15 +122,24 @@ async function generatePost(accountId, { material, analysis, product, target }) 
   // the per-post weighted pick.
   const fixed = accountPersonaFor(accountId);
   const persona = fixed || pickPersona({ mode: analysis.mode, text: personaText, scores: personaScores(accountId) });
+  // Fixed-persona product posts also get a post-structure frame (postFrames.js), alternated per
+  // account; grounding = the only facts a store/authority/price claim may come from.
+  const frame = fixed && analysis.mode === 'product' ? chooseFrameFor(accountId) : null;
+  const grounding = frame
+    ? {
+        evidence: [material.sourceText, material.authorReplies, productName].filter(Boolean).join('\n'),
+        price: Number(product?.price) > 0 ? Number(product.price) : null,
+      }
+    : null;
   console.log(
-    `[AutopilotV3][PERSONA] ${fixed ? 'fixed' : 'picked'}="${persona.name}"(${persona.id}) mode=${analysis.mode}`
+    `[AutopilotV3][PERSONA] ${fixed ? 'fixed' : 'picked'}="${persona.name}"(${persona.id}) mode=${analysis.mode}${frame ? ` frame=${frame}` : ''}`
   );
   const d = await callAiText(
     accountId,
     `너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 아래 문체 정책에 따라 원 소재를 가장 바이럴한 각도로 재구성한다.
 
 ${voiceGuide(persona.block)}
-
+${frame ? `\n${FRAMES[frame].block}\n` : ''}
 [레시피]
 - 본문 text는 위 문체 정책대로 가장 강한 후킹 포인트를 중심으로 재구성한다. 다만 재료/조리법 같은 레시피 사실은 원문 근거를 벗어나지 않는다.
 - 정확한 제휴 소스/핵심재료 이름은 본문에서 숨긴다.
@@ -139,7 +155,7 @@ ${voiceGuide(persona.block)}
 - commentLead는 확인된 정보 하나를 자연스러운 반말 1~2문장으로 보충한다. 추가 정보가 없으면 빈 문자열로 둔다.
 
 JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
-    `타겟:${target || '전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm || productName}\n쿠팡 상품:${productName}\n판매대상:${analysis.vision?.soldObject || '-'} / 요리:${analysis.vision?.dish || '-'}\n[시각 근거]\n${analysis.vision?.evidence || '(없음)'}\n[Threads 원문]\n${material.sourceText.slice(0, 5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0, 5000) || '(없음)'}`,
+    `타겟:${target || '전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm || productName}\n쿠팡 상품:${productName}${frame ? `\n쿠팡 상품 가격:${grounding.price ? `${grounding.price}원` : '(정보 없음 — 가격 언급 금지)'}` : ''}\n판매대상:${analysis.vision?.soldObject || '-'} / 요리:${analysis.vision?.dish || '-'}\n[시각 근거]\n${analysis.vision?.evidence || '(없음)'}\n[Threads 원문]\n${material.sourceText.slice(0, 5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0, 5000) || '(없음)'}`,
     { maxTokens: 2800, temperature: 0.65 }
   );
   let text = normalizeThreadsLayout(d.text || ''),
@@ -164,6 +180,8 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     topic: analysis.topic,
     material,
     visualEvidence: analysis.vision?.evidence,
+    frame,
+    grounding,
   });
   if (analysis.mode !== 'recipe' && commentLead) {
     try {
@@ -181,9 +199,13 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
   }
   if (analysis.mode === 'recipe') text = scrubSecret(text, analysis.secretTerm, productName, '이거');
   const bannedPhrases = bannedPhrasesFor(accountId);
-  text = assertVoice(text, { mode: analysis.mode, ...(bannedPhrases.length ? { bannedPhrases } : {}) });
+  text = assertVoice(text, {
+    mode: analysis.mode,
+    ...(bannedPhrases.length ? { bannedPhrases } : {}),
+    ...(frame ? { frame, grounding } : {}),
+  });
   console.log(`[AutopilotV3][SOURCE VOICE v2] text="${text.replace(/\n/g, ' / ')}"`);
-  return { text, commentLead, persona: persona.id };
+  return { text, commentLead, persona: persona.id, frame, grounding };
 }
 
 module.exports = { scrubSecret, hasIngredientHeading, hasMethodHeading, normalizeRecipeHeadings, generatePost };

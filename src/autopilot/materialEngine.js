@@ -165,6 +165,7 @@ async function buildThreadsFirstAutopilot(accountId, options = {}) {
         productSearchTerm: found.searchTerm,
         mode: analysis.mode,
         persona: generated.persona,
+        postFrame: generated.frame || null,
         topic: analysis.topic,
         secretTerm: analysis.secretTerm,
         specialStory: Boolean(specialStory),

@@ -10,6 +10,7 @@ const {
   personaAccountIds,
   accountPersonaSettings,
 } = require('../content/accountPersonas');
+const { chooseFrame } = require('../content/postFrames');
 
 // At least half of a day's posts are link-free, and linked ones are capped: a slot is linked only
 // while linked < maxLinked AND linked < plain, so a day opens with an everyday post and alternates
@@ -118,6 +119,30 @@ function generationFilters(accountId, scheduledAt) {
   };
 }
 
+// Frame for this account's next linked product post: whichever of A/B it used less in the last
+// 7 days (50:50 on a tie), so each account alternates. null for accounts without a fixed persona.
+function frameCounts(accountId, days = 7) {
+  const from = new Date(Date.now() - days * 86400000).toISOString();
+  const rows = db
+    .prepare(
+      `SELECT post_frame f, COUNT(*) c FROM posts WHERE account_id=? AND post_frame IS NOT NULL AND status IN ('pending','posted') AND scheduled_at>=? GROUP BY post_frame`
+    )
+    .all(accountId, from);
+  const counts = {};
+  for (const r of rows) counts[r.f] = Number(r.c);
+  return counts;
+}
+function chooseFrameFor(accountId, random = Math.random) {
+  if (!isPersonaAccount(accountId)) return null;
+  try {
+    return chooseFrame(frameCounts(accountId), random);
+  } catch (e) {
+    // post_frame column missing (migration failed): still pick a frame, just without history.
+    console.warn(`[AutopilotV3][FRAME] 이력 조회 실패 → 무작위 reason="${e.message}"`);
+    return chooseFrame({}, random);
+  }
+}
+
 function duplicateError(dup) {
   const err = new Error(`중복 상품/키워드 (${dup.scope} #${dup.accountId} ${dup.key}) → 이 슬롯 생성 생략`);
   err.code = 'DUPLICATE_TOPIC';
@@ -133,5 +158,7 @@ module.exports = {
   decodeKeys,
   findDuplicate,
   generationFilters,
+  frameCounts,
+  chooseFrameFor,
   duplicateError,
 };

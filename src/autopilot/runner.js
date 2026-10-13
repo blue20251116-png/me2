@@ -46,13 +46,14 @@ function saveAutopilotPost({
   persona = null,
   contentMode = null,
   dedupeKeys = null,
+  postFrame = null,
 }) {
   const formattedText = formatThreadsBody(text);
   // dedupe_keys is only written for fixed-persona accounts (accountMix.js); every other account keeps
   // the original INSERT unchanged.
   if (dedupeKeys) {
     db.prepare(
-      `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode,dedupe_keys) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?,?)`
+      `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode,dedupe_keys,post_frame) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?,?,?)`
     ).run(
       formattedText,
       link || null,
@@ -64,7 +65,8 @@ function saveAutopilotPost({
       recipeCommentText,
       persona || null,
       contentMode || null,
-      dedupeKeys
+      dedupeKeys,
+      postFrame || null
     );
     return;
   }
@@ -383,6 +385,16 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
     result.text = require('../content/voicePolicy').assertVoice(result.text, {
       mode: result.mode,
       bannedPhrases: bannedPhrasesFor(account.id),
+      // Framed posts: re-check store/authority/price against the FINAL product (a later stage may swap it).
+      ...(result.postFrame
+        ? {
+            frame: result.postFrame,
+            grounding: {
+              evidence: [result.sourceText, result.authorReplies, result.product?.name].filter(Boolean).join('\n'),
+              price: Number(result.product?.price) > 0 ? Number(result.product.price) : null,
+            },
+          }
+        : {}),
     });
     dedupeKeys = accountMix.encodeKeys(keys);
   }
@@ -401,6 +413,7 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
     persona: result.persona,
     contentMode: result.mode,
     dedupeKeys,
+    postFrame: persona ? result.postFrame || null : null,
   });
   const last = result.productSearchTerm || result.secretTerm || result.topic;
   recordAutopilotLast(account.id, last, target);
