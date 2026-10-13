@@ -15,8 +15,12 @@ const { chooseFrame } = require('../content/postFrames');
 // At least half of a day's posts are link-free, and linked ones are capped: a slot is linked only
 // while linked < maxLinked AND linked < plain, so a day opens with an everyday post and alternates
 // (4 posts → 2+2, 5 posts → 3 plain + 2 linked).
-function decideSlotKind({ linked = 0, plain = 0, maxLinked = 2 } = {}) {
-  return linked < maxLinked && linked < plain ? 'linked' : 'daily';
+// linkedPerPlain = 0: a linked post only while linked < plain (alternating, plain first).
+// linkedPerPlain = N: up to N linked posts per everyday post (e.g. 4 -> L L L L D L L L L D L L D).
+function decideSlotKind({ linked = 0, plain = 0, maxLinked = 2, linkedPerPlain = 0 } = {}) {
+  if (linked >= maxLinked) return 'daily';
+  if (linkedPerPlain > 0) return linked < (plain + 1) * linkedPerPlain ? 'linked' : 'daily';
+  return linked < plain ? 'linked' : 'daily';
 }
 
 function dayMix(accountId, dayKey) {
@@ -33,7 +37,8 @@ function dayMix(accountId, dayKey) {
 function slotKind(accountId, scheduledAt) {
   if (!isPersonaAccount(accountId)) return null;
   const day = dayKeyKst(new Date(scheduledAt || Date.now()));
-  return decideSlotKind({ ...dayMix(accountId, day), maxLinked: accountPersonaSettings().maxLinkedPerDay });
+  const cfg = accountPersonaSettings();
+  return decideSlotKind({ ...dayMix(accountId, day), maxLinked: cfg.maxLinkedPerDay, linkedPerPlain: cfg.linkedPerPlain });
 }
 
 function normKey(v) {

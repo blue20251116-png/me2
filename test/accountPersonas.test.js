@@ -136,7 +136,16 @@ test('ad/non-ad mix: at least half link-free, linked posts capped per day', () =
   assert.equal(mix.decideSlotKind({ linked: 0, plain: 0, maxLinked: 2 }), 'daily');
 });
 
+
+// These tests pin the original 4-5/day, 2-linked numbers; the live config file may use other values.
+const LIVE_ACCOUNTS = JSON.parse(fs.readFileSync(path.join(__dirname, '../src/config/accountPersonas.json'), 'utf8')).accounts;
+function pinBaseConfig() {
+  ap.setAccountPersonaConfig({ accounts: LIVE_ACCOUNTS, dailyPostsMin: 4, dailyPostsMax: 5, maxLinkedPerDay: 2, linkedPerPlain: 0,
+    gapMinutesMin: 150, gapMinutesMax: 210, activeStartHour: 8, activeEndHour: 23, dedupeOwnDays: 7 });
+}
+
 test("slotKind reads the slot's KST day from the DB and is null for customer accounts", () => {
+  pinBaseConfig();
   clearPosts();
   const at = '2026-10-14T03:00:00.000Z'; // 12:00 KST
   assert.equal(mix.slotKind(1, at), 'daily');
@@ -155,6 +164,7 @@ test("slotKind reads the slot's KST day from the DB and is null for customer acc
 });
 
 test('volume: owner accounts target 4-5 posts/day inside 08-23 KST; customers keep plan targets', () => {
+  pinBaseConfig();
   assert.equal(slots.targetForAccount({ id: 1, user_id: 1 }), 5);
   assert.equal(slots.targetForAccount({ id: 13, user_id: 7 }), 5);
   assert.equal(slots.targetForAccount({ id: 4 }), 25);
@@ -250,4 +260,16 @@ test('daily post: owner accounts get a link-free post in their own voice, retrie
     else process.env.ANTHROPIC_API_KEY = prevKey;
     delete require.cache[require.resolve('../src/content/contentOnlyAutomation')];
   }
+});
+
+test('linkedPerPlain: 10 linked + 3 everyday interleaved 4:1 per day', () => {
+  let linked = 0, plain = 0, seq = '';
+  for (let i = 0; i < 13; i++) {
+    const k = mix.decideSlotKind({ linked, plain, maxLinked: 10, linkedPerPlain: 4 });
+    seq += k === 'linked' ? 'L' : 'D';
+    if (k === 'linked') linked++; else plain++;
+  }
+  assert.equal(seq, 'LLLLDLLLLDLLD');
+  assert.equal(mix.decideSlotKind({ linked: 10, plain: 0, maxLinked: 10, linkedPerPlain: 4 }), 'daily');
+  assert.equal(mix.decideSlotKind({ linked: 0, plain: 0, maxLinked: 2 }), 'daily', 'default rule unchanged');
 });

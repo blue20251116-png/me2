@@ -9,12 +9,13 @@
     "13": "acct-solo-officetel",
     "14": "acct-homecafe-freelancer"
   },
-  "dailyPostsMin": 4,
-  "dailyPostsMax": 5,
-  "maxLinkedPerDay": 2,
-  "gapMinutesMin": 150,
-  "gapMinutesMax": 210,
+  "dailyPostsMin": 13,
+  "dailyPostsMax": 13,
+  "maxLinkedPerDay": 10,
+  "gapMinutesMin": 60,
+  "gapMinutesMax": 75,
   "activeStartHour": 8,
   "activeEndHour": 23,
-  "dedupeOwnDays": 7
+  "dedupeOwnDays": 7,
+  "linkedPerPlain": 4
 }
