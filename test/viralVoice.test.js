@@ -77,7 +77,7 @@ test('posts in the shape that travels pass, strong words about my own scene incl
 
 이제 밖에서 비빔면 사 먹는 짓 안 함
 양념 비율 따라 했더니 4인분에 5천원 들었음`,
-    `애 낮잠 30분이면 깨던 사람 나야 나
+    `애가 낮잠 30분이면 꼭 깼었는데
 
 암막 커튼 바꾸고 2시간 자는 날이 생김ㅠㅠ
 다들 낮잠 몇 분 자?`,
