@@ -6,6 +6,7 @@ const { startTokenRefreshJob } = require('../threads/tokenRefresh');
 const { startLiveInsightsJob } = require('../threads/liveInsightsJob');
 const { startThreadsDiagnosticsIfEnabled } = require('../threads/threadsCollector');
 const { installGracefulShutdown } = require('./shutdown');
+const { startXPublishJob } = require('../xtrack/xPublisher');
 
 function startServer() {
   const app = createApp();
@@ -19,6 +20,7 @@ function startServer() {
     startTokenRefreshJob();
     startLiveInsightsJob();
     startThreadsDiagnosticsIfEnabled();
+    startXPublishJob();
   });
   installGracefulShutdown(server, {
     isBusy: require('../publish/publishQueue').isPublishing,

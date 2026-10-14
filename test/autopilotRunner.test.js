@@ -108,6 +108,7 @@ function harness({ generationError, preflightError, env = {} } = {}) {
   };
   dependencies['../threads/mediaBundle'] = loadReal('threads/mediaBundle.js');
   dependencies['../publish/commentText'] = loadReal('publish/commentText.js');
+  dependencies['../xtrack/xThreadWriter'] = { queueXCompanion: () => {} };
   dependencies['../publish/slots'] = loadReal('publish/slots.js');
   loadReal('autopilot/runner.js', contextModule);
   contextModule.exports.runAutopilotOnce = async () => {

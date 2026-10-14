@@ -18,6 +18,7 @@ const { isTokenExpired } = require('../threads/tokenRefresh');
 const { getBrowserCircuitState, browserInfraFailure } = require('../infra/isolatedTask');
 const { setState, budgetState } = require('../infra/automationState');
 const { hasCoupangKeys } = require('../publish/commentText');
+const { queueXCompanion } = require('../xtrack/xThreadWriter');
 const {
   targetForAccount,
   futurePendingCount,
@@ -45,20 +46,23 @@ function saveAutopilotPost({
   contentMode = null,
 }) {
   const formattedText = formatThreadsBody(text);
-  db.prepare(
-    `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?)`
-  ).run(
-    formattedText,
-    link || null,
-    imageUrl || null,
-    extraImageUrl || null,
-    videoUrl || null,
-    String(scheduledAt || new Date().toISOString()),
-    accountId,
-    recipeCommentText,
-    persona || null,
-    contentMode || null
-  );
+  const info = db
+    .prepare(
+      `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?)`
+    )
+    .run(
+      formattedText,
+      link || null,
+      imageUrl || null,
+      extraImageUrl || null,
+      videoUrl || null,
+      String(scheduledAt || new Date().toISOString()),
+      accountId,
+      recipeCommentText,
+      persona || null,
+      contentMode || null
+    );
+  return Number(info?.lastInsertRowid) || null;
 }
 function recordAutopilotLast(accountId, keyword, target) {
   db.prepare(`UPDATE accounts SET autopilot_last_keyword=?, autopilot_last_target=? WHERE id=?`).run(
@@ -69,7 +73,7 @@ function recordAutopilotLast(accountId, keyword, target) {
 }
 async function runContentOnlyAutopilot(account, target, scheduledAt = null) {
   const r = await generateContentOnlyRecipe(account.id, target);
-  saveAutopilotPost({
+  const postId = saveAutopilotPost({
     accountId: account.id,
     text: r.text,
     link: null,
@@ -82,6 +86,8 @@ async function runContentOnlyAutopilot(account, target, scheduledAt = null) {
     contentMode: 'recipe',
   });
   recordAutopilotLast(account.id, r.keyword, target);
+  // X companion (OSMU): same material, English thread for US readers. Never blocks Threads.
+  queueXCompanion(postId, account.id, { text: r.text, topic: r.keyword, mode: 'recipe' });
 }
 // 2026-09-16 (user request, viral-formula screenshot: "사진과 영상은 꼭 넣으세요"): media is
 // reached as missing only when chooseSourceMedia()'s whole fallback chain runs out - no Threads
@@ -321,7 +327,7 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
   const affiliateLink = await makeAffiliateLink(account, result);
   const media = await chooseSourceMedia(result);
   assertHasMedia(media, { accountId: account.id, target, mode: result.mode, topic: result.topic });
-  saveAutopilotPost({
+  const postId = saveAutopilotPost({
     accountId: account.id,
     text: result.text,
     link: affiliateLink,
@@ -335,6 +341,7 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
   });
   const last = result.productSearchTerm || result.secretTerm || result.topic;
   recordAutopilotLast(account.id, last, target);
+  queueXCompanion(postId, account.id, { text: result.text, topic: result.topic, mode: result.mode });
   console.log(
     `[자동발행 예약][V15 MATERIAL-MIXED-MEDIA] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`
   );
