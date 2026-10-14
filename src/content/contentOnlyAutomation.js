@@ -2,7 +2,7 @@
 const { db, getAccount, getSystemApiSettings, getPexelsApiKey, getPixabayApiKey } = require('../infra/db');
 const { searchFoodPhotos: searchPexels } = require('../integrations/pexelsApi');
 const { searchFoodPhotos: searchPixabay } = require('../integrations/pixabayApi');
-const { voiceGuide, assertVoice } = require('./voicePolicy');
+const { voiceGuide, assertVoice, planningLeakLines, stripLeadingPlanningLines } = require('./voicePolicy');
 const { pickPersona, PERSONAS } = require('./personas');
 const { accountPersonaFor, bannedPhrasesFor } = require('./accountPersonas');
 const { callAI, callAIJson, imageBlock } = require('../integrations/aiClient');
@@ -355,7 +355,7 @@ function recentDailyOpenings(accountId, limit = 12) {
         (
           String(r.text || '')
             .split('\n')
-            .find(l => l.trim()) || ''
+            .find(l => l.trim() && !planningLeakLines(l).length) || ''
         ).trim()
       )
       .filter(Boolean);
@@ -370,6 +370,53 @@ function sampleTopics(topics, n, random = Math.random) {
     .sort((a, b) => a[0] - b[0])
     .slice(0, n)
     .map(x => x[1]);
+}
+
+// Stock photo for an everyday post (2026-10-14: text-only everyday posts stalled at 1-10 views).
+// Needs a Pexels or Pixabay key; null when none is configured or nothing usable is found.
+function dailyPhotoKeys() {
+  return {
+    pexels: getPexelsApiKey() || process.env.PEXELS_API_KEY || null,
+    pixabay: getPixabayApiKey() || process.env.PIXABAY_API_KEY || null,
+  };
+}
+async function pickDailyPhoto(accountId, text) {
+  const keys = dailyPhotoKeys();
+  if (!keys.pexels && !keys.pixabay) return null;
+  let queries = [];
+  try {
+    const d = await callAiText(
+      accountId,
+      '너는 스톡 사진 검색어 생성기다. 한국어 일상글의 핵심 장면을 Pexels/Pixabay에서 잘 찾히는 짧은 영어 검색어(2~4단어)로 바꾼다. 사람 얼굴이 크게 나오는 장면보다 사물·공간·음식 위주로 고른다. JSON={"queries":["laundry drying rack","small apartment room"]} 형식만 출력한다.',
+      `일상글:\n${String(text || '').slice(0, 400)}`,
+      { maxTokens: 120, json: true, temperature: 0.2 }
+    );
+    if (Array.isArray(d.queries))
+      queries = d.queries
+        .map(q => String(q || '').trim())
+        .filter(Boolean)
+        .slice(0, 3);
+  } catch (e) {
+    console.log(`[ContentOnly][DailyPhoto] 검색어 생성 실패: ${e.message}`);
+  }
+  for (const query of queries) {
+    for (const [name, key, search] of [
+      ['Pexels', keys.pexels, searchPexels],
+      ['Pixabay', keys.pixabay, searchPixabay],
+    ]) {
+      if (!key) continue;
+      try {
+        const photos = await search({ apiKey: key, query, count: 1 });
+        if (photos?.[0]?.imageUrl) {
+          console.log(`[ContentOnly][DailyPhoto] ${name} query="${query}"`);
+          return photos[0].imageUrl;
+        }
+      } catch (e) {
+        console.log(`[ContentOnly][DailyPhoto] ${name} 실패 query="${query}": ${e.message}`);
+      }
+    }
+  }
+  return null;
 }
 
 async function generateFixedPersonaDailyStory(accountId, target, persona) {
@@ -392,6 +439,11 @@ async function generateFixedPersonaDailyStory(accountId, target, persona) {
       text = String(text || '')
         .replace(/^["'“”]+|["'“”]+$/g, '')
         .trim();
+      // 2026-10-14: the model sometimes opens with its own plan ("…로 간다. 최근 첫 줄과 겹치지 않게.").
+      // Drop such lines at the top; assertVoice rejects any left further down ('작성 메모 노출').
+      const stripped = stripLeadingPlanningLines(text);
+      if (stripped !== text) console.log(`[ContentOnly][DailyStory] 작성 메모 줄 제거 persona=${persona.id}`);
+      text = stripped;
       if (looksBloggy(text)) text = await humanizeHook(accountId, text, '일상');
       text = assertVoice(text, { mode: 'lifestyle', bannedPhrases });
       return text;
@@ -404,15 +456,22 @@ async function generateFixedPersonaDailyStory(accountId, target, persona) {
   throw lastError;
 }
 
-async function generateDailyStory(accountId, target) {
+// options.requirePhoto (owner accounts' runner): fail fast without a photo source, and attach a
+// stock photo matching the story (imageUrl null when none was found).
+async function generateDailyStory(accountId, target, { requirePhoto = false } = {}) {
   const fixed = accountPersonaFor(accountId);
   if (fixed) {
+    if (requirePhoto) {
+      const k = dailyPhotoKeys();
+      if (!k.pexels && !k.pixabay) throw new Error('일상글 사진 소스 없음 (Pexels/Pixabay 키 미설정)');
+    }
     console.log(`[ContentOnly][DailyStory] persona fixed="${fixed.name}"(${fixed.id})`);
     const text = await generateFixedPersonaDailyStory(accountId, target, fixed);
+    const imageUrl = requirePhoto ? await pickDailyPhoto(accountId, text) : null;
     return {
       text,
       link: null,
-      imageUrl: null,
+      imageUrl,
       extraImageUrl: null,
       keyword: '일상',
       trendNote: '고정 페르소나 · 링크 없는 일상형',
@@ -446,6 +505,7 @@ async function generateDailyStory(accountId, target) {
 
 module.exports = {
   generateRecipe,
+  pickDailyPhoto,
   generateDailyStory,
   RECIPE_COMMENT_TEASERS,
   pickRecipeCommentTeaser,

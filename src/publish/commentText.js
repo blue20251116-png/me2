@@ -141,7 +141,9 @@ function buildLinkComment(account, prefix, link, maxLength = 450) {
 }
 
 async function buildCommentText(account, post) {
-  if (hasCoupangKeys(account) && post.recipe_comment_text && !post.link)
+  // A '-nolink' post (owner accounts' link-free recipe slot, autopilot/runner.js) is link-free on purpose.
+  const linkFreeByDesign = /-nolink$/.test(String(post.content_mode || ''));
+  if (hasCoupangKeys(account) && post.recipe_comment_text && !post.link && !linkFreeByDesign)
     throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');
   if (!post.link) return compactRecipePrefix(sanitizeCommentPrefix(post.recipe_comment_text || ''), 450);
   return buildLinkComment(account, post.recipe_comment_text || '', post.link, 450);

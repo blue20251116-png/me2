@@ -2,7 +2,7 @@
 // When autopilot posts go out: KST day helpers, per-account daily targets, and deterministic,
 // staggered publish slots inside the active window.
 const { db, getAccount, getUserById } = require('../infra/db');
-const { isPersonaAccount, accountPersonaSettings } = require('../content/accountPersonas');
+const { isPersonaAccount, accountPersonaSettings, personaAccountIds } = require('../content/accountPersonas');
 
 function dayKeyKst(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -23,6 +23,8 @@ function addDay(dayKey, n) {
 function personaChainOptions(accountId) {
   if (!isPersonaAccount(accountId)) return null;
   const c = accountPersonaSettings();
+  const ids = personaAccountIds().sort((a, b) => a - b);
+  const idx = Math.max(0, ids.indexOf(Number(accountId)));
   return {
     gapMin: c.gapMinutesMin,
     gapMax: c.gapMinutesMax,
@@ -30,6 +32,48 @@ function personaChainOptions(accountId) {
     dailyMax: c.dailyPostsMax,
     startHour: c.activeStartHour,
     endHour: c.activeEndHour,
+    // 2026-10-14 (user: the 7 owner accounts all posted inside the same ~20 minutes every hour):
+    // each account gets its own start offset spread evenly across one period.
+    stagger: !!c.staggerAccounts,
+    offsetMin: Math.round((idx * (c.gapMinutesMin + c.gapMinutesMax)) / 2 / Math.max(1, ids.length)),
+  };
+}
+// Staggered owner-account schedule: slot k of a KST day sits at
+//   windowStart + offset + k * period + jitter,  period = (gapMin+gapMax)/2, |jitter| <= (gapMax-gapMin)/4
+// so consecutive slots are always gapMin..gapMax apart and two accounts keep their offset distance
+// (minus at most 2*jitter) all day instead of drifting into the same minutes.
+function latticeSlot(accountId, opts, day, k) {
+  const period = (opts.gapMin + opts.gapMax) / 2;
+  const j = Math.floor((opts.gapMax - opts.gapMin) / 4);
+  const jitter = j ? (accountHash(accountId, `${day}:${k}`) % (2 * j + 1)) - j : 0;
+  const start = kstMidnight(day).getTime() + opts.startHour * 3600000;
+  const minute = Math.max(0, Math.round(opts.offsetMin + k * period + jitter));
+  return start + minute * 60000;
+}
+function latticeStepper(accountId, target, prevMs, dayCount, opts) {
+  const earliest = Date.now() + 10 * 60000;
+  const horizon = kstMidnight(addDay(dayKeyKst(), 3)).getTime();
+  const perDay = new Map();
+  const dayCap = day =>
+    Math.min(target, opts.dailyMin + (accountHash(accountId, day) % (opts.dailyMax - opts.dailyMin + 1)));
+  let prev = prevMs;
+  return () => {
+    const lower = Math.max(prev + opts.gapMin * 60000, earliest);
+    for (let day = dayKeyKst(new Date(lower - 86400000)); kstMidnight(day).getTime() < horizon; day = addDay(day, 1)) {
+      const end = kstMidnight(day).getTime() + opts.endHour * 3600000;
+      if (!perDay.has(day)) perDay.set(day, dayCount(day));
+      if (perDay.get(day) >= dayCap(day)) continue;
+      for (let k = 0; k < 200; k++) {
+        const t = latticeSlot(accountId, opts, day, k);
+        if (t >= end) break;
+        if (t < lower) continue;
+        if (t >= horizon) return null;
+        perDay.set(day, perDay.get(day) + 1);
+        prev = t;
+        return new Date(t);
+      }
+    }
+    return null;
   };
 }
 function targetForAccount(account) {
@@ -134,6 +178,7 @@ function chainSlots(accountId, target, need) {
 // an active window [startHour, endHour) KST - a slot outside it moves to the next window start.
 // Without opts the chain is exactly the global one (any hour, GAP_MIN..GAP_MAX, DAILY_MIN..MAX).
 function chainStepper(accountId, target, prevMs, dayCount, opts = null) {
+  if (opts?.stagger) return latticeStepper(accountId, target, prevMs, dayCount, opts);
   // 10-30 min out, randomized so idle accounts restarting together don't all post the same minute.
   const earliest = Date.now() + (10 + Math.floor(Math.random() * 21)) * 60000;
   const horizon = kstMidnight(addDay(dayKeyKst(), 3)).getTime();

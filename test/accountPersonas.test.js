@@ -121,44 +121,80 @@ test('postWriter: owner accounts always write as their fixed persona, customers 
   }
 });
 
-test('ad/non-ad mix: at least half link-free, linked posts capped per day', () => {
-  for (const total of [4, 5, 8]) {
-    let linked = 0,
-      plain = 0;
-    for (let i = 0; i < total; i++) {
-      if (mix.decideSlotKind({ linked, plain, maxLinked: 2 }) === 'linked') linked++;
-      else plain++;
-    }
-    assert.ok(linked <= 2, `total=${total} linked=${linked}`);
-    assert.ok(plain >= linked, `total=${total} plain=${plain} linked=${linked}`);
-    if (total >= 4) assert.equal(linked, 2);
+test('day mix: 16 posts = 5 linked spread through the day, 1 everyday post (4th), 10 link-free material posts', () => {
+  let linked = 0,
+    plain = 0,
+    daily = 0,
+    seq = '';
+  for (let i = 0; i < 16; i++) {
+    const k = mix.decideSlotKind({ linked, plain, daily, maxLinked: 5, maxDaily: 1, dailyCap: 16 });
+    seq += k === 'linked' ? 'L' : k === 'daily' ? 'D' : 'U';
+    if (k === 'linked') linked++;
+    else if (k === 'daily') daily++;
+    else plain++;
   }
-  assert.equal(mix.decideSlotKind({ linked: 0, plain: 0, maxLinked: 2 }), 'daily');
+  assert.equal(seq, 'LUUDLUULUULUULUU');
+  assert.deepEqual([linked, daily, plain], [5, 1, 10]);
+  // No two linked posts in a row, and the cap holds even on a longer day.
+  assert.ok(!/LL/.test(seq));
+  assert.equal(
+    mix.decideSlotKind({ linked: 5, plain: 20, daily: 1, maxLinked: 5, maxDaily: 1, dailyCap: 16 }),
+    'unlinked'
+  );
+  // A day whose everyday post could not be made (no photo) keeps offering it only once per slot.
+  assert.equal(mix.decideSlotKind({ linked: 1, plain: 2, daily: 0, maxLinked: 5, maxDaily: 1, dailyCap: 16 }), 'daily');
+  assert.equal(
+    mix.decideSlotKind({ linked: 1, plain: 2, daily: 0, maxLinked: 5, maxDaily: 0, dailyCap: 16 }),
+    'unlinked'
+  );
 });
 
-
 // These tests pin the original 4-5/day, 2-linked numbers; the live config file may use other values.
-const LIVE_ACCOUNTS = JSON.parse(fs.readFileSync(path.join(__dirname, '../src/config/accountPersonas.json'), 'utf8')).accounts;
+const LIVE_ACCOUNTS = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '../src/config/accountPersonas.json'), 'utf8')
+).accounts;
 function pinBaseConfig() {
-  ap.setAccountPersonaConfig({ accounts: LIVE_ACCOUNTS, dailyPostsMin: 4, dailyPostsMax: 5, maxLinkedPerDay: 2, linkedPerPlain: 0,
-    gapMinutesMin: 150, gapMinutesMax: 210, activeStartHour: 8, activeEndHour: 23, dedupeOwnDays: 7 });
+  ap.setAccountPersonaConfig({
+    accounts: LIVE_ACCOUNTS,
+    dailyPostsMin: 4,
+    dailyPostsMax: 5,
+    maxLinkedPerDay: 2,
+    gapMinutesMin: 150,
+    gapMinutesMax: 210,
+    activeStartHour: 8,
+    activeEndHour: 23,
+    dedupeOwnDays: 7,
+  });
 }
 
 test("slotKind reads the slot's KST day from the DB and is null for customer accounts", () => {
-  pinBaseConfig();
+  ap.setAccountPersonaConfig({
+    accounts: LIVE_ACCOUNTS,
+    dailyPostsMin: 16,
+    dailyPostsMax: 16,
+    maxLinkedPerDay: 5,
+    maxDailyPerDay: 1,
+    gapMinutesMin: 50,
+    gapMinutesMax: 60,
+    activeStartHour: 8,
+    activeEndHour: 23,
+    dedupeOwnDays: 7,
+  });
   clearPosts();
   const at = '2026-10-14T03:00:00.000Z'; // 12:00 KST
-  assert.equal(mix.slotKind(1, at), 'daily');
-  insertPost(1, { scheduledAt: '2026-10-13T23:30:00.000Z' }); // 08:30 KST same day, link-free
   assert.equal(mix.slotKind(1, at), 'linked');
-  insertPost(1, { scheduledAt: '2026-10-14T01:00:00.000Z', link: 'https://link.coupang.com/a' });
+  insertPost(1, { scheduledAt: '2026-10-13T23:30:00.000Z', link: 'https://link.coupang.com/a' }); // 08:30 KST
+  assert.equal(mix.slotKind(1, at), 'unlinked');
+  insertPost(1, { scheduledAt: '2026-10-14T00:30:00.000Z' });
+  insertPost(1, { scheduledAt: '2026-10-14T01:30:00.000Z' });
   assert.equal(mix.slotKind(1, at), 'daily');
-  insertPost(1, { scheduledAt: '2026-10-14T04:00:00.000Z' });
-  insertPost(1, { scheduledAt: '2026-10-14T06:00:00.000Z', link: 'https://link.coupang.com/b' });
-  insertPost(1, { scheduledAt: '2026-10-14T08:00:00.000Z' });
-  assert.equal(mix.slotKind(1, at), 'daily', 'cap of 2 linked posts reached');
-  // A failed post does not count; another day starts fresh.
-  assert.equal(mix.slotKind(1, '2026-10-15T03:00:00.000Z'), 'daily');
+  db.prepare(
+    `INSERT INTO posts (account_id,text,scheduled_at,status,content_mode) VALUES (1,'d','2026-10-14T02:30:00.000Z','posted','daily')`
+  ).run();
+  assert.equal(mix.dayMix(1, '2026-10-14').daily, 1);
+  assert.equal(mix.slotKind(1, at), 'linked', 'everyday post used up, linked share due');
+  // Another day starts fresh; customer accounts are never mixed.
+  assert.equal(mix.slotKind(1, '2026-10-15T03:00:00.000Z'), 'linked');
   assert.equal(mix.slotKind(4, at), null);
   clearPosts();
 });
@@ -194,7 +230,7 @@ test('volume: owner accounts target 4-5 posts/day inside 08-23 KST; customers ke
   );
 });
 
-test('dedupe: same product within 7 days on one account, or same day across owner accounts, is a duplicate', () => {
+test('dedupe: same product/source/media within 7 days on any owner account, same topic the same day, is a duplicate', () => {
   clearPosts();
   const keys = mix.dedupeKeysFor({
     product: { productId: 123, name: '금목서 바디로션 300ml' },
@@ -214,7 +250,21 @@ test('dedupe: same product within 7 days on one account, or same day across owne
     scope: 'cross',
     accountId: 13,
   });
-  assert.equal(mix.findDuplicate(14, sameProduct, '2026-10-11T03:00:00.000Z'), null);
+  // The same product on another owner account is blocked for 7 days; a loose topic key only on the same day.
+  assert.equal(mix.findDuplicate(14, sameProduct, '2026-10-11T03:00:00.000Z')?.scope, 'cross');
+  assert.equal(mix.findDuplicate(14, sameProduct, '2026-10-18T03:00:00.000Z'), null);
+  const sameTopic = mix.dedupeKeysFor({ topic: '샤워 바디로션' });
+  assert.equal(mix.findDuplicate(14, sameTopic, '2026-10-10T09:00:00.000Z')?.scope, 'cross');
+  assert.equal(mix.findDuplicate(14, sameTopic, '2026-10-11T03:00:00.000Z'), null);
+  // Same media file (m: key) on another owner account within 7 days.
+  insertPost(2, {
+    scheduledAt: '2026-10-12T03:00:00.000Z',
+    keys: mix.encodeKeys(mix.dedupeKeysFor({ mediaHash: 'abc123def456' })),
+  });
+  assert.equal(
+    mix.findDuplicate(11, mix.dedupeKeysFor({ mediaHash: 'abc123def456' }), '2026-10-15T03:00:00.000Z')?.key,
+    'm:abc123def456'
+  );
   // Same source post reused by another owner account the same day.
   const sameSource = mix.dedupeKeysFor({ sourceUrl: 'https://www.threads.com/@x/post/ABC' });
   assert.equal(mix.findDuplicate(1, sameSource, '2026-10-10T10:00:00.000Z')?.scope, 'cross');
@@ -262,14 +312,96 @@ test('daily post: owner accounts get a link-free post in their own voice, retrie
   }
 });
 
-test('linkedPerPlain: 10 linked + 3 everyday interleaved 4:1 per day', () => {
-  let linked = 0, plain = 0, seq = '';
-  for (let i = 0; i < 13; i++) {
-    const k = mix.decideSlotKind({ linked, plain, maxLinked: 10, linkedPerPlain: 4 });
-    seq += k === 'linked' ? 'L' : 'D';
-    if (k === 'linked') linked++; else plain++;
+test('video cap: owner accounts get at most maxVideoPerDay re-uploaded-video posts per KST day', () => {
+  ap.setAccountPersonaConfig({ accounts: LIVE_ACCOUNTS, dailyPostsMin: 16, dailyPostsMax: 16, maxLinkedPerDay: 5 });
+  assert.equal(ap.accountPersonaSettings().maxVideoPerDay, 5, 'defaults to a third of the daily cap');
+  ap.setAccountPersonaConfig({ accounts: LIVE_ACCOUNTS, dailyPostsMax: 16, maxVideoPerDay: 2 });
+  clearPosts();
+  const at = '2026-10-14T05:00:00.000Z';
+  assert.equal(mix.videoAllowed(1, at), true);
+  db.prepare(
+    `INSERT INTO posts (account_id,text,scheduled_at,status,video_url) VALUES (1,'v','2026-10-14T01:00:00.000Z','posted','https://x/a.mp4')`
+  ).run();
+  db.prepare(
+    `INSERT INTO posts (account_id,text,scheduled_at,status,image_url) VALUES (1,'v','2026-10-14T02:00:00.000Z','pending','__THREADS_MEDIA_BUNDLE__%5B%7B%22type%22%3A%22VIDEO%22%7D%5D')`
+  ).run();
+  db.prepare(
+    `INSERT INTO posts (account_id,text,scheduled_at,status,image_url) VALUES (1,'i','2026-10-14T03:00:00.000Z','pending','https://x/a.jpg')`
+  ).run();
+  assert.equal(mix.videoPostsOnDay(1, at), 2);
+  assert.equal(mix.videoAllowed(1, at), false);
+  assert.equal(mix.videoAllowed(1, '2026-10-15T05:00:00.000Z'), true, 'next day starts fresh');
+  assert.equal(mix.videoAllowed(4, at), true, 'customers unaffected');
+  clearPosts();
+});
+
+test('near-duplicate text: a repeat on any owner account within 7 days is caught, unrelated posts are not', () => {
+  pinBaseConfig();
+  clearPosts();
+  const lipA =
+    '립 바르면 각질만 풀메이크업됨ㅋㅋ\n\n등원시키고 와서 거울 봤는데\n립밤이 각질에 다 끼어 있음\n바를수록 더 티 나는 느낌\n\n자기 전에 올려두고 잤더니 아침에 각질이 밀림';
+  const lipB =
+    '등원시키고 와서 거울 봤더니 립밤이 각질에 다 끼어 있음\n\n자기 전에 올려두고 잤더니 아침에 불어난 각질이 살살 문지르면 밀림';
+  const other = '치치가 내 퇴근 시간만 되면 현관에 먼저 나와 있음ㅋㅋㅋ\n\n오늘은 택배 상자 안에서 눈만 빼꼼 내밀더라';
+  db.prepare(`INSERT INTO posts (account_id,text,scheduled_at,status) VALUES (1,?,?,'posted')`).run(
+    lipA,
+    '2026-10-14T02:39:00.000Z'
+  );
+  assert.ok(mix.textSimilarity(lipA, lipB) >= mix.SIMILAR_TEXT_THRESHOLD);
+  assert.equal(mix.findSimilarText(1, lipB, '2026-10-14T07:16:00.000Z')?.scope, 'own');
+  assert.equal(mix.findSimilarText(2, lipB, '2026-10-16T07:16:00.000Z')?.scope, 'cross');
+  assert.equal(mix.findSimilarText(2, other, '2026-10-14T07:16:00.000Z'), null);
+  assert.equal(mix.findSimilarText(2, lipB, '2026-10-25T07:16:00.000Z'), null, 'outside the 7-day window');
+  assert.equal(mix.findSimilarText(4, lipB, '2026-10-14T07:16:00.000Z'), null, 'customers unaffected');
+  clearPosts();
+});
+
+test('staggered schedule: 7 owner accounts on distinct offsets, 50-60 min gaps, 16 posts inside 08-23 KST', () => {
+  ap.setAccountPersonaConfig({
+    accounts: LIVE_ACCOUNTS,
+    dailyPostsMin: 16,
+    dailyPostsMax: 16,
+    maxLinkedPerDay: 5,
+    gapMinutesMin: 50,
+    gapMinutesMax: 60,
+    activeStartHour: 8,
+    activeEndHour: 23,
+    dedupeOwnDays: 7,
+    staggerAccounts: true,
+  });
+  const days = new Map();
+  const minutesByAccount = new Map();
+  for (const id of OWNER_IDS) {
+    const opts = slots.personaChainOptions(id);
+    assert.equal(opts.stagger, true);
+    const step = slots.chainStepper(id, 16, 0, () => 0, opts);
+    const out = [];
+    for (let s2 = step(); s2; s2 = step()) out.push(s2.getTime());
+    for (let i = 0; i < out.length; i++) {
+      const kstHour = new Date(out[i] + 9 * 3600000).getUTCHours();
+      assert.ok(kstHour >= 8 && kstHour < 23, `#${id} slot at ${kstHour}h KST`);
+      const day = slots.dayKeyKst(new Date(out[i]));
+      if (i && slots.dayKeyKst(new Date(out[i - 1])) === day) {
+        const gap = (out[i] - out[i - 1]) / 60000;
+        assert.ok(gap >= 50 && gap <= 60, `#${id} gap ${gap}`);
+      }
+      const key = `${id}:${day}`;
+      days.set(key, (days.get(key) || 0) + 1);
+    }
+    minutesByAccount.set(id, out);
   }
-  assert.equal(seq, 'LLLLDLLLLDLLD');
-  assert.equal(mix.decideSlotKind({ linked: 10, plain: 0, maxLinked: 10, linkedPerPlain: 4 }), 'daily');
-  assert.equal(mix.decideSlotKind({ linked: 0, plain: 0, maxLinked: 2 }), 'daily', 'default rule unchanged');
+  // Every full future day holds exactly 16 posts per account.
+  const tomorrow = slots.addDay(slots.dayKeyKst(), 1);
+  for (const id of OWNER_IDS) assert.equal(days.get(`${id}:${tomorrow}`), 16, `#${id} tomorrow`);
+  // Tomorrow, any two accounts' posts are at least 4 minutes apart.
+  const all = [];
+  for (const [id, out] of minutesByAccount)
+    for (const t of out) if (slots.dayKeyKst(new Date(t)) === tomorrow) all.push([t, id]);
+  all.sort((a, b) => a[0] - b[0]);
+  for (let i = 1; i < all.length; i++)
+    assert.ok(all[i][0] - all[i - 1][0] >= 4 * 60000, `#${all[i - 1][1]} and #${all[i][1]} too close`);
+  // Start offsets spread across the hour.
+  const offsets = OWNER_IDS.map(id => slots.personaChainOptions(id).offsetMin);
+  assert.deepEqual(offsets, [0, 8, 16, 24, 31, 39, 47]);
+  pinBaseConfig();
 });

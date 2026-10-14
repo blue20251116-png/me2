@@ -197,6 +197,39 @@ function overFragmentedParagraphs(t) {
 function bodyTooLong(t) {
   return t.replace(/\n/g, '').length > MAX_BODY_CHARS;
 }
+// The writer's own planning note published as the post (2026-10-14, posts 6750/6753: "저녁 메뉴
+// 고민으로 간다. 최근 첫 줄(…)과 겹치지 않게.", "원룸 빨래 말리기로 골랐고, 최근 첫 줄과 겹치지 않게
+// 썼다."). A line that talks about the writing instead of the writer's life.
+const PLANNING_LEAK = [
+  /겹치지\s*않(?:게|도록)/,
+  /(?:최근|이전|직전|위)\s*첫\s*줄/,
+  /페르소나/,
+  /본문(?:만|은|을)\s*(?:출력|작성|쓴)/,
+  /(?:최근|이전|직전)\s*(?:글|게시물|첫마디)/,
+  /(?:소재|주제|글감)[^\n]{0,25}?(?:골랐|정했|잡았|선택했)/,
+  /(?:썼다|쓴다|쓰겠다|작성했다|작성한다)\s*[.。]\s*$/,
+  /(?:으로|로)\s*간다\s*[.。]\s*$/,
+];
+function planningLeakLines(text) {
+  return String(text || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l && PLANNING_LEAK.some(r => r.test(l)));
+}
+// Drops planning-note lines from the TOP of a draft (where the model puts them) plus the blank
+// lines after them. Lines further down are left for planningLeakLines() to reject.
+function stripLeadingPlanningLines(text) {
+  const lines = String(text || '').split('\n');
+  let i = 0;
+  while (i < lines.length && (!lines[i].trim() || PLANNING_LEAK.some(r => r.test(lines[i].trim())))) i++;
+  return lines.slice(i).join('\n').trim();
+}
+// Owner accounts (2026-10-14): 27 of 108 posts across all 7 accounts opened "쿠팡 뒤지다가 … 발견함ㄷㄷ".
+// The same opener on every account reads as one affiliate operation; it is banned for them.
+const COUPANG_DIG_OPENER = /쿠팡\s*(?:을|에서)?\s*(?:뒤지|뒤적이|뒤적거리|구경하|둘러보|검색하)(?:다가?|는데|던)/;
+function coupangOpener(t) {
+  return COUPANG_DIG_OPENER.test(t);
+}
 // bannedPhrases: per-account phrases that must not appear (accountPersonas.bannedPhrasesFor - the
 // stock lines and other fixed-persona accounts' signature phrases). Empty/absent for every other
 // account, so their checks are unchanged.
@@ -222,6 +255,9 @@ function voiceProblems(text, { comment = false, bannedPhrases = null, frame = nu
     if (tooManyParagraphs(t)) reasons.push('문단 과다');
     if (bodyTooLong(t)) reasons.push('본문 길이 초과');
     if (bannedPhraseHits(t, bannedPhrases).length) reasons.push('다른 계정 말투');
+    // bannedPhrases is set only for fixed-persona owner accounts.
+    if (Array.isArray(bannedPhrases) && bannedPhrases.length && coupangOpener(t)) reasons.push('쿠팡 발견 템플릿');
+    if (planningLeakLines(t).length) reasons.push('작성 메모 노출');
     reasons.push(...groundingProblems(t, grounding));
   }
   if (highRiskClaim(t)) reasons.push('고위험 효능 주장');
@@ -274,7 +310,7 @@ async function reviewSourceVoice(text, context = {}, request) {
     .slice(0, 12000);
   for (let attempt = 1; attempt <= MAX_FORMAT_REPAIR_ATTEMPTS && problems.length; attempt++) {
     const corrected = await request(
-      `${voiceGuide()}\n형식 교정 전용이다. 핵심 의미와 후킹은 보존하되, 글자수를 맞추려고 완결된 문장을 자르지 마라 — 한 줄이 길어도 그 자체로 완결된 문장/절이면 그대로 둔다. 한 줄에 여러 문장이 억지로 욱여넣어져 있을 때만 자연스러운 문장/절 경계에서 나눠라. 각 물리적 줄은 그 줄만 읽어도 자연스럽게 완결돼야 한다. 최대 ${MAX_LINES}줄(빈 줄 포함)이다. "문단 구분 없음"이 수정 대상에 있으면 매 줄마다 그냥 줄바꿈만 하지 말고, 1~3줄 단위의 생각 덩어리가 끝나는 지점마다 반드시 빈 줄(줄바꿈 두 번)을 넣어 다음 덩어리와 시각적으로 구분해라 — 한 줄씩 뚝뚝 끊어지는 형태로 만들지 마라. 단, 문장마다 전부 빈 줄을 넣으라는 뜻은 아니다 — 같은 생각을 이야기하는 문장 2~3개는 빈 줄 없이 줄바꿈만으로 묶어서 한 덩어리로 만들고, 그 덩어리가 끝나는 지점에서만 빈 줄을 넣어라. "문단 과다 분절"이 수정 대상에 있으면 바로 이 반대 실수다 — 지금 모든 줄이 각각 빈 줄로 따로 떨어져 있어서 목록처럼 보인다는 뜻이니, 서로 이어지는 문장들을 최소 2~3개씩 빈 줄 없이 한 덩어리로 합쳐서 덩어리 개수 자체를 줄여라. "상투적 표현"이 수정 대상에 있으면 "실화냐"류 표현과 "~하는 사람 나야 나/나 말고 또 있나/나 같은 사람" 같은 자기 지목 문장을 전부 없애고, 첫 줄을 "이거/이게 ~냐"식 감탄 대신 소재 속 구체적인 사람·상황·결과로 시작하게 다시 써라 — 내용과 후킹 포인트는 그대로 두고 말투만 바꾼다. "참여 낚시"가 수정 대상에 있으면 댓글·좋아요·팔로우·공유를 요구하거나 댓글을 대가로 정보를 주겠다는 문장을 지우고, 그 자리를 읽는 사람이 자기 경험으로 바로 답할 수 있는 질문 한 줄로 바꿔라. "광고 문구"가 수정 대상에 있으면 "대박/미쳐버림/장난 아님/인생템/강추/이거 하나면/없으면 못 살/꼭 써봐야/멈출 수 없음/확인 필수" 같은 과장 카피를 지우고, 그 자리를 실제 장면(누가 어떻게 반응했는지, 숫자 하나)으로 바꿔라. "이거 반복"이 수정 대상에 있으면 상품을 가리키는 "이거/이걸/이게"를 두 번 이하로 줄이고 나머지는 상황 묘사로 바꿔라. "문단 과다"가 수정 대상에 있으면 이어지는 문단을 합치거나 덜 중요한 문장을 빼서 ${MAX_PARAGRAPHS}덩어리 이하로 만들어라. "다른 계정 말투"가 수정 대상에 있으면 [이 계정에서 쓰면 안 되는 문구]에 적힌 표현을 전부 없애고 같은 뜻을 다른 말로 쓴다. "근거 없는 장소/권위/가격"이 수정 대상에 있으면 그 매장 이름·권위·스펙·가격 표현을 지우고, 통합 소재에 실제로 있는 사실이나 "쿠팡 뒤지다가" 같은 사실인 상황으로 바꾼다. 새 고위험 사실을 만들지 마라. JSON만 출력: {"text":""}`,
+      `${voiceGuide()}\n형식 교정 전용이다. 핵심 의미와 후킹은 보존하되, 글자수를 맞추려고 완결된 문장을 자르지 마라 — 한 줄이 길어도 그 자체로 완결된 문장/절이면 그대로 둔다. 한 줄에 여러 문장이 억지로 욱여넣어져 있을 때만 자연스러운 문장/절 경계에서 나눠라. 각 물리적 줄은 그 줄만 읽어도 자연스럽게 완결돼야 한다. 최대 ${MAX_LINES}줄(빈 줄 포함)이다. "문단 구분 없음"이 수정 대상에 있으면 매 줄마다 그냥 줄바꿈만 하지 말고, 1~3줄 단위의 생각 덩어리가 끝나는 지점마다 반드시 빈 줄(줄바꿈 두 번)을 넣어 다음 덩어리와 시각적으로 구분해라 — 한 줄씩 뚝뚝 끊어지는 형태로 만들지 마라. 단, 문장마다 전부 빈 줄을 넣으라는 뜻은 아니다 — 같은 생각을 이야기하는 문장 2~3개는 빈 줄 없이 줄바꿈만으로 묶어서 한 덩어리로 만들고, 그 덩어리가 끝나는 지점에서만 빈 줄을 넣어라. "문단 과다 분절"이 수정 대상에 있으면 바로 이 반대 실수다 — 지금 모든 줄이 각각 빈 줄로 따로 떨어져 있어서 목록처럼 보인다는 뜻이니, 서로 이어지는 문장들을 최소 2~3개씩 빈 줄 없이 한 덩어리로 합쳐서 덩어리 개수 자체를 줄여라. "상투적 표현"이 수정 대상에 있으면 "실화냐"류 표현과 "~하는 사람 나야 나/나 말고 또 있나/나 같은 사람" 같은 자기 지목 문장을 전부 없애고, 첫 줄을 "이거/이게 ~냐"식 감탄 대신 소재 속 구체적인 사람·상황·결과로 시작하게 다시 써라 — 내용과 후킹 포인트는 그대로 두고 말투만 바꾼다. "참여 낚시"가 수정 대상에 있으면 댓글·좋아요·팔로우·공유를 요구하거나 댓글을 대가로 정보를 주겠다는 문장을 지우고, 그 자리를 읽는 사람이 자기 경험으로 바로 답할 수 있는 질문 한 줄로 바꿔라. "광고 문구"가 수정 대상에 있으면 "대박/미쳐버림/장난 아님/인생템/강추/이거 하나면/없으면 못 살/꼭 써봐야/멈출 수 없음/확인 필수" 같은 과장 카피를 지우고, 그 자리를 실제 장면(누가 어떻게 반응했는지, 숫자 하나)으로 바꿔라. "이거 반복"이 수정 대상에 있으면 상품을 가리키는 "이거/이걸/이게"를 두 번 이하로 줄이고 나머지는 상황 묘사로 바꿔라. "문단 과다"가 수정 대상에 있으면 이어지는 문단을 합치거나 덜 중요한 문장을 빼서 ${MAX_PARAGRAPHS}덩어리 이하로 만들어라. "다른 계정 말투"가 수정 대상에 있으면 [이 계정에서 쓰면 안 되는 문구]에 적힌 표현을 전부 없애고 같은 뜻을 다른 말로 쓴다. "근거 없는 장소/권위/가격"이 수정 대상에 있으면 그 매장 이름·권위·스펙·가격 표현을 지우고, 통합 소재에 실제로 있는 사실이나 이 인물의 일상 상황(장 보다가, 출근길에, 정리하다가 등)으로 바꾼다. "쿠팡 발견 템플릿"이 수정 대상에 있으면 "쿠팡 뒤지다가/쿠팡 구경하다가"로 여는 문장을 없애고 이 인물의 실제 장면(누가, 언제, 무슨 불편)으로 첫 줄을 다시 쓴다. "작성 메모 노출"이 수정 대상에 있으면 글을 어떻게 썼는지 설명하는 문장(소재 선택, 첫 줄, 겹치지 않게 등)을 전부 지운다. 새 고위험 사실을 만들지 마라. JSON만 출력: {"text":""}`,
       `[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}${bannedNote(out, context)}\n[교정 시도]\n${attempt}/${MAX_FORMAT_REPAIR_ATTEMPTS}`
     );
     const candidate = formatVoice(corrected?.text || '');
@@ -311,4 +347,7 @@ module.exports = {
   reviewSourceVoice,
   incompleteLineReasons,
   bodyTooLong,
+  planningLeakLines,
+  stripLeadingPlanningLines,
+  coupangOpener,
 };

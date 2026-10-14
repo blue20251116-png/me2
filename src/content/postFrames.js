@@ -15,8 +15,9 @@ const FRAMES = {
     name: '발견-반전스펙-행동유도',
     block: `[이번 글의 구조 — 프레임 A: 발견 → 반전 스펙 → 행동 유도]
 위 인물의 말투 그대로, 아래 3덩어리(각 1~2줄, 빈 줄로 구분)로만 쓴다. 위 정책의 "공통 구조"보다 이 구조가 우선한다.
-1) 첫 줄: 익숙한 장소·상황에서 의외의 가성비 물건을 발견했다는 한 줄. 예) "쿠팡 뒤지다가 미친 가성비 발견함ㄷㄷ", "장 보다가 장바구니에 넣을까 말까 하던 거 결국 삼".
-   - 장소는 사실이어야 한다. 링크는 쿠팡이다. 다이소·올리브영·이마트 같은 오프라인 매장 이름은 [Threads 원문]이나 상품 정보에 그 매장이 나올 때만 쓴다. 없으면 "쿠팡 뒤지다가", "장 보다가", 이 인물의 일상 루틴(출근길, 등원 후, 재택 중 등)으로 쓴다.
+1) 첫 줄: 이 인물의 일상 장면 속에서 의외의 가성비 물건을 만났다는 한 줄. {{OPENING_HINT}}
+   - "쿠팡 뒤지다가/쿠팡 구경하다가 … 발견함"으로 시작하지 않는다(여러 계정에서 같은 첫마디가 반복돼 광고 계정처럼 보인다).
+   - 장소는 사실이어야 한다. 링크는 쿠팡이다. 다이소·올리브영·이마트 같은 오프라인 매장 이름은 [Threads 원문]이나 상품 정보에 그 매장이 나올 때만 쓴다. 없으면 이 인물의 일상 루틴(출근길, 등원 후, 재택 중, 자기 전 등)이나 물건을 쓰게 된 상황으로 쓴다.
 2) 둘째 덩어리: 권위·스펙 요소와 가격을 대비시켜 "이게 이 가격이라고?" 하는 의문을 만든다. "실화임? ;;", "말이 됨?" 같은 구어체 감정은 써도 된다.
    - 장인, 몇 년 전통, 수상, 1위, 판매량, 인증·등급, 테스트 결과 같은 권위·스펙은 [Threads 원문]·[작성자 추가댓글]·쿠팡 상품명에 있는 것만 쓴다. 없으면 지어내지 말고 눈에 보이는 디테일(크기, 구성, 재질, 개수)로 대비를 만든다.
    - 가격은 [쿠팡 상품 가격]에 적힌 값이나 원문에 있는 값만 쓴다. 없으면 가격을 말하지 않는다.
@@ -37,6 +38,29 @@ const FRAMES = {
   },
 };
 const FRAME_IDS = Object.keys(FRAMES);
+
+// 2026-10-14: frame A's first line rotates through several natural openings so the 7 owner
+// accounts stop sharing one "쿠팡 뒤지다가 … 발견함ㄷㄷ" opener.
+const FRAME_A_OPENINGS = [
+  '장바구니에 넣었다 뺐다 세 번 하다가 결국 주문함',
+  '택배 뜯자마자 이건 좀 놀람',
+  '살까 말까 일주일 고민한 게 아까웠음',
+  '써보고 나서 하나 더 주문한 거 처음임',
+  '자기 전에 폰 보다가 결국 결제 버튼 누름',
+  '이 가격에 이 구성이면 고민할 게 없었음',
+  '장 보다가 넣을까 말까 하던 거 결국 삼',
+];
+// The prompt block for a frame; frame A gets one rotating opening hint (random() for tests).
+function frameBlock(id, random = Math.random) {
+  const frame = FRAMES[id];
+  if (!frame) return '';
+  if (id !== 'A') return frame.block;
+  const pick = FRAME_A_OPENINGS[Math.floor(random() * FRAME_A_OPENINGS.length) % FRAME_A_OPENINGS.length];
+  return frame.block.replace(
+    '{{OPENING_HINT}}',
+    `이번 글 첫 줄의 결: "${pick}" — 그대로 베끼지 말고 이 인물의 상황과 말투로 바꿔 쓴다.`
+  );
+}
 
 // Alternate per account: the frame used less in the recent window goes next; a tie is 50:50.
 function chooseFrame(counts = {}, random = Math.random) {
@@ -171,6 +195,8 @@ function relaxForFrame(text, frame) {
 }
 
 module.exports = {
+  FRAME_A_OPENINGS,
+  frameBlock,
   FRAMES,
   FRAME_IDS,
   chooseFrame,

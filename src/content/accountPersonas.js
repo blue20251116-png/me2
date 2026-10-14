@@ -283,12 +283,19 @@ const DEFAULT_CONFIG = {
   dailyPostsMin: 4,
   dailyPostsMax: 5,
   maxLinkedPerDay: 2,
-  linkedPerPlain: 0,
+  // Link-free everyday (text) posts per KST day; they only go out with a photo attached.
+  maxDailyPerDay: 1,
+  // Posts carrying a video re-uploaded from another creator's Threads post, per KST day.
+  // null = a third of dailyPostsMax.
+  maxVideoPerDay: null,
   gapMinutesMin: 150,
   gapMinutesMax: 210,
   activeStartHour: 8,
   activeEndHour: 23,
   dedupeOwnDays: 7,
+  // true: each owner account posts on its own fixed lattice (start offset spread across the hour,
+  // constant period inside the gap range) so the accounts never bunch into the same minutes.
+  staggerAccounts: false,
 };
 
 let cachedConfig = null;
@@ -318,12 +325,15 @@ function normalizeConfig(raw = {}) {
   const dailyPostsMin = num(raw.dailyPostsMin, d.dailyPostsMin, 1, 50);
   const gapMinutesMin = num(raw.gapMinutesMin, d.gapMinutesMin, 10, 720);
   const activeStartHour = num(raw.activeStartHour, d.activeStartHour, 0, 23);
+  const dailyPostsMax = num(raw.dailyPostsMax, d.dailyPostsMax, dailyPostsMin, 50);
   return {
     accounts,
     dailyPostsMin,
-    dailyPostsMax: num(raw.dailyPostsMax, d.dailyPostsMax, dailyPostsMin, 50),
+    dailyPostsMax,
     maxLinkedPerDay: num(raw.maxLinkedPerDay, d.maxLinkedPerDay, 0, 50),
-    linkedPerPlain: num(raw.linkedPerPlain, d.linkedPerPlain, 0, 20),
+    maxDailyPerDay: num(raw.maxDailyPerDay, d.maxDailyPerDay, 0, 50),
+    maxVideoPerDay: raw.maxVideoPerDay == null ? Math.floor(dailyPostsMax / 3) : num(raw.maxVideoPerDay, 0, 0, 50),
+    staggerAccounts: raw.staggerAccounts == null ? d.staggerAccounts : raw.staggerAccounts === true,
     gapMinutesMin,
     gapMinutesMax: num(raw.gapMinutesMax, d.gapMinutesMax, gapMinutesMin, 720),
     activeStartHour,

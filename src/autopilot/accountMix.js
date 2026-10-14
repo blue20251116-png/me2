@@ -1,7 +1,8 @@
 'use strict';
 // Fixed-persona owner accounts only (config/accountPersonas.json): what kind of post each slot gets
-// (Coupang-linked product/recipe vs link-free everyday post) and product/topic de-duplication.
-// Every function is a no-op for other accounts, so their autopilot behaviour is unchanged.
+// (Coupang-linked vs link-free recipe/product vs everyday post), the re-uploaded video cap and
+// product/source/media/text de-duplication. Every function is a no-op for other accounts, so their
+// autopilot behaviour is unchanged.
 const { db } = require('../infra/db');
 const { dayKeyKst, dayBounds } = require('../publish/slots');
 const {
@@ -12,25 +13,29 @@ const {
 } = require('../content/accountPersonas');
 const { chooseFrame } = require('../content/postFrames');
 
-// At least half of a day's posts are link-free, and linked ones are capped: a slot is linked only
-// while linked < maxLinked AND linked < plain, so a day opens with an everyday post and alternates
-// (4 posts → 2+2, 5 posts → 3 plain + 2 linked).
-// linkedPerPlain = 0: a linked post only while linked < plain (alternating, plain first).
-// linkedPerPlain = N: up to N linked posts per everyday post (e.g. 4 -> L L L L D L L L L D L L D).
-function decideSlotKind({ linked = 0, plain = 0, maxLinked = 2, linkedPerPlain = 0 } = {}) {
-  if (linked >= maxLinked) return 'daily';
-  if (linkedPerPlain > 0) return linked < (plain + 1) * linkedPerPlain ? 'linked' : 'daily';
-  return linked < plain ? 'linked' : 'daily';
+// 2026-10-14 (user: "응 전부 수정해" after the reach report): per KST day an owner account posts at
+// most maxLinked Coupang-linked posts spread evenly through the day, at most maxDaily link-free
+// everyday text posts (the 4th post of the day; the runner only publishes one with a photo), and
+// everything else as a link-free recipe/product post from Threads material ('unlinked').
+// 16/day, 5 linked, 1 daily -> L U U D L U U L U U L U U L U U.
+function decideSlotKind({ linked = 0, plain = 0, daily = 0, maxLinked = 5, maxDaily = 1, dailyCap = 16 } = {}) {
+  const total = linked + plain + daily;
+  if (daily < maxDaily && total >= 3) return 'daily';
+  if (linked < maxLinked && linked * Math.max(1, dailyCap) <= total * maxLinked) return 'linked';
+  return 'unlinked';
 }
 
 function dayMix(accountId, dayKey) {
   const [start, end] = dayBounds(dayKey);
   const row = db
     .prepare(
-      `SELECT SUM(CASE WHEN link IS NOT NULL AND link<>'' THEN 1 ELSE 0 END) linked, SUM(CASE WHEN link IS NULL OR link='' THEN 1 ELSE 0 END) plain FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND status IN ('pending','posted')`
+      `SELECT SUM(CASE WHEN link IS NOT NULL AND link<>'' THEN 1 ELSE 0 END) linked,
+              SUM(CASE WHEN (link IS NULL OR link='') AND content_mode='daily' THEN 1 ELSE 0 END) daily,
+              SUM(CASE WHEN (link IS NULL OR link='') AND (content_mode IS NULL OR content_mode<>'daily') THEN 1 ELSE 0 END) plain
+         FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND status IN ('pending','posted')`
     )
     .get(accountId, start, end);
-  return { linked: Number(row?.linked || 0), plain: Number(row?.plain || 0) };
+  return { linked: Number(row?.linked || 0), plain: Number(row?.plain || 0), daily: Number(row?.daily || 0) };
 }
 
 // null for accounts without a fixed persona (caller keeps its original path).
@@ -38,7 +43,31 @@ function slotKind(accountId, scheduledAt) {
   if (!isPersonaAccount(accountId)) return null;
   const day = dayKeyKst(new Date(scheduledAt || Date.now()));
   const cfg = accountPersonaSettings();
-  return decideSlotKind({ ...dayMix(accountId, day), maxLinked: cfg.maxLinkedPerDay, linkedPerPlain: cfg.linkedPerPlain });
+  return decideSlotKind({
+    ...dayMix(accountId, day),
+    maxLinked: cfg.maxLinkedPerDay,
+    maxDaily: cfg.maxDailyPerDay,
+    dailyCap: cfg.dailyPostsMax,
+  });
+}
+
+// Posts of this account on the slot's KST day that carry a re-uploaded Threads video (a plain
+// video_url or a media bundle with a VIDEO item).
+function videoPostsOnDay(accountId, scheduledAt) {
+  const [start, end] = dayBounds(dayKeyKst(new Date(scheduledAt || Date.now())));
+  return Number(
+    db
+      .prepare(
+        `SELECT COUNT(*) c FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND status IN ('pending','posted') AND ((video_url IS NOT NULL AND video_url<>'') OR image_url LIKE '%VIDEO%')`
+      )
+      .get(accountId, start, end)?.c || 0
+  );
+}
+// May this slot use a video re-uploaded from another creator? Owner accounts: only while the day
+// holds fewer than maxVideoPerDay such posts (about a third). Always true for other accounts.
+function videoAllowed(accountId, scheduledAt) {
+  if (!isPersonaAccount(accountId)) return true;
+  return videoPostsOnDay(accountId, scheduledAt) < accountPersonaSettings().maxVideoPerDay;
 }
 
 function normKey(v) {
@@ -47,9 +76,9 @@ function normKey(v) {
     .replace(/[^0-9a-z가-힣]/g, '')
     .slice(0, 40);
 }
-// Identity of a linked post: Coupang product id, product name, source post URL, topic, search term.
-// Any shared key counts as the same product/keyword.
-function dedupeKeysFor({ product, sourceUrl, topic, searchTerm } = {}) {
+// Identity of a post: Coupang product id, product name, source post URL, topic, search term and
+// (when a file was imported) the media file hash. Any shared key counts as the same post material.
+function dedupeKeysFor({ product, sourceUrl, topic, searchTerm, mediaHash } = {}) {
   const keys = [];
   const add = (prefix, v) => {
     const k = normKey(v);
@@ -60,6 +89,7 @@ function dedupeKeysFor({ product, sourceUrl, topic, searchTerm } = {}) {
   if (sourceUrl) keys.push(`s:${String(sourceUrl).split(/[?#]/)[0].toLowerCase()}`);
   add('t', topic);
   if (searchTerm && !/ground-truth/i.test(searchTerm)) add('q', searchTerm);
+  if (mediaHash) add('m', mediaHash);
   return [...new Set(keys)];
 }
 function encodeKeys(keys) {
@@ -71,9 +101,15 @@ function decodeKeys(v) {
     .filter(Boolean);
 }
 
+// Keys that identify the material itself (source post, product, product name, media file): these
+// must not repeat across ANY owner account within dedupeOwnDays. Topic/search-term keys are looser
+// ("텀블러") and only block other accounts on the same KST day.
+const MATERIAL_KEY = /^[spnm]:/;
+
 // Returns { key, scope, accountId } when this account already used one of the keys within
-// dedupeOwnDays (before or after the slot), or another fixed-persona account uses it on the same
-// KST day as the slot; otherwise null.
+// dedupeOwnDays (before or after the slot), another owner account used the same source post /
+// product / media file within dedupeOwnDays, or the same topic/search term on the slot's KST day;
+// otherwise null.
 function findDuplicate(accountId, keys, scheduledAt) {
   if (!isPersonaAccount(accountId) || !keys?.length) return null;
   const wanted = new Set(keys);
@@ -92,17 +128,66 @@ function findDuplicate(accountId, keys, scheduledAt) {
   }
   const others = personaAccountIds().filter(id => id !== Number(accountId));
   if (!others.length) return null;
-  const [start, end] = dayBounds(dayKeyKst(new Date(slotMs)));
+  const [dayStart, dayEnd] = dayBounds(dayKeyKst(new Date(slotMs)));
   const cross = db
     .prepare(
-      `SELECT account_id a, dedupe_keys k FROM posts WHERE account_id IN (${others.map(() => '?').join(',')}) AND dedupe_keys IS NOT NULL AND status IN ('pending','posted') AND scheduled_at>=? AND scheduled_at<?`
+      `SELECT account_id a, dedupe_keys k, scheduled_at s FROM posts WHERE account_id IN (${others.map(() => '?').join(',')}) AND dedupe_keys IS NOT NULL AND status IN ('pending','posted') AND scheduled_at>=? AND scheduled_at<?`
     )
-    .all(...others, start, end);
+    .all(...others, from, to);
   for (const r of cross) {
-    const hit = decodeKeys(r.k).find(k => wanted.has(k));
+    const sameDay = r.s >= dayStart && r.s < dayEnd;
+    const hit = decodeKeys(r.k).find(k => wanted.has(k) && (sameDay || MATERIAL_KEY.test(k)));
     if (hit) return { key: hit, scope: 'cross', accountId: Number(r.a) };
   }
   return null;
+}
+
+// ---------- near-duplicate text ----------
+// Character-bigram Jaccard over Hangul/alnum only. Calibrated on the 2026-10-14 queue: real repeats
+// (same lip-balm story twice on one account, the same source rewritten on two accounts) scored
+// 0.23-0.33, unrelated posts <= 0.20.
+const SIMILAR_TEXT_THRESHOLD = 0.22;
+function bigrams(text) {
+  const s = String(text || '').replace(/[^0-9a-zA-Z가-힣]/g, '');
+  const out = new Set();
+  for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
+  return out;
+}
+function textSimilarity(a, b) {
+  const A = bigrams(a),
+    B = bigrams(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+// { scope, accountId, postId, score } when a post of ANY owner account within dedupeOwnDays of the
+// slot reads like this text; null otherwise (and always for customer accounts).
+function findSimilarText(accountId, text, scheduledAt, { threshold = SIMILAR_TEXT_THRESHOLD, excludeId = null } = {}) {
+  if (!isPersonaAccount(accountId) || !String(text || '').trim()) return null;
+  const slotMs = Date.parse(scheduledAt || '') || Date.now();
+  const days = Math.max(1, accountPersonaSettings().dedupeOwnDays);
+  const from = new Date(slotMs - days * 86400000).toISOString();
+  const to = new Date(slotMs + days * 86400000).toISOString();
+  const ids = personaAccountIds();
+  const rows = db
+    .prepare(
+      `SELECT id, account_id a, text FROM posts WHERE account_id IN (${ids.map(() => '?').join(',')}) AND status IN ('pending','posted') AND scheduled_at>=? AND scheduled_at<?`
+    )
+    .all(...ids, from, to);
+  let best = null;
+  for (const r of rows) {
+    if (excludeId && Number(r.id) === Number(excludeId)) continue;
+    const score = textSimilarity(text, r.text);
+    if (score >= threshold && (!best || score > best.score))
+      best = {
+        scope: Number(r.a) === Number(accountId) ? 'own' : 'cross',
+        accountId: Number(r.a),
+        postId: Number(r.id),
+        score,
+      };
+  }
+  return best;
 }
 
 // Filters handed to the material engine so a duplicate or off-persona source is skipped before
@@ -149,7 +234,8 @@ function chooseFrameFor(accountId, random = Math.random) {
 }
 
 function duplicateError(dup) {
-  const err = new Error(`중복 상품/키워드 (${dup.scope} #${dup.accountId} ${dup.key}) → 이 슬롯 생성 생략`);
+  const what = dup.key ? dup.key : `비슷한 글 #${dup.postId} (${Number(dup.score || 0).toFixed(2)})`;
+  const err = new Error(`중복 상품/키워드/글 (${dup.scope} #${dup.accountId} ${what}) → 이 슬롯 생성 생략`);
   err.code = 'DUPLICATE_TOPIC';
   return err;
 }
@@ -158,10 +244,15 @@ module.exports = {
   decideSlotKind,
   dayMix,
   slotKind,
+  videoPostsOnDay,
+  videoAllowed,
   dedupeKeysFor,
   encodeKeys,
   decodeKeys,
   findDuplicate,
+  textSimilarity,
+  findSimilarText,
+  SIMILAR_TEXT_THRESHOLD,
   generationFilters,
   frameCounts,
   chooseFrameFor,

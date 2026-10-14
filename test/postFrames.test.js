@@ -119,7 +119,8 @@ test('postWriter: owner product posts get a frame block + price, recipes and cus
     db.prepare('DELETE FROM posts').run();
     const owner = await generatePost(3, { ...base, analysis: { mode: 'product', topic: '배수구', vision: {} } });
     assert.ok(['A', 'B'].includes(owner.frame));
-    assert.ok(calls.at(-1).system.includes(frames.FRAMES[owner.frame].block));
+    assert.ok(calls.at(-1).system.includes(frames.FRAMES[owner.frame].block.split('{{OPENING_HINT}}')[0]));
+    assert.ok(!calls.at(-1).system.includes('{{OPENING_HINT}}'), 'opening hint filled in');
     assert.match(calls.at(-1).user, /쿠팡 상품 가격:5900원/);
     assert.equal(owner.grounding.price, 5900);
 

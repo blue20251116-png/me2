@@ -3,7 +3,7 @@
 const { normalizeVoice, voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('../content/voicePolicy');
 const { pickPersona } = require('../content/personas');
 const { accountPersonaFor, bannedPhrasesFor } = require('../content/accountPersonas');
-const { FRAMES } = require('../content/postFrames');
+const { frameBlock } = require('../content/postFrames');
 const { chooseFrameFor } = require('./accountMix');
 const { personaScores } = require('../content/personaStats');
 const { callAiText, clean } = require('./aiCalls');
@@ -139,7 +139,7 @@ async function generatePost(accountId, { material, analysis, product, target }) 
     `너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 아래 문체 정책에 따라 원 소재를 가장 바이럴한 각도로 재구성한다.
 
 ${voiceGuide(persona.block)}
-${frame ? `\n${FRAMES[frame].block}\n` : ''}
+${frame ? `\n${frameBlock(frame)}\n` : ''}
 [레시피]
 - 본문 text는 위 문체 정책대로 가장 강한 후킹 포인트를 중심으로 재구성한다. 다만 재료/조리법 같은 레시피 사실은 원문 근거를 벗어나지 않는다.
 - 정확한 제휴 소스/핵심재료 이름은 본문에서 숨긴다.
