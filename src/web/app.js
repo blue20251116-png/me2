@@ -78,6 +78,7 @@ function createApp() {
   app.use(require('./routes/content'));
   app.use(require('./routes/posts'));
   app.use(require('./routes/threads'));
+  app.use(require('./routes/xdrafts'));
   return app;
 }
 
