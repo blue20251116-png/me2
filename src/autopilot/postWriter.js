@@ -2,10 +2,16 @@
 // Writing the Threads body and comment lead in the persona voice, recipe comment repair, secret-ingredient scrubbing.
 const { normalizeVoice, voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('../content/voicePolicy');
 const { pickPersona } = require('../content/personas');
-const { accountPersonaFor, bannedPhrasesFor } = require('../content/accountPersonas');
+const { accountPersonaFor, accountPersonaSettings, bannedPhrasesFor } = require('../content/accountPersonas');
 const { frameBlock } = require('../content/postFrames');
 const { chooseFrameFor } = require('./accountMix');
-const { personaScores } = require('../content/personaStats');
+const {
+  personaScores,
+  lastPersonaFor,
+  personaDiagnostics,
+  pickPersonaAngle,
+  buildPersonaReflectionBlock,
+} = require('../content/personaStats');
 const { callAiText, clean } = require('./aiCalls');
 
 // Replaces the secret term only as a standalone word (not inside 소금물/마늘빵), remapping a trailing
@@ -69,10 +75,10 @@ function normalizeThreadsLayout(text) {
 async function rewriteThreadsTone(
   accountId,
   text,
-  { mode, material, comment = false, visualEvidence = '', frame = null, grounding = null }
+  { mode, material, comment = false, visualEvidence = '', frame = null, grounding = null, personaId = null }
 ) {
   if (comment && !String(text || '').trim()) return '';
-  const bannedPhrases = bannedPhrasesFor(accountId);
+  const bannedPhrases = bannedPhrasesFor(accountId, personaId);
   return reviewSourceVoice(
     text,
     {
@@ -107,7 +113,7 @@ async function repairRecipeComment(accountId, { commentLead, material, analysis,
   return fixed;
 }
 
-async function generatePost(accountId, { material, analysis, product, target }) {
+async function generatePost(accountId, { material, analysis, product, target, lastPersona: prevPersona }) {
   const productName = clean(product?.name);
   const personaText = [
     analysis.topic,
@@ -118,10 +124,28 @@ async function generatePost(accountId, { material, analysis, product, target }) 
   ]
     .filter(Boolean)
     .join(' ');
-  // Owner accounts listed in config/accountPersonas.json are one fixed person; everyone else keeps
-  // the per-post weighted pick.
+  // Owner accounts rotate through the writing persona pool weighted by published post views/replies
+  // (and never repeat recent <1,000-view personas) when rotatePersonas is enabled; when false, they
+  // use their single fixed persona.
   const fixed = accountPersonaFor(accountId);
-  const persona = fixed || pickPersona({ mode: analysis.mode, text: personaText, scores: personaScores(accountId) });
+  const rotate = accountPersonaSettings().rotatePersonas;
+  const scores = personaScores(accountId);
+  const diag = rotate || !fixed ? personaDiagnostics(accountId) : null;
+  const angle = diag?.under1000 ? pickPersonaAngle(accountId) : null;
+  const lastPersona = rotate || !fixed ? prevPersona || lastPersonaFor(accountId) : null;
+  const persona =
+    fixed && !rotate
+      ? fixed
+      : pickPersona({
+          mode: analysis.mode,
+          text: personaText,
+          scores,
+          lastPersona,
+          excludePersonas: diag?.excludePersonas || [],
+          expandPoolWhenUnder1000: Boolean(diag?.under1000),
+          extraPersona: fixed,
+        });
+  const reflectionBlock = diag?.under1000 ? buildPersonaReflectionBlock(diag, angle) : '';
   // Fixed-persona product posts also get a post-structure frame (postFrames.js), alternated per
   // account; grounding = the only facts a store/authority/price claim may come from.
   const frame = fixed && analysis.mode === 'product' ? chooseFrameFor(accountId) : null;
@@ -132,13 +156,13 @@ async function generatePost(accountId, { material, analysis, product, target }) 
       }
     : null;
   console.log(
-    `[AutopilotV3][PERSONA] ${fixed ? 'fixed' : 'picked'}="${persona.name}"(${persona.id}) mode=${analysis.mode}${frame ? ` frame=${frame}` : ''}`
+    `[AutopilotV3][PERSONA] ${fixed && !rotate ? 'fixed' : 'rotated'}="${persona.name}"(${persona.id}) prev=${lastPersona || '-'} under1000=${diag?.under1000 ? `yes(streak=${diag.lowViewStreak},last=${diag.lastViews ?? '-'},angle=${angle?.id || '-'})` : 'no'} score=${Math.round(scores[persona.id]?.score || 0)} mode=${analysis.mode}${frame ? ` frame=${frame}` : ''}`
   );
   const d = await callAiText(
     accountId,
     `너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 아래 문체 정책에 따라 원 소재를 가장 바이럴한 각도로 재구성한다.
 
-${voiceGuide(persona.block)}
+${voiceGuide(persona.block)}${reflectionBlock}
 ${frame ? `\n${frameBlock(frame)}\n` : ''}
 [레시피]
 - 본문 text는 위 문체 정책대로 가장 강한 후킹 포인트를 중심으로 재구성한다. 다만 재료/조리법 같은 레시피 사실은 원문 근거를 벗어나지 않는다.
@@ -182,6 +206,7 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     visualEvidence: analysis.vision?.evidence,
     frame,
     grounding,
+    personaId: persona.id,
   });
   if (analysis.mode !== 'recipe' && commentLead) {
     try {
@@ -191,6 +216,7 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
         material,
         comment: true,
         visualEvidence: analysis.vision?.evidence,
+        personaId: persona.id,
       });
     } catch (e) {
       if (e.code !== 'CONTENT_STYLE_REJECTED') throw e;
@@ -198,7 +224,7 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     }
   }
   if (analysis.mode === 'recipe') text = scrubSecret(text, analysis.secretTerm, productName, '이거');
-  const bannedPhrases = bannedPhrasesFor(accountId);
+  const bannedPhrases = bannedPhrasesFor(accountId, persona.id);
   text = assertVoice(text, {
     mode: analysis.mode,
     ...(bannedPhrases.length ? { bannedPhrases } : {}),

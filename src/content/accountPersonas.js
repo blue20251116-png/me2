@@ -296,6 +296,9 @@ const DEFAULT_CONFIG = {
   // true: each owner account posts on its own fixed lattice (start offset spread across the hour,
   // constant period inside the gap range) so the accounts never bunch into the same minutes.
   staggerAccounts: false,
+  // true (2026-10-16): owner accounts rotate through the writing persona pool weighted by published
+  // post view/reply scores (personaStats.js) and never repeat the previous post's persona.
+  rotatePersonas: false,
 };
 
 let cachedConfig = null;
@@ -334,6 +337,7 @@ function normalizeConfig(raw = {}) {
     maxDailyPerDay: num(raw.maxDailyPerDay, d.maxDailyPerDay, 0, 50),
     maxVideoPerDay: raw.maxVideoPerDay == null ? Math.floor(dailyPostsMax / 3) : num(raw.maxVideoPerDay, 0, 0, 50),
     staggerAccounts: raw.staggerAccounts == null ? d.staggerAccounts : raw.staggerAccounts === true,
+    rotatePersonas: raw.rotatePersonas == null ? d.rotatePersonas : raw.rotatePersonas === true,
     gapMinutesMin,
     gapMinutesMax: num(raw.gapMinutesMax, d.gapMinutesMax, gapMinutesMin, 720),
     activeStartHour,
@@ -364,12 +368,15 @@ function accountPersonaSettings() {
 }
 
 // Phrases a draft for this account must not contain: the stock lines plus every OTHER fixed
-// persona's signature phrases. Empty for accounts without a fixed persona (behaviour unchanged).
-function bannedPhrasesFor(accountId) {
+// persona's signature phrases. When a shared rotating persona (reaction, curiosity, etc.) is
+// explicitly passed as personaId, STOCK_PHRASES (which come from those shared persona examples)
+// are allowed and only other owner accounts' signature phrases are blocked.
+function bannedPhrasesFor(accountId, personaId = null) {
   const own = accountPersonaFor(accountId);
   if (!own) return [];
   const otherIds = new Set(Object.values(loadConfig().accounts).filter(id => id !== own.id));
   const foreign = ACCOUNT_PERSONAS.filter(p => otherIds.has(p.id)).flatMap(p => p.signaturePhrases);
+  if (personaId && personaId !== own.id) return [...new Set(foreign)];
   return [...new Set([...STOCK_PHRASES, ...foreign])];
 }
 

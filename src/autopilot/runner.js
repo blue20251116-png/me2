@@ -464,7 +464,7 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
     if (similar) throw accountMix.duplicateError(similar);
     result.text = require('../content/voicePolicy').assertVoice(result.text, {
       mode: result.mode,
-      bannedPhrases: bannedPhrasesFor(account.id),
+      bannedPhrases: bannedPhrasesFor(account.id, result.persona),
       // Framed posts: re-check store/authority/price against the FINAL product (a later stage may swap it).
       ...(result.postFrame
         ? {

@@ -87,7 +87,7 @@ test("signature check: a draft with another owner account's phrase or a stock li
   assert.ok(!voiceProblems(draft(chichi)).includes('다른 계정 말투'));
 });
 
-test('postWriter: owner accounts always write as their fixed persona, customers keep the random pick', async () => {
+test('postWriter: owner accounts support both fixed persona mode and view-weighted rotating persona mode', async () => {
   const systems = [];
   const original = aiCalls.callAiText;
   aiCalls.callAiText = async (_id, system) => {
@@ -102,7 +102,9 @@ test('postWriter: owner accounts always write as their fixed persona, customers 
     product: { name: '바디로션' },
     target: '전체',
   };
+  const baseCfg = ap.accountPersonaSettings();
   try {
+    ap.setAccountPersonaConfig({ ...baseCfg, rotatePersonas: false });
     for (const id of OWNER_IDS) {
       for (let i = 0; i < 3; i++) {
         const out = await generatePost(id, args);
@@ -110,12 +112,20 @@ test('postWriter: owner accounts always write as their fixed persona, customers 
         assert.ok(systems.at(-1).includes(ap.accountPersonaFor(id).summary));
       }
     }
-    const randomIds = new Set(PERSONAS.map(p => p.id));
+    ap.setAccountPersonaConfig({ ...baseCfg, rotatePersonas: true });
+    const sharedIds = new Set(PERSONAS.map(p => p.id));
+    for (const id of OWNER_IDS) {
+      const first = await generatePost(id, { ...args, lastPersona: 'reaction' });
+      assert.notEqual(first.persona, 'reaction', 'never repeats lastPersona consecutively');
+      const second = await generatePost(id, { ...args, lastPersona: first.persona });
+      assert.notEqual(second.persona, first.persona, 'rotates to a different persona on the next post');
+    }
     for (const id of CUSTOMER_IDS) {
       const out = await generatePost(id, args);
-      assert.ok(randomIds.has(out.persona), `customer #${id} still uses the shared persona pool`);
+      assert.ok(sharedIds.has(out.persona), `customer #${id} still uses the shared persona pool`);
     }
   } finally {
+    ap.setAccountPersonaConfig(baseCfg);
     aiCalls.callAiText = original;
     delete require.cache[require.resolve('../src/autopilot/postWriter')];
   }

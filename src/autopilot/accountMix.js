@@ -195,10 +195,12 @@ function findSimilarText(accountId, text, scheduledAt, { threshold = SIMILAR_TEX
 function generationFilters(accountId, scheduledAt) {
   const persona = accountPersonaFor(accountId);
   if (!persona) return {};
+  const rotate = accountPersonaSettings().rotatePersonas;
   return {
     materialFilter(material) {
       const text = `${material?.sourceText || material?.text || ''}\n${material?.authorReplies || ''}`;
-      if (persona.skipMaterial && persona.skipMaterial.test(text)) return `persona ${persona.id} 소재 아님`;
+      if (!rotate && persona.skipMaterial && persona.skipMaterial.test(text))
+        return `persona ${persona.id} 소재 아님`;
       const dup = findDuplicate(accountId, dedupeKeysFor({ sourceUrl: material?.url }), scheduledAt);
       return dup ? `중복 소재 ${dup.scope} #${dup.accountId} ${dup.key}` : null;
     },

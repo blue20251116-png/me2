@@ -5,6 +5,13 @@ const { searchFoodPhotos: searchPixabay } = require('../integrations/pixabayApi'
 const { voiceGuide, assertVoice, planningLeakLines, stripLeadingPlanningLines } = require('./voicePolicy');
 const { pickPersona, PERSONAS } = require('./personas');
 const { accountPersonaFor, bannedPhrasesFor } = require('./accountPersonas');
+const {
+  personaScores,
+  lastPersonaFor,
+  personaDiagnostics,
+  pickPersonaAngle,
+  buildPersonaReflectionBlock,
+} = require('./personaStats');
 const { callAI, callAIJson, imageBlock } = require('../integrations/aiClient');
 const REACTION_PERSONA = PERSONAS.find(p => p.id === 'reaction');
 
@@ -420,7 +427,10 @@ async function pickDailyPhoto(accountId, text) {
 }
 
 async function generateFixedPersonaDailyStory(accountId, target, persona) {
-  const system = buildDailyStorySystemPrompt(persona.block, persona);
+  const diag = personaDiagnostics(accountId);
+  const angle = diag?.under1000 && diag.recentLowPosts?.length ? pickPersonaAngle(accountId) : null;
+  const reflection = angle ? buildPersonaReflectionBlock(diag, angle) : '';
+  const system = buildDailyStorySystemPrompt(persona.block, persona) + reflection;
   const bannedPhrases = bannedPhrasesFor(accountId);
   const recent = recentDailyOpenings(accountId);
   let lastError = null;
@@ -479,9 +489,17 @@ async function generateDailyStory(accountId, target, { requirePhoto = false } = 
       persona: fixed.id,
     };
   }
-  const persona = pickPersona({ mode: 'lifestyle', text: '' });
+  const diag = personaDiagnostics(accountId);
+  const angle = diag?.under1000 ? pickPersonaAngle(accountId) : null;
+  const persona = pickPersona({
+    mode: 'lifestyle',
+    text: '',
+    scores: personaScores(accountId),
+    lastPersona: lastPersonaFor(accountId),
+    excludePersonas: diag?.excludePersonas || [],
+  });
   console.log(`[ContentOnly][DailyStory] persona picked="${persona.name}"(${persona.id})`);
-  const system = buildDailyStorySystemPrompt(persona.block);
+  const system = buildDailyStorySystemPrompt(persona.block) + (diag?.under1000 ? buildPersonaReflectionBlock(diag, angle) : '');
   let text = await callAiText(
     accountId,
     system,

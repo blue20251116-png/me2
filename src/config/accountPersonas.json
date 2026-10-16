@@ -19,5 +19,6 @@
   "activeStartHour": 8,
   "activeEndHour": 23,
   "dedupeOwnDays": 7,
-  "staggerAccounts": true
+  "staggerAccounts": true,
+  "rotatePersonas": true
 }

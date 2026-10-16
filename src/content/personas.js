@@ -131,9 +131,50 @@ function personaWeights(pool, scores = {}) {
 }
 
 // scores: optional { [personaId]: { posts, score } } from personaStats.personaScores(accountId).
-function pickPersona({ mode, text, scores, random = Math.random } = {}) {
+// lastPersona: optional persona id used on the previous post of this account; excluded when pool > 1
+// so consecutive posts always switch persona.
+// excludePersonas: optional ordered list of recent <1,000-view persona ids; excluded in order while
+// at least one candidate remains so an account under 1,000 views never ping-pongs between two personas.
+// expandPoolWhenUnder1000: when true and category is 'recipe', also allow 'curiosity' and 'empathy'
+// so recipe posts have 4 distinct voices to rotate through when views are under 1,000.
+// extraPersona: optional account-specific persona; included in the pool only if its view score is at
+// least the pool's known average (so underperforming fixed personas are automatically dropped).
+function pickPersona({
+  mode,
+  text,
+  scores,
+  lastPersona = null,
+  excludePersonas = [],
+  expandPoolWhenUnder1000 = false,
+  extraPersona = null,
+  random = Math.random,
+} = {}) {
   const category = detectPersonaCategory({ mode, text });
-  const pool = personasForCategory(category);
+  let pool = personasForCategory(category);
+  if (expandPoolWhenUnder1000 && category === 'recipe') {
+    const extraShared = PERSONAS.filter(
+      p => (p.id === 'curiosity' || p.id === 'empathy') && !pool.some(x => x.id === p.id)
+    );
+    pool = [...pool, ...extraShared];
+  }
+  if (extraPersona && !pool.some(p => p.id === extraPersona.id)) {
+    const known = pool.filter(p => (scores?.[p.id]?.posts || 0) >= MIN_SAMPLES);
+    const mean = known.length ? known.reduce((s, p) => s + scores[p.id].score, 0) / known.length : 0;
+    const extraStats = scores?.[extraPersona.id];
+    const has1000Hit = (extraStats?.over1000Count || 0) > 0 || (extraStats?.maxViews || 0) >= 1000;
+    if (extraStats && extraStats.posts >= MIN_SAMPLES && (has1000Hit || (extraStats.score >= mean && mean > 0))) {
+      pool = [...pool, extraPersona];
+    }
+  }
+  const toExclude = [
+    ...(lastPersona ? [lastPersona] : []),
+    ...(Array.isArray(excludePersonas) ? excludePersonas : []),
+  ];
+  for (const exId of new Set(toExclude)) {
+    if (pool.length <= 1) break;
+    const filtered = pool.filter(p => p.id !== exId);
+    if (filtered.length) pool = filtered;
+  }
   const weights = personaWeights(pool, scores);
   let r = random(),
     persona = pool[pool.length - 1];
@@ -144,9 +185,9 @@ function pickPersona({ mode, text, scores, random = Math.random } = {}) {
       break;
     }
   }
-  // Every writer gets a few real top-performing benchmark posts of the same category after the
-  // persona block, so the voice follows what actually works on the accounts we benchmark.
-  const examples = examplesFor(category, { classify: detectPersonaCategory, random });
+  // Every writer gets a few real top-performing similar posts (prioritizing 1만~100만 views) after the
+  // persona block, so the voice and structure follow what works for similar topics.
+  const examples = examplesFor(category, { classify: detectPersonaCategory, queryText: text, random });
   return examples.length ? { ...persona, block: persona.block + examplesBlock(examples) } : persona;
 }
 
