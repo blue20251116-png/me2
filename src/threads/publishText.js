@@ -18,13 +18,16 @@ function stripStrayDashArtifacts(text) {
     .join('\n');
 }
 // Pictograph emoji are banned in posts (they hurt reach); text reactions like ㅋㅋ/ㄷㄷ/ㅠㅠ/;; stay.
-function stripEmoji(text) {
+// The affiliate REPLY keeps exactly two markers of its fixed product-comment layout
+// (docs/CONTENT_STYLE_RULES.md: "✅ point" lines and "내가 본 건 이거👇"), 2026-10-21.
+const REPLY_MARKERS = new Set(['✅', '👇']);
+function stripEmoji(text, { keepReplyMarkers = false } = {}) {
   // Also strips the emoji variation selector and zero-width joiner that multi-part emoji leave behind.
   return String(text || '')
     .split('\n')
     .map(line =>
       line
-        .replace(/[\p{Extended_Pictographic}️‍]/gu, '')
+        .replace(/[\p{Extended_Pictographic}️‍]/gu, ch => (keepReplyMarkers && REPLY_MARKERS.has(ch) ? ch : ''))
         .replace(/[ \t]{2,}/g, ' ')
         .trim()
     )
@@ -33,11 +36,12 @@ function stripEmoji(text) {
 // Order matters: (1) trim ., ; glued to the end of URLs (would break the link), (2) drop formal
 // sentence-final periods, including when a reaction follows directly ("대박.ㅋㅋ"), while keeping
 // decimals (1.5) and ellipses (...), (3) strip emoji last, since step 2 needs to see "대박.😊".
-function sanitizePublishedThreadsText(value) {
+function sanitizePublishedThreadsText(value, { keepReplyMarkers = false } = {}) {
   return stripEmoji(
     stripStrayDashArtifacts(String(value || ''))
       .replace(/https?:\/\/\S+/gi, m => m.replace(/[.,;]+$/, ''))
-      .replace(/(^|[^.\d])\.(?!\.)(?=\s|$|\p{Extended_Pictographic}|[ㅋㅎㅜㅠㄷ~!?;])/gu, '$1')
+      .replace(/(^|[^.\d])\.(?!\.)(?=\s|$|\p{Extended_Pictographic}|[ㅋㅎㅜㅠㄷ~!?;])/gu, '$1'),
+    { keepReplyMarkers }
   )
     .replace(/[ \t]+\n/g, '\n')
     .trim();
@@ -52,7 +56,7 @@ function replyLinkStyle() {
   return String(process.env.THREADS_REPLY_LINK_STYLE || 'bare').toLowerCase() === 'full' ? 'full' : 'bare';
 }
 function prepareReplyLinks(value, style = replyLinkStyle()) {
-  const text = sanitizePublishedThreadsText(value);
+  const text = sanitizePublishedThreadsText(value, { keepReplyMarkers: true });
   const seen = new Set();
   let linkCount = 0;
   const out = text

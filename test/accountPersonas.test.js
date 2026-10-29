@@ -415,3 +415,70 @@ test('staggered schedule: 7 owner accounts on distinct offsets, 50-60 min gaps, 
   assert.deepEqual(offsets, [0, 8, 16, 24, 31, 39, 47]);
   pinBaseConfig();
 });
+
+// 2026-10-21 persona revision: a rotating shared style is anchored to the account's one person, and
+// "나만 …" self-ID questions (lowest-view shape on these accounts) are rejected.
+test('identity anchor carries the fixed person facts and the real-person rules', () => {
+  const solo = ap.ACCOUNT_PERSONAS.find(p => p.id === 'acct-solo-officetel');
+  const block = ap.identityAnchorBlock(solo);
+  assert.match(block, /혼자 산다/);
+  assert.match(block, /이 사람 생활에 없으면 쓰지 않고/);
+  assert.ok(block.includes(ap.REAL_PERSON_RULES));
+  assert.equal(ap.identityAnchorBlock(null), '');
+  for (const p of ap.ACCOUNT_PERSONAS) assert.ok(p.block.includes(ap.REAL_PERSON_RULES), p.id);
+});
+
+test('self-ID questions with 나만 are a voice problem; ordinary questions are not', () => {
+  for (const t of ['설거지 미루는 거 나만 이래?', '이거 나만 몰랐던 거 아니지?', '나만 그런가 싶었음'])
+    assert.ok(voiceProblems(t, { mode: 'product' }).includes('상투적 표현'), t);
+  assert.ok(!voiceProblems('설거지 미루는 중\n\n다들 몰아서 해 바로 해?', { mode: 'product' }).includes('상투적 표현'));
+});
+
+// 2026-10-30 (marketing plan 5, owner reset order): morning-heavy slot template, spread text-only
+// daily posts, and "남편" only on the one persona that lives with a husband.
+test('slot template: fixed KST times per account, a few minutes apart, gaps never under 50 min', () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '../src/config/accountPersonas.json'), 'utf8'));
+  ap.setAccountPersonaConfig(cfg);
+  try {
+    for (const id of OWNER_IDS) {
+      const step = slots.chainStepper(id, 16, 0, () => 0, slots.personaChainOptions(id));
+      const day = [];
+      for (let i = 0; i < 60; i++) {
+        const d = step();
+        if (!d) break;
+        if (slots.dayKeyKst(d) === slots.addDay(slots.dayKeyKst(), 1)) day.push(d.getTime());
+      }
+      assert.equal(day.length, 16, `account ${id}`);
+      for (let i = 1; i < day.length; i++) assert.ok(day[i] - day[i - 1] >= 50 * 60000, `account ${id} gap ${i}`);
+      const hour = t => new Date(t + 9 * 3600000).getUTCHours();
+      assert.ok(day.filter(t => hour(t) >= 8 && hour(t) <= 10).length >= 3, `account ${id} morning`);
+    }
+  } finally {
+    ap.setAccountPersonaConfig(null);
+  }
+});
+
+test('daily posts spread through the day instead of three in a row', () => {
+  const kinds = [];
+  let linked = 0,
+    plain = 0,
+    daily = 0;
+  for (let i = 0; i < 16; i++) {
+    const k = mix.decideSlotKind({ linked, plain, daily, maxLinked: 5, maxDaily: 3, dailyCap: 16 });
+    kinds.push(k);
+    if (k === 'linked') linked++;
+    else if (k === 'daily') daily++;
+    else plain++;
+  }
+  assert.equal(kinds.filter(k => k === 'daily').length, 3);
+  const at = kinds.map((k, i) => (k === 'daily' ? i : -1)).filter(i => i >= 0);
+  assert.ok(at[1] - at[0] >= 2 && at[2] - at[1] >= 2, kinds.join(' '));
+});
+
+test('only a persona living with a husband may write "남편"', () => {
+  for (const id of OWNER_IDS) {
+    const p = ap.accountPersonaFor(id);
+    assert.equal(ap.bannedPhrasesFor(id).includes('남편'), !/남편/.test(p.family), p.id);
+  }
+  assert.equal(OWNER_IDS.filter(id => /남편/.test(ap.accountPersonaFor(id).family)).length, 1);
+});

@@ -140,12 +140,54 @@ function buildLinkComment(account, prefix, link, maxLength = 450) {
   return comment;
 }
 
+// Product (non-recipe) affiliate comment, docs/CONTENT_STYLE_RULES.md section 1 (2026-10-21):
+//   one-line take
+//
+//   ✅ point (2-3 lines, only when the writer gave them)
+//
+//   내가 본 건 이거👇
+//   <link>
+//
+//   [광고] <Coupang Partners disclosure>
+// The writer's commentLead supplies the one-liner (first line) and the points (next lines). Recipe
+// comments never use this template (they keep buildLinkComment's recipe layout).
+const PRODUCT_LINK_INTRO = '내가 본 건 이거👇';
+function isRecipeComment(post, prefix) {
+  const mode = String(post?.content_mode || '');
+  if (/^product/.test(mode)) return false;
+  return /^recipe/.test(mode) || /(🥘|🍳|재료|만드는\s*법|조리\s*법)/.test(prefix);
+}
+function buildProductLinkComment(prefix, link, maxLength = 450) {
+  const cap = Math.min(450, Math.max(1, Number(maxLength) || 450));
+  const l = extractFirstHttpUrl(link);
+  if (!l) throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');
+  const disclosure = isCoupangLink(l) ? `[광고] ${DEFAULT_COUPANG_DISCLOSURE}` : '';
+  const tail = [`${PRODUCT_LINK_INTRO}\n${l}`, disclosure].filter(Boolean).join('\n\n');
+  if (tail.length > cap) throw new Error('쿠팡 링크 자체가 너무 길어 댓글을 만들 수 없습니다: ' + tail.length + '자');
+  const lines = sanitizeCommentPrefix(prefix)
+    .split('\n')
+    .map(x => x.replace(/^[✅▪•·\-–—*\s]+/, '').trim())
+    .filter(Boolean);
+  const lead = lines[0] || '';
+  let points = lines.slice(1, 4).map(x => `✅ ${x}`);
+  const render = () => [lead, points.join('\n'), tail].filter(Boolean).join('\n\n');
+  let out = render();
+  while (out.length > cap && points.length) {
+    points = points.slice(0, -1);
+    out = render();
+  }
+  if (out.length > cap) out = tail;
+  return out;
+}
+
 async function buildCommentText(account, post) {
   // A '-nolink' post (owner accounts' link-free recipe slot, autopilot/runner.js) is link-free on purpose.
   const linkFreeByDesign = /-nolink$/.test(String(post.content_mode || ''));
   if (hasCoupangKeys(account) && post.recipe_comment_text && !post.link && !linkFreeByDesign)
     throw new Error('쿠팡 자동댓글 링크가 비어 있어 댓글 발행을 중단했습니다');
   if (!post.link) return compactRecipePrefix(sanitizeCommentPrefix(post.recipe_comment_text || ''), 450);
+  if (!isRecipeComment(post, post.recipe_comment_text || ''))
+    return buildProductLinkComment(post.recipe_comment_text || '', post.link, 450);
   return buildLinkComment(account, post.recipe_comment_text || '', post.link, 450);
 }
 
@@ -153,6 +195,7 @@ module.exports = {
   hasCoupangKeys,
   isCoupangLink,
   buildLinkComment,
+  buildProductLinkComment,
   buildCommentText,
   DEFAULT_COUPANG_DISCLOSURE,
 };

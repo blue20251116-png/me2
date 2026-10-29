@@ -20,9 +20,19 @@ const { chooseFrame } = require('../content/postFrames');
 // 16/day, 5 linked, 1 daily -> L U U D L U U L U U L U U L U U.
 function decideSlotKind({ linked = 0, plain = 0, daily = 0, maxLinked = 5, maxDaily = 1, dailyCap = 16 } = {}) {
   const total = linked + plain + daily;
-  if (daily < maxDaily && total >= 3) return 'daily';
+  // Several daily posts are spread through the day (with maxDaily 1 this is the old "4th post").
+  if (daily < maxDaily && total >= 3 && daily * Math.max(1, dailyCap) <= total * maxDaily) return 'daily';
   if (linked < maxLinked && linked * Math.max(1, dailyCap) <= total * maxLinked) return 'linked';
   return 'unlinked';
+}
+
+// 2026-10-21 (owner: "각 게시물당 쿠팡 링크가 안들어가는 문제도 해결해"): 198 owner-account product
+// posts (10/14-10/20) went out as 'product-nolink' with no Coupang comment at all, because an
+// 'unlinked' slot dropped the link for products too. A product post now always carries its Partners
+// link; only a recipe may still go out link-free, and only when the config caps linked posts below
+// the daily volume (accountPersonas.json maxLinkedPerDay).
+function linkFreeAllowed(kind, mode) {
+  return kind === 'unlinked' && mode === 'recipe';
 }
 
 function dayMix(accountId, dayKey) {
@@ -199,8 +209,7 @@ function generationFilters(accountId, scheduledAt) {
   return {
     materialFilter(material) {
       const text = `${material?.sourceText || material?.text || ''}\n${material?.authorReplies || ''}`;
-      if (!rotate && persona.skipMaterial && persona.skipMaterial.test(text))
-        return `persona ${persona.id} 소재 아님`;
+      if (!rotate && persona.skipMaterial && persona.skipMaterial.test(text)) return `persona ${persona.id} 소재 아님`;
       const dup = findDuplicate(accountId, dedupeKeysFor({ sourceUrl: material?.url }), scheduledAt);
       return dup ? `중복 소재 ${dup.scope} #${dup.accountId} ${dup.key}` : null;
     },
@@ -244,6 +253,7 @@ function duplicateError(dup) {
 
 module.exports = {
   decideSlotKind,
+  linkFreeAllowed,
   dayMix,
   slotKind,
   videoPostsOnDay,

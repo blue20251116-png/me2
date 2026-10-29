@@ -338,7 +338,7 @@ ${
 - 이 글에는 상품, 브랜드, 가격, 링크, 레시피 계량이 하나도 없다. 위 인물의 하루 중 사소한 순간, 작은 고백, 솔직한 감정 하나를 쓴다.
 - 읽는 사람이 자기 생활로 바로 답할 수 있게 끝낸다: 양자택일, 방법 공유, 공감 확인 질문 중 하나, 또는 질문 없이 여운만 남겨도 된다.
 - 전문가·지인 출처, 통계, 효능, 뉴스 같은 사실 주장은 넣지 않는다. 날씨·날짜도 단정하지 않는다.
-- 2~6줄, 120자 안팎으로 짧게 쓴다.
+- 2~5줄, 100자 이내로 짧게 쓴다.
 `
     : ''
 }
@@ -499,7 +499,8 @@ async function generateDailyStory(accountId, target, { requirePhoto = false } = 
     excludePersonas: diag?.excludePersonas || [],
   });
   console.log(`[ContentOnly][DailyStory] persona picked="${persona.name}"(${persona.id})`);
-  const system = buildDailyStorySystemPrompt(persona.block) + (diag?.under1000 ? buildPersonaReflectionBlock(diag, angle) : '');
+  const system =
+    buildDailyStorySystemPrompt(persona.block) + (diag?.under1000 ? buildPersonaReflectionBlock(diag, angle) : '');
   let text = await callAiText(
     accountId,
     system,

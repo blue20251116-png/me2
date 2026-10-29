@@ -20,7 +20,7 @@ for (const id of [...OWNER_IDS, ...CUSTOMER_IDS])
   db.prepare('INSERT OR IGNORE INTO accounts (id,label) VALUES (?,?)').run(id, `acct${id}`);
 
 const FRAME_A_POST =
-  '쿠팡 뒤지다가 미친 가성비 칫솔 발견함ㄷㄷ\n\n70년 전통 장인이 만든 칫솔인데 2천 원인 거 실화임? ;;\n\n보이면 무조건 쟁여둠!!';
+  '쿠팡 뒤지다가 미친 가성비 칫솔 발견함ㄷㄷ\n\n70년 전통 장인이 만든 칫솔인데 2개입인 거 실화임? ;;\n\n보이면 무조건 쟁여둠!!';
 const GROUNDED = { evidence: '70년 전통 장인이 만든 칫솔 2개입', price: 2000 };
 
 test('frame choice alternates per account (fewer-used frame next, 50:50 on a tie)', () => {
@@ -95,13 +95,13 @@ test('frame A allows "미친 가성비/실화임/무조건 쟁여" but keeps eve
   assert.ok(voiceProblems(FRAME_A_POST, { frame: 'B', grounding: GROUNDED }).includes('상투적 표현'));
   const hype = '쿠팡 뒤지다가 미친 가성비 발견함\n\n이건 진짜 인생템임\n\n보이면 무조건 쟁여둠!!';
   assert.ok(voiceProblems(hype, { frame: 'A', grounding: GROUNDED }).includes('광고 문구'));
-  const readerCta = '쿠팡 뒤지다가 미친 가성비 발견함\n\n2천 원인 거 실화임?\n\n너도 한번 사봐';
+  const readerCta = '쿠팡 뒤지다가 미친 가성비 발견함\n\n2개입인 거 실화임?\n\n너도 한번 사봐';
   assert.ok(voiceProblems(readerCta, { frame: 'A', grounding: GROUNDED }).includes('뻔한 CTA 마무리'));
-  const bait = '쿠팡 뒤지다가 미친 가성비 발견함\n\n2천 원인 거 실화임?\n\n궁금하면 댓글 달아줘';
+  const bait = '쿠팡 뒤지다가 미친 가성비 발견함\n\n2개입인 거 실화임?\n\n궁금하면 댓글 달아줘';
   assert.ok(voiceProblems(bait, { frame: 'A', grounding: GROUNDED }).includes('참여 낚시'));
 });
 
-test('postWriter: owner product posts get a frame block + price, recipes and customers get none', async () => {
+test('postWriter: owner product posts get a frame block and no price, recipes and customers get none', async () => {
   const calls = [];
   const original = aiCalls.callAiText;
   aiCalls.callAiText = async (_id, system, user) => {
@@ -121,7 +121,7 @@ test('postWriter: owner product posts get a frame block + price, recipes and cus
     assert.ok(['A', 'B'].includes(owner.frame));
     assert.ok(calls.at(-1).system.includes(frames.FRAMES[owner.frame].block.split('{{OPENING_HINT}}')[0]));
     assert.ok(!calls.at(-1).system.includes('{{OPENING_HINT}}'), 'opening hint filled in');
-    assert.match(calls.at(-1).user, /쿠팡 상품 가격:5900원/);
+    assert.ok(!/5900/.test(calls.at(-1).user), 'price never reaches the writer');
     assert.equal(owner.grounding.price, 5900);
 
     const recipe = await generatePost(3, { ...base, analysis: { mode: 'recipe', topic: '배수구', vision: {} } }).catch(
@@ -141,4 +141,13 @@ test('postWriter: owner product posts get a frame block + price, recipes and cus
     aiCalls.callAiText = original;
     delete require.cache[require.resolve('../src/autopilot/postWriter')];
   }
+});
+
+test('owner rule 2026-10-24: any price in a Threads post or comment is flagged', () => {
+  const { priceMention, voiceProblems: vp } = require('../src/content/voicePolicy');
+  for (const t of ['2천 원짜리 하나 삼', '15650원이라 놀람', '7천원대인데', '3만원 넘게 씀', '가격 보고 놀람', '이 값이면 진작 살 걸'])
+    assert.ok(priceMention(t), t);
+  for (const t of ['4시간 재우기', '믹스 4개 넣음', '3원칙만 지킴', '30cm짜리 깔고 누움']) assert.ok(!priceMention(t), t);
+  assert.ok(vp('퇴근하고 바닥에 누움\n\n17700원이라 두 번 봄').includes('가격 언급'));
+  assert.ok(vp('가격은 3천원대', { comment: true }).includes('가격 언급'));
 });

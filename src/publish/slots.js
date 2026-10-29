@@ -35,7 +35,14 @@ function personaChainOptions(accountId) {
     // 2026-10-14 (user: the 7 owner accounts all posted inside the same ~20 minutes every hour):
     // each account gets its own start offset spread evenly across one period.
     stagger: !!c.staggerAccounts,
-    offsetMin: Math.round((idx * (c.gapMinutesMin + c.gapMinutesMax)) / 2 / Math.max(1, ids.length)),
+    // 2026-10-30 (marketing plan 5, owner reset order): optional fixed KST slot times (minutes of the
+    // day) so the morning 8-10 gets the most posts and 22h gets two; accounts then sit a few minutes
+    // apart (slotStaggerMinutes) instead of spread over a whole period.
+    template: c.slotTemplateMinutes && c.slotTemplateMinutes.length ? c.slotTemplateMinutes : null,
+    offsetMin:
+      c.slotTemplateMinutes && c.slotTemplateMinutes.length
+        ? idx * c.slotStaggerMinutes
+        : Math.round((idx * (c.gapMinutesMin + c.gapMinutesMax)) / 2 / Math.max(1, ids.length)),
   };
 }
 // Staggered owner-account schedule: slot k of a KST day sits at
@@ -43,6 +50,12 @@ function personaChainOptions(accountId) {
 // so consecutive slots are always gapMin..gapMax apart and two accounts keep their offset distance
 // (minus at most 2*jitter) all day instead of drifting into the same minutes.
 function latticeSlot(accountId, opts, day, k) {
+  if (opts.template) {
+    // Template mode: slot k is the k-th template time plus this account's offset, no jitter, so the
+    // template's own gaps (50/60 min) hold exactly. Past the last template time there is no slot.
+    if (k >= opts.template.length) return Infinity;
+    return kstMidnight(day).getTime() + (opts.template[k] + opts.offsetMin) * 60000;
+  }
   const period = (opts.gapMin + opts.gapMax) / 2;
   const j = Math.floor((opts.gapMax - opts.gapMin) / 4);
   const jitter = j ? (accountHash(accountId, `${day}:${k}`) % (2 * j + 1)) - j : 0;

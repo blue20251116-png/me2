@@ -11,7 +11,7 @@ const { publicUploadUrl } = require('../config/publicUrl');
 const { db, getAccount, getUserById } = require('../infra/db');
 const coupangApi = require('../integrations/coupangApi');
 const { generateRecipe: generateContentOnlyRecipe, generateDailyStory } = require('../content/contentOnlyAutomation');
-const { accountPersonaFor, bannedPhrasesFor } = require('../content/accountPersonas');
+const { accountPersonaFor, bannedPhrasesFor, accountPersonaSettings } = require('../content/accountPersonas');
 const accountMix = require('./accountMix');
 const { buildAutopilotPost } = require('./pipeline');
 const { importThreadsVideo } = require('../threads/mediaImporter');
@@ -113,10 +113,13 @@ async function runContentOnlyAutopilot(account, target, scheduledAt = null) {
 // one goes out only with a photo attached (generateDailyStory's stock-photo search) and only if it
 // does not read like another recent owner-account post. Returns false when no such post could be
 // made; the caller then fills the slot with a link-free recipe/product post instead.
+// 2026-10-30 (marketing plan 5: reference accounts' top posts are 20% text-only, ours 0%):
+// accountPersonas.json dailyWithPhoto=false makes these text-only posts again.
 async function runDailyStoryAutopilot(account, target, scheduledAt = null) {
+  const withPhoto = accountPersonaSettings().dailyWithPhoto;
   let r;
   try {
-    r = await generateDailyStory(account.id, target, { requirePhoto: true });
+    r = await generateDailyStory(account.id, target, { requirePhoto: withPhoto });
   } catch (e) {
     if (isAiBudgetOrCreditError(e)) throw e;
     console.log(
@@ -124,7 +127,7 @@ async function runDailyStoryAutopilot(account, target, scheduledAt = null) {
     );
     return false;
   }
-  if (!r?.imageUrl) {
+  if (withPhoto && !r?.imageUrl) {
     console.log(`[자동발행 예약][PERSONA DAILY] account #${account.id} 사진 없음 → 레시피/상품 글로 대체`);
     return false;
   }
@@ -139,7 +142,7 @@ async function runDailyStoryAutopilot(account, target, scheduledAt = null) {
     accountId: account.id,
     text: r.text,
     link: null,
-    imageUrl: r.imageUrl,
+    imageUrl: withPhoto ? r.imageUrl : null,
     extraImageUrl: null,
     videoUrl: null,
     recipeCommentText: null,
@@ -148,7 +151,9 @@ async function runDailyStoryAutopilot(account, target, scheduledAt = null) {
     contentMode: 'daily',
   });
   recordAutopilotLast(account.id, r.keyword, target);
-  console.log(`[자동발행 예약][PERSONA DAILY] account #${account.id} persona=${r.persona} link=no photo=yes`);
+  console.log(
+    `[자동발행 예약][PERSONA DAILY] account #${account.id} persona=${r.persona} link=no photo=${withPhoto ? 'yes' : 'no'}`
+  );
   return true;
 }
 // Link-free recipe posts keep their recipe comment, but the comment written for a linked post hides
@@ -478,11 +483,12 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
     });
     dedupeKeys = accountMix.encodeKeys(keys);
   }
-  // Owner accounts' 'unlinked' slots: the same material post, published without the Coupang link
-  // (the daily linked cap is maxLinkedPerDay). A recipe keeps its recipe comment with the key
-  // ingredient named; a product post gets no comment.
-  const unlinked = kind === 'unlinked';
+  // Owner accounts' 'unlinked' slots: only a RECIPE may go out without the Coupang link (it keeps its
+  // recipe comment with the key ingredient named). A product post always gets its Partners link in the
+  // comment (accountMix.linkFreeAllowed, 2026-10-21) - it is never queued without one.
+  const unlinked = accountMix.linkFreeAllowed(kind, result.mode);
   const affiliateLink = unlinked ? null : await makeAffiliateLink(account, result);
+  if (!unlinked && !affiliateLink) throw new Error('쿠팡 파트너스 링크가 비어 있어 예약을 만들지 않았습니다');
   const media = await chooseSourceMedia(
     result,
     persona

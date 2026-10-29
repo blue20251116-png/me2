@@ -2,7 +2,12 @@
 // Writing the Threads body and comment lead in the persona voice, recipe comment repair, secret-ingredient scrubbing.
 const { normalizeVoice, voiceGuide, formatVoice, assertVoice, reviewSourceVoice } = require('../content/voicePolicy');
 const { pickPersona } = require('../content/personas');
-const { accountPersonaFor, accountPersonaSettings, bannedPhrasesFor } = require('../content/accountPersonas');
+const {
+  accountPersonaFor,
+  accountPersonaSettings,
+  bannedPhrasesFor,
+  identityAnchorBlock,
+} = require('../content/accountPersonas');
 const { frameBlock } = require('../content/postFrames');
 const { chooseFrameFor } = require('./accountMix');
 const {
@@ -133,7 +138,7 @@ async function generatePost(accountId, { material, analysis, product, target, la
   const diag = rotate || !fixed ? personaDiagnostics(accountId) : null;
   const angle = diag?.under1000 ? pickPersonaAngle(accountId) : null;
   const lastPersona = rotate || !fixed ? prevPersona || lastPersonaFor(accountId) : null;
-  const persona =
+  const picked =
     fixed && !rotate
       ? fixed
       : pickPersona({
@@ -145,6 +150,10 @@ async function generatePost(accountId, { material, analysis, product, target, la
           expandPoolWhenUnder1000: Boolean(diag?.under1000),
           extraPersona: fixed,
         });
+  // 2026-10-21: a rotating shared style on an owner account is still written by that account's one
+  // person (identityAnchorBlock), so e.g. a parenting style never gives a childless account a kid.
+  const persona =
+    fixed && picked.id !== fixed.id ? { ...picked, block: `${picked.block}\n${identityAnchorBlock(fixed)}` } : picked;
   const reflectionBlock = diag?.under1000 ? buildPersonaReflectionBlock(diag, angle) : '';
   // Fixed-persona product posts also get a post-structure frame (postFrames.js), alternated per
   // account; grounding = the only facts a store/authority/price claim may come from.
@@ -176,10 +185,10 @@ ${frame ? `\n${frameBlock(frame)}\n` : ''}
 [일반상품/생활]
 - 본문 text는 위 문체 정책대로 원문에서 가장 강한 포인트 하나를 중심으로 재구성한다. 확인되지 않은 사실은 새로 만들지 않는다.
 - 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.
-- commentLead는 확인된 정보 하나를 자연스러운 반말 1~2문장으로 보충한다. 추가 정보가 없으면 빈 문자열로 둔다.
+- commentLead 첫 줄은 이 물건에 대한 짧고 자연스러운 반말 한마디다. 그다음 줄부터 [Threads 원문]·[작성자 추가댓글]·쿠팡 상품명으로 확인되는 포인트 2~3개를 한 줄에 하나씩 짧게 쓴다(기호·이모지 없이, 줄 앞 표시는 코드가 붙인다). 확인된 포인트가 없으면 한마디만 쓴다. 추가 정보가 전혀 없으면 빈 문자열로 둔다. 링크·광고고지·가격(금액)은 쓰지 않는다.
 
 JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
-    `타겟:${target || '전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm || productName}\n쿠팡 상품:${productName}${frame ? `\n쿠팡 상품 가격:${grounding.price ? `${grounding.price}원` : '(정보 없음 — 가격 언급 금지)'}` : ''}\n판매대상:${analysis.vision?.soldObject || '-'} / 요리:${analysis.vision?.dish || '-'}\n[시각 근거]\n${analysis.vision?.evidence || '(없음)'}\n[Threads 원문]\n${material.sourceText.slice(0, 5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0, 5000) || '(없음)'}`,
+    `타겟:${target || '전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm || productName}\n쿠팡 상품:${productName}\n가격:본문과 commentLead 어디에도 가격·금액을 쓰지 않는다\n판매대상:${analysis.vision?.soldObject || '-'} / 요리:${analysis.vision?.dish || '-'}\n[시각 근거]\n${analysis.vision?.evidence || '(없음)'}\n[Threads 원문]\n${material.sourceText.slice(0, 5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0, 5000) || '(없음)'}`,
     { maxTokens: 2800, temperature: 0.65 }
   );
   let text = normalizeThreadsLayout(d.text || ''),
