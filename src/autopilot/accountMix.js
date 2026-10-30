@@ -21,7 +21,9 @@ const { chooseFrame } = require('../content/postFrames');
 function decideSlotKind({ linked = 0, plain = 0, daily = 0, maxLinked = 5, maxDaily = 1, dailyCap = 16 } = {}) {
   const total = linked + plain + daily;
   // Several daily posts are spread through the day (with maxDaily 1 this is the old "4th post").
-  if (daily < maxDaily && total >= 3 && daily * Math.max(1, dailyCap) <= total * maxDaily) return 'daily';
+  // 10/day, 3 daily -> the 4th, 6th and 8th posts (never two in a row).
+  const dailyStep = Math.max(1, Math.floor((Math.max(1, dailyCap) - 3) / Math.max(1, maxDaily)));
+  if (daily < maxDaily && total >= 3 + daily * dailyStep) return 'daily';
   if (linked < maxLinked && linked * Math.max(1, dailyCap) <= total * maxLinked) return 'linked';
   return 'unlinked';
 }

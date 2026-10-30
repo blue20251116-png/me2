@@ -441,17 +441,19 @@ test('slot template: fixed KST times per account, a few minutes apart, gaps neve
   ap.setAccountPersonaConfig(cfg);
   try {
     for (const id of OWNER_IDS) {
-      const step = slots.chainStepper(id, 16, 0, () => 0, slots.personaChainOptions(id));
+      const step = slots.chainStepper(id, cfg.dailyPostsMax, 0, () => 0, slots.personaChainOptions(id));
       const day = [];
       for (let i = 0; i < 60; i++) {
         const d = step();
         if (!d) break;
         if (slots.dayKeyKst(d) === slots.addDay(slots.dayKeyKst(), 1)) day.push(d.getTime());
       }
-      assert.equal(day.length, 16, `account ${id}`);
+      assert.equal(day.length, cfg.slotTemplate.length, `account ${id}`);
       for (let i = 1; i < day.length; i++) assert.ok(day[i] - day[i - 1] >= 50 * 60000, `account ${id} gap ${i}`);
       const hour = t => new Date(t + 9 * 3600000).getUTCHours();
-      assert.ok(day.filter(t => hour(t) >= 8 && hour(t) <= 10).length >= 3, `account ${id} morning`);
+      const morning = day.filter(t => hour(t) >= 8 && hour(t) <= 10).length;
+      const midday = day.filter(t => hour(t) >= 11 && hour(t) <= 21).length;
+      assert.ok(morning >= 4 && midday <= morning, `account ${id} morning ${morning} midday ${midday}`);
     }
   } finally {
     ap.setAccountPersonaConfig(null);
@@ -463,8 +465,8 @@ test('daily posts spread through the day instead of three in a row', () => {
   let linked = 0,
     plain = 0,
     daily = 0;
-  for (let i = 0; i < 16; i++) {
-    const k = mix.decideSlotKind({ linked, plain, daily, maxLinked: 5, maxDaily: 3, dailyCap: 16 });
+  for (let i = 0; i < 10; i++) {
+    const k = mix.decideSlotKind({ linked, plain, daily, maxLinked: 5, maxDaily: 3, dailyCap: 10 });
     kinds.push(k);
     if (k === 'linked') linked++;
     else if (k === 'daily') daily++;
