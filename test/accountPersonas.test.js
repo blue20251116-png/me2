@@ -209,6 +209,34 @@ test("slotKind reads the slot's KST day from the DB and is null for customer acc
   clearPosts();
 });
 
+test('maxDailyPerDayByAccount caps text-only posts for listed accounts only', () => {
+  ap.setAccountPersonaConfig({
+    accounts: LIVE_ACCOUNTS,
+    dailyPostsMin: 10,
+    dailyPostsMax: 10,
+    maxLinkedPerDay: 5,
+    maxDailyPerDay: 3,
+    maxDailyPerDayByAccount: { 3: 1 },
+  });
+  assert.equal(ap.accountPersonaSettings().maxDailyPerDayByAccount[3], 1);
+  clearPosts();
+  const at = '2026-10-14T09:00:00.000Z';
+  for (const id of [1, 3]) {
+    insertPost(id, { scheduledAt: '2026-10-13T23:00:00.000Z', link: 'https://link.coupang.com/a' });
+    insertPost(id, { scheduledAt: '2026-10-13T23:50:00.000Z' });
+    insertPost(id, { scheduledAt: '2026-10-14T00:40:00.000Z', link: 'https://link.coupang.com/b' });
+    db.prepare(
+      `INSERT INTO posts (account_id,text,scheduled_at,status,content_mode) VALUES (?,'d','2026-10-14T01:30:00.000Z','posted','daily')`
+    ).run(id);
+    insertPost(id, { scheduledAt: '2026-10-14T03:30:00.000Z' });
+    insertPost(id, { scheduledAt: '2026-10-14T06:00:00.000Z', link: 'https://link.coupang.com/c' });
+  }
+  // 6 posts, 1 daily: account 1 (cap 3) is due its 2nd daily, account 3 (cap 1) is not.
+  assert.equal(mix.slotKind(1, at), 'daily');
+  assert.notEqual(mix.slotKind(3, at), 'daily');
+  clearPosts();
+});
+
 test('volume: owner accounts target 4-5 posts/day inside 08-23 KST; customers keep plan targets', () => {
   pinBaseConfig();
   assert.equal(slots.targetForAccount({ id: 1, user_id: 1 }), 5);

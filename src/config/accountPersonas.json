@@ -13,6 +13,7 @@
   "dailyPostsMax": 10,
   "maxLinkedPerDay": 5,
   "maxDailyPerDay": 3,
+  "maxDailyPerDayByAccount": { "3": 1, "11": 1, "14": 1 },
   "maxVideoPerDay": 5,
   "gapMinutesMin": 50,
   "gapMinutesMax": 60,

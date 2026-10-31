@@ -440,6 +440,12 @@ function normalizeConfig(raw = {}) {
     dailyPostsMax,
     maxLinkedPerDay: num(raw.maxLinkedPerDay, d.maxLinkedPerDay, 0, 50),
     maxDailyPerDay: num(raw.maxDailyPerDay, d.maxDailyPerDay, 0, 50),
+    // Per-account override of maxDailyPerDay, e.g. {"3": 1} (10/31: text-only posts got ~4 views on 3 accounts).
+    maxDailyPerDayByAccount: Object.fromEntries(
+      Object.entries(raw.maxDailyPerDayByAccount || {})
+        .filter(([id]) => Number(id) > 0)
+        .map(([id, v]) => [Number(id), num(v, d.maxDailyPerDay, 0, 50)])
+    ),
     maxVideoPerDay: raw.maxVideoPerDay == null ? Math.floor(dailyPostsMax / 3) : num(raw.maxVideoPerDay, 0, 0, 50),
     staggerAccounts: raw.staggerAccounts == null ? d.staggerAccounts : raw.staggerAccounts === true,
     rotatePersonas: raw.rotatePersonas == null ? d.rotatePersonas : raw.rotatePersonas === true,

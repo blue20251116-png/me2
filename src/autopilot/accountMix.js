@@ -58,7 +58,7 @@ function slotKind(accountId, scheduledAt) {
   return decideSlotKind({
     ...dayMix(accountId, day),
     maxLinked: cfg.maxLinkedPerDay,
-    maxDaily: cfg.maxDailyPerDay,
+    maxDaily: cfg.maxDailyPerDayByAccount?.[Number(accountId)] ?? cfg.maxDailyPerDay,
     dailyCap: cfg.dailyPostsMax,
   });
 }
