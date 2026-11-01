@@ -171,17 +171,16 @@ test('hard format is a line-count ceiling - there is no per-line character limit
   assert.ok(policy.voiceProblems(tooManyLines).includes(`${policy.MAX_LINES}줄 초과`));
   assert.throws(() => policy.assertVoice(tooManyLines), { code: 'CONTENT_STYLE_REJECTED' });
 
-  // 2026-09-16: voiceGuide() now targets ~120 chars for the whole body (a Threads
-  // growth-tips post the account owner shared). MAX_BODY_CHARS (180) is a generous ceiling
-  // past that target, not the target itself - a post that finishes a sentence a bit over
-  // 120 must NOT be flagged, matching this file's own "don't cut a complete sentence to hit
+  // 2026-10-30 (marketing plan 5): voiceGuide() asks for at most 90 chars for the whole body.
+  // MAX_BODY_CHARS (100) leaves room past that target - a post that finishes a sentence a bit
+  // over 90 must NOT be flagged, matching this file's own "don't cut a complete sentence to hit
   // a count" principle for MAX_LINE_CHARS above.
   const finishesJustOverTarget =
-    '이 정리함 진짜 미쳤다 방 어질러놓는 게 습관이었는데 서랍 세 칸이 한 번에 정리되니까 너무 신기함 진짜 인정 친구가 알려준 건데 그날 바로 두 개 더 샀잖아 진짜 친구한테 감사인사 백만번 하고 싶은 심정임 진짜로 남편도 놀람ㅋㅋ';
+    '서랍 세 칸이 한 번에 정리되니까 신기함 방 어질러놓는 게 습관이었는데 그날 두 개 더 샀잖아 이번 주말엔 안방 옷장까지 해볼 생각인데 다들 옷장 정리는 어떻게 하는 편임?';
   assert.ok(
-    Array.from(finishesJustOverTarget).length > 120 &&
+    Array.from(finishesJustOverTarget).length > 90 &&
       Array.from(finishesJustOverTarget).length <= policy.MAX_BODY_CHARS,
-    `fixture must land between the 120-char target and MAX_BODY_CHARS: ${Array.from(finishesJustOverTarget).length}`
+    `fixture must land between the 90-char target and MAX_BODY_CHARS: ${Array.from(finishesJustOverTarget).length}`
   );
   assert.deepEqual(policy.voiceProblems(finishesJustOverTarget), []);
   assert.equal(policy.bodyTooLong(finishesJustOverTarget), false);
@@ -191,25 +190,23 @@ test('hard format is a line-count ceiling - there is no per-line character limit
   assert.ok(policy.voiceProblems(paddedPastTheCeiling).includes('본문 길이 초과'));
   assert.throws(() => policy.assertVoice(paddedPastTheCeiling), { code: 'CONTENT_STYLE_REJECTED' });
 
-  // Blank lines (voiceGuide()'s own paragraph-break rhythm) must not count toward the body
-  // length - only visible characters do. MAX_LINES caps a post at 13 newlines, so this packs
-  // content just under the 180-char ceiling across all 14 lines: content alone must stay under
-  // the ceiling, but content + newlines (13 extra chars) must not - the exact case bodyTooLong()
-  // exists to get right.
-  const contentOnly175 = '짧은문장'.repeat(50).slice(0, 175);
-  const linesOf175 = Array.from({ length: policy.MAX_LINES }, (_, i) =>
-    contentOnly175.slice(i * 13, (i + 1) * 13)
-  ).join('\n');
+  // 2026-10-30: line breaks now count toward the body length (marketing measures the post as
+  // people see it). This packs content just under the 100-char ceiling across all 14 lines:
+  // content alone stays under the ceiling, but content + 13 newlines goes over and is flagged.
+  const contentOnly175 = '짧은문장'.repeat(50).slice(0, 95);
+  const linesOf175 = Array.from({ length: policy.MAX_LINES }, (_, i) => contentOnly175.slice(i * 8, (i + 1) * 8)).join(
+    '\n'
+  );
   assert.equal(
     Array.from(linesOf175.replace(/\n/g, '')).length,
-    175,
+    95,
     'fixture content must stay under MAX_BODY_CHARS on its own'
   );
   assert.ok(
     linesOf175.length > policy.MAX_BODY_CHARS,
     'fixture must exceed MAX_BODY_CHARS only when newlines are counted'
   );
-  assert.equal(policy.bodyTooLong(linesOf175), false, 'newlines must not count toward body length');
+  assert.equal(policy.bodyTooLong(linesOf175), true, 'newlines count toward body length');
 
   assert.equal(count('가나다😀'), 4, 'emoji must count as one Unicode code point');
 });
@@ -835,7 +832,7 @@ test('the child-safety-hazard guard does not falsely trigger on ordinary "안전
   assert.deepEqual(policy.voiceProblems('위험한 느낌은 아닌데'), []);
   assert.deepEqual(policy.voiceProblems('전혀 다른 느낌이었음'), []);
   assert.deepEqual(policy.voiceProblems('완전 신기했음'), []);
-  assert.deepEqual(policy.voiceProblems('가격이 완전 착함'), []);
+  assert.deepEqual(policy.voiceProblems('구성이 완전 착함'), []);
 });
 
 test('cure-claim guard also catches 사라지다/가라앉다, not just 낫다/치료되다/없어짐', () => {
@@ -986,7 +983,7 @@ test('recipe comment reveal is conditional, not a global requirement', () => {
 });
 
 test('short posts are valid; ten lines are never mandatory', () => {
-  for (const text of ['이거 뭐임ㅋㅋ', '처음엔 평범했는데\n마지막이 미쳤음', '2천원으로 고민 끝']) {
+  for (const text of ['이거 뭐임ㅋㅋ', '처음엔 평범했는데\n마지막이 미쳤음', '30분으로 고민 끝']) {
     assertThreadsShape(policy.assertVoice(text));
   }
 });
@@ -1090,7 +1087,11 @@ test('the cliché guard flags the banned self-identification hooks ("~하는 사
     assert.ok(policy.voiceProblems(t).includes('상투적 표현'), `should flag: ${t}`);
   }
   for (const t of ['나야말로 몰랐네', '그래 나예요섬 가봤어?']) {
-    assert.deepEqual(policy.voiceProblems(t).filter(r => r === '상투적 표현'), [], `should not flag: ${t}`);
+    assert.deepEqual(
+      policy.voiceProblems(t).filter(r => r === '상투적 표현'),
+      [],
+      `should not flag: ${t}`
+    );
   }
 });
 
@@ -1127,7 +1128,7 @@ test('over-fragmented paragraphs are regrouped locally instead of discarding the
   const frag = [
     '남동생이 다이소 꿀템이라고 알려줌',
     '유모차 먼지 때문에 고민이었는데',
-    '2천원짜리로 끝냄',
+    '작은 걸로 끝냄',
     '옆에 엄마들이 어디서 샀냐고 물어봄',
     '한 통 더 사러 간다ㅋㅋ',
     '다들 이럴 때 어떻게 해?',

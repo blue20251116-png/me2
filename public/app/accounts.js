@@ -48,7 +48,7 @@ function renderAccountStrip() {
     )
     .join('');
 
-  if (accounts.length < 5) {
+  if (accounts.length < 20) { // 10/29 사장님: 5개 넘게 추가 (서버는 관리자 무제한, 일반 사용자는 플랜 한도로 막음)
     strip.innerHTML += `<button class="account-chip add-chip" id="addAccountChip">+ 계정 추가</button>`;
   }
 

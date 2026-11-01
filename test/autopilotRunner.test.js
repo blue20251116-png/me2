@@ -71,7 +71,15 @@ function harness({ generationError, preflightError, env = {} } = {}) {
       isRateLimitError: () => false,
       createDeeplink: async () => [],
     },
-    '../content/contentOnlyAutomation': { generateRecipe: async () => ({}) },
+    '../content/contentOnlyAutomation': { generateRecipe: async () => ({}), generateDailyStory: async () => ({}) },
+    // No fixed-persona accounts here: this harness covers the original controller behaviour.
+    '../content/accountPersonas': {
+      accountPersonaFor: () => null,
+      isPersonaAccount: () => false,
+      accountPersonaSettings: () => ({}),
+      bannedPhrasesFor: () => [],
+    },
+    './accountMix': {},
     './pipeline': { buildAutopilotPost: async () => ({}) },
     '../threads/mediaImporter': { importThreadsVideo: async () => ({}) },
     '../infra/isolatedTask': { getBrowserCircuitState: () => ({ open: false }), browserInfraFailure: () => false },

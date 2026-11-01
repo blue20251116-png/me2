@@ -4,3 +4,8 @@ uploads/
 .env
 .env.*
 *.log
+# Local backups and startup error logs (added 2026-10-16)
+*.err
+*.bak
+*.bak-*
+/datetime

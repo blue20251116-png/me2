@@ -3,14 +3,16 @@
 const { repairConnectorOnlyBreaks, regroupParagraphs } = require('./voiceLocalRepair');
 const { CONNECTOR_ONLY, DANGLING_PUNCTUATION_START, DANGLING_BOUND_NOUN_START } = require('./voiceLineGuards');
 const { PERSONAS } = require('./personas');
+const { bannedPhraseHits } = require('./accountPersonas');
+const { groundingProblems, relaxForFrame } = require('./postFrames');
 const DEFAULT_PERSONA_BLOCK = PERSONAS.find(p => p.id === 'reaction').block;
 const MAX_LINES = 14;
 // No per-line length limit: a complete sentence may be long. MAX_LINE_CHARS is only the merge
 // threshold voiceLocalRepair uses when stitching two broken half-lines back together.
 const MAX_LINE_CHARS = 40;
-// The prompt targets ~120 visible characters; this is a generous ceiling (1.5x) so finishing a
-// sentence slightly over target is fine. Over the ceiling goes through the AI repair loop.
-const MAX_BODY_CHARS = 180;
+// 2026-10-30 (marketing plan 5): the prompt asks for at most 100 visible characters; the ceiling
+// leaves 10 characters so finishing a sentence is fine. Over it goes through the AI repair loop.
+const MAX_BODY_CHARS = 100;
 const MAX_FORMAT_REPAIR_ATTEMPTS = 2;
 // Formulaic "you try it too" ad sign-off on the last lines, in any verb ("너도 써봐", "다들 한번
 // 드셔보세요", "여러분도 사용해보시기 바랍니다"). An address word (너도/다들/여러분도/다 같이…) is required:
@@ -56,7 +58,7 @@ ${personaBlock || DEFAULT_PERSONA_BLOCK}
 [스레드 알고리즘 기준 — 조회수는 문장이 아니라 아래 신호로 결정된다]
 스레드는 글을 먼저 일부 사람에게 보여주고, 그 사람들의 반응을 보고 더 멀리 퍼뜨릴지 정한다. 모든 문장은 아래 다섯 신호 중 하나 이상을 올리려고 존재한다.
 - 첫 줄(스크롤 정지): 피드에서 사실상 첫 줄만 보고 멈출지 넘길지 정한다. 첫 줄은 그 줄만 읽어도 상황이 그려지는 한 문장으로, 25자 안팎으로 짧게 쓴다. 인사말, 배경 설명, 상품명으로 첫 줄을 쓰지 않는다.
-- 답글(가장 큰 신호): 좋아요보다 답글과 답글 사이 대화가 훨씬 크게 반영된다. 사람들은 정답을 몰라도 자기 경험으로 바로 대답할 수 있을 때 답글을 단다. 그래서 질문을 넣는다면 상품을 안 써본 사람도 3초 안에 자기 얘기로 답할 수 있어야 한다: 양자택일("부먹파야 찍먹파야?"), 공감 확인("나만 이래?"), 방법 공유("다들 이럴 때 어떻게 해?"). "써보신 분?", "어떻게 생각해?"처럼 막연하거나 써본 사람만 답할 수 있는 질문은 답글이 안 붙는다.
+- 답글(가장 큰 신호): 좋아요보다 답글과 답글 사이 대화가 훨씬 크게 반영된다. 사람들은 정답을 몰라도 자기 경험으로 바로 대답할 수 있을 때 답글을 단다. 그래서 질문을 넣는다면 상품을 안 써본 사람도 3초 안에 자기 얘기로 답할 수 있어야 한다: 양자택일("부먹파야 찍먹파야?"), 공감 확인("다들 이거 원래 알았어?"), 방법 공유("다들 이럴 때 어떻게 해?"). "써보신 분?", "어떻게 생각해?"처럼 막연하거나 써본 사람만 답할 수 있는 질문은 답글이 안 붙는다.
 - 체류시간: 끝까지 읽게 만드는 글이 더 멀리 간다. 짧게 쓰되 다음 줄이 궁금하게 이어간다.
 - 리포스트·인용: "이거 우리 엄마한테 보여줘야 함" 싶은 공감 한 줄이나, 저장해두고 싶은 구체적인 꿀팁 한 줄이 있으면 퍼진다.
 - 광고 감지(감점): 상품이 글의 주인공이 되는 순간 광고로 읽히고 도달이 떨어진다. 글의 주인공은 사람·상황·반응이고 상품은 소품이다. 상품명, 스펙, 가격, 구매 권유, "추천/강추/내돈내산" 같은 판매 문구로 본문을 채우지 않는다.
@@ -64,9 +66,9 @@ ${personaBlock || DEFAULT_PERSONA_BLOCK}
 [실제로 조회수 수만~십만이 나오는 쇼핑 글의 공통 구조 — 이 순서를 기본으로 쓴다]
 1) 첫 줄: 누가 알려줬는지 또는 어디서 발견했는지 + 상황. 예) "말도 안 섞는 남동생이 이마트 꿀템이라고 알려줌", "매장 직원분한테 따라 배워왔어", "다이소 갔다가 2천원짜리로 고민 끝냄", "스레드에서 추천받아서 샀는데". 원문에 근거가 있는 사람·장소만 쓰고, 없으면 "나"의 상황으로 쓴다.
 2) 원래 고민·의심 한 줄이나, 다들 아는 비싼 대안과의 비교 한 줄: "유모차에 먼지 쌓일까 봐 걱정이었는데", "계란밥이 뭐 얼마나 다르겠어 했거든", "스탠바이미 뺨치는데", "카페에서 소금빵 안 사 먹게 됨".
-3) 숫자 하나: 가격(7천원대, 2천원짜리), 시간(4시간 재우기, 출근부터 퇴근까지), 양(믹스 4개). 원문·상품 정보에 있는 숫자만 쓴다.
+3) 숫자 하나: 시간(4시간 재우기, 출근부터 퇴근까지), 양(믹스 4개), 크기·개수. 원문·상품 정보에 있는 숫자만 쓴다. 가격·금액(N원, N천원대)은 본문과 댓글 어디에도 쓰지 않는다 (사장님 지시 2026-10-24).
 4) 마무리 중 하나: 주변 반응("옆에 엄마들이 어디서 샀냐고 물어봄"), 진행형("한 통 더 사러 간다ㅋㅋ"), 웃긴 과장 다짐("단종되면 시위할거임"), 내 방식을 단정하고 "맞지?"로 묻기(사람들이 맞다/아니다 답하고 싶어진다).
-전체는 2~4덩어리, 60~150자. 상품 이름과 장점 나열은 하지 않는다. 사진 속 물건이 상품이고, 글은 그걸 둘러싼 내 일상이다.
+전체는 2~3덩어리, 줄바꿈 포함 60~90자. 상품 이름과 장점 나열은 하지 않는다. 사진 속 물건이 상품이고, 글은 그걸 둘러싼 내 일상이다.
 - 위 캐릭터가 무엇이든, 이 글은 결국 SNS 스레드 바이럴 글이라는 걸 잊지 않는다. 첫 1~2줄에서 결과·정체·이유를 전부 다 보여주고 끝나면 후킹이 죽는다 — 그중 최소 하나는 일부러 남겨두고, 본문 중간에 궁금증을 유지하는 장치(예고, 반전, 숨겨둔 디테일 한 조각)를 넣어서 끝까지 읽게 만든다. 궁금증 유발형 캐릭터가 아니어도 이 정도의 "다음 줄을 읽게 만드는 여운"은 모든 페르소나에 공통으로 깔려 있어야 한다.
 - 센 표현은 써도 된다. 단, 내 경험이나 구체적인 장면에 붙인다: "나폴리 맛피아는 진짜 미친 사람인가;;", "대기업 파스타 소스 통틀어서 원탑임", "이거 단종되면 본사 찾아가서 시위할거임", "밖에서 파스타 사 먹는 짓 이제 평생 안 함". 읽는 사람에게 사라고 하는 판매 문구는 쓰지 않는다: "인생템/필수템/강추", "이거 하나면 다 해결", "없으면 못 살 듯", "꼭 써봐야 해", "한 번 먹으면 멈출 수 없음", "확인 필수". 이런 문구가 들어간 글은 광고로 읽혀서 노출이 줄고 사람들도 넘긴다. "나쁘지 않다", "그럭저럭" 같은 미지근한 말도 쓰지 않는다.
 - "이거"를 반복하지 않는다. 상품을 계속 "이거"로 가리키면 소개글처럼 읽힌다. 한 글에 "이거/이걸/이게"는 두 번까지만 쓴다.
@@ -74,7 +76,7 @@ ${personaBlock || DEFAULT_PERSONA_BLOCK}
   1) 숫자로 찍히는 구체적 디테일: "많이 좋아졌다" 대신 "2주 먹고 7키로", "매일 30번씩 한 달", "3초 컷" 처럼 정확한 수치로 증명한다. 원문에 수치 근거가 없으면 꾸며내지 않는다.
   2) 나 아닌 다른 사람의 반응으로 검증한다: 딸/남편/시어머니/조카/병원 선생님처럼 구체적인 인물이 놀라거나 알려주거나 반응한 걸 넣으면 신뢰도가 확 올라간다. 원문·댓글에 근거가 있을 때만 쓰고, 없는 사람·반응을 꾸며내지 않는다.
   3) 코믹한 자기 비하나 엉뚱한 남 탓으로 웃음을 만든다: 진짜 이유를 바로 말하지 않고 "바지가 이상한거야.. 바람이 잘못된거야.." 처럼 웃긴 핑계를 먼저 대는 오프닝도 좋은 선택지다.
-  4) 결과를 완벽하게 정리해서 끝내지 않고, 아직 헷갈리거나 진짜 궁금한 지점을 실제 질문으로 남긴다: "~해도 괜찮은 걸까?", "이거 나만 신경쓰이나?", "다들 이럴 때 어떻게 해?" 처럼 - 답을 다 아는 척 정리하는 글보다 이런 열린 질문이 댓글을 훨씬 많이 부른다. 질문은 한 개만, 마지막 줄에 둔다. 질문을 여러 개 늘어놓으면 설문지처럼 보여서 오히려 답글이 줄어든다.
+  4) 결과를 완벽하게 정리해서 끝내지 않고, 아직 헷갈리거나 진짜 궁금한 지점을 실제 질문으로 남긴다: "~해도 괜찮은 걸까?", "이거 다들 신경 안 쓰여?", "다들 이럴 때 어떻게 해?" 처럼 - 답을 다 아는 척 정리하는 글보다 이런 열린 질문이 댓글을 훨씬 많이 부른다. 질문은 한 개만, 마지막 줄에 둔다. 질문을 여러 개 늘어놓으면 설문지처럼 보여서 오히려 답글이 줄어든다.
   5) 이 글로 끝난 게 아니라 지금도 계속되고 있다는 인상을 준다: "더 빡세게 굴리는 중...", "요새 매일 ~해달라고 난리다" 처럼 현재진행형으로 여운을 남긴다.
 - 마무리는 셋 중 하나다: 주변 사람의 반응("옆에 엄마들이 어디서 샀냐고 물어봄", "남편 한 입 먹더니 또 해달래"), 지금도 이어지는 행동("한 통 더 사러 간다ㅋㅋ"), 누구나 답할 수 있는 가벼운 질문 하나. 질문은 필수가 아니다. 실제로 많이 퍼지는 글은 질문 없이 반응이나 숫자로 끝나는 경우가 더 많다.
 - 저위험 리액션, 비유, 연결 문장, 가벼운 상황 연출은 원문에 없어도 자유롭게 추가할 수 있다.
@@ -92,12 +94,12 @@ ${personaBlock || DEFAULT_PERSONA_BLOCK}
 - 줄을 끊기 전에 그 줄 끝 어절이 지금 문장에 속하는지 다음 문장에 속하는지 먼저 판단한다. 애매하면 문장/절 경계에서 끊는다.
 - 모든 줄은 그 줄만 읽어도 의미 단위가 자연스럽게 완결되어야 한다. 조사·접속사·수식어만 남기거나 다음 줄에 이어 붙여야 이해되는 줄바꿈은 금지한다.
 - 하나의 생각·장면이 1~3줄로 끝나면 그 덩어리 뒤에 빈 줄(줄바꿈 두 번)을 넣어 다음 생각과 구분한다. 특히 오프닝 훅(보통 1~3줄)이 끝나는 지점에는 거의 항상 빈 줄을 넣어 본문과 시각적으로 분리한다 — 이렇게 나눠야 보기 좋다. 실제 Threads 글 특유의 리듬은 이렇게 빈 줄로 문단을 나누는 데서 나온다. 한 생각 안에서는 억지로 빈 줄을 넣지 않는다. "문장 하나가 끝나면 줄을 바꾼다"는 규칙과 "생각 덩어리가 끝나면 빈 줄을 넣는다"는 규칙은 서로 다른 이야기다 — 문장 하나마다 매번 빈 줄까지 넣어서 문장을 전부 따로따로 떼어놓지 않는다. 이어지는 문장 2~3개가 같은 생각·장면을 이야기하면 그 사이는 빈 줄 없이 줄바꿈만으로 붙여서 한 덩어리로 묶고, 그 덩어리가 끝나는 지점에서만 빈 줄을 넣는다. 문장마다 전부 빈 줄로 떼어놓으면 사람이 쓴 글이 아니라 목록·기계가 뽑은 글처럼 보인다.
-- 본문은 짧을수록 좋다. 전체 글자수(줄바꿈 제외)는 120자 안팎을 목표로 한다 — 다만 글자수를 맞추려고 완결된 문장을 자르지 않는다. 한 문장이 끝나는 지점에서 목표치를 살짝 넘기는 건 괜찮지만, 글자수를 채우려고 불필요한 문장을 덧붙이지 않는다.
+- 본문은 짧을수록 좋다. 전체 글자수(줄바꿈 포함)는 90자 이내로 쓴다 (100자를 넘으면 발행하지 않는다) — 다만 글자수를 맞추려고 완결된 문장을 자르지 않는다. 한 문장이 끝나는 지점에서 90자를 살짝 넘기는 건 괜찮지만, 글자수를 채우려고 불필요한 문장을 덧붙이지 않는다.
 - 본문은 빈 줄을 포함해 최대 14줄이다. 짧게 끝나면 억지로 채우지 않는다.
 - 줄바꿈과 문단 사이 빈 줄은 모바일 읽기 리듬과 후킹의 일부다.
 - 마지막 줄은 정형화된 판매 CTA 대신 위에서 말한 반응·진행형·가벼운 질문 중 하나로 자연스럽게 끝낸다. "친구 태그해", "아는 사람 소환" 같은 태그 유도는 참여 낚시로 분류되므로 쓰지 않는다. 모든 글의 마무리를 동일한 문구로 반복하지 않는다.
-- "너도 해봐", "너도 도전해봐~😊", "너도 써봐!" 처럼 이모지 붙여서 마무리하는 뻔한 광고성 CTA는 절대 쓰지 않는다. 정말 참여를 유도하고 싶으면 오프닝 패턴 예시처럼 구체적인 반응형 문장("나만 몰랐던 거 아니지?", "다들 원래 알고 있었어?")으로 쓰거나, 아예 CTA 없이 감상만 남기고 끝내도 된다.
-- 기계가 쓴 티가 나는 스레드 상투어는 쓰지 않는다: "실화냐"(어떤 형태든), "이거 뭔데 이렇게", "이게 대체 뭐길래", "이거 뭐야", "이거 왜 이렇게", "미쳤다", "레전드", "이거 알던 사람 손", 그리고 "~하는 사람 나야 나", "그래 나예요", "나 말고 또 있나", "나 같은 사람", "나만 그런가" 같은 자기 지목 후킹(어떤 형태든). 이 표현들은 이미 너무 많은 글에서 반복돼서 읽는 순간 광고·자동생성 글로 보인다. 특히 첫 줄을 "이거"/"이게"로 시작하지 않는다 — 실제로 잘 터지는 글은 "우리 딸 굽은 등 보고 식겁했잖아", "시어머니가 밥할 때마다 계란을 같이 넣으시는데", "식빵 그냥 주면 거들떠도 안 봄" 처럼 누가·언제·무슨 상황인지부터 시작한다. 같은 계정에서 매번 비슷한 첫마디로 시작하지 않도록, 소재마다 첫 줄의 형태(상황 먼저 / 사람 반응 먼저 / 결과 먼저 / 자기 비하 개그 / 질문)를 바꿔 쓴다.
+- "너도 해봐", "너도 도전해봐~😊", "너도 써봐!" 처럼 이모지 붙여서 마무리하는 뻔한 광고성 CTA는 절대 쓰지 않는다. 정말 참여를 유도하고 싶으면 오프닝 패턴 예시처럼 구체적인 반응형 문장("다들 원래 알고 있었어?")으로 쓰거나, 아예 CTA 없이 감상만 남기고 끝내도 된다.
+- 기계가 쓴 티가 나는 스레드 상투어는 쓰지 않는다: "실화냐"(어떤 형태든), "이거 뭔데 이렇게", "이게 대체 뭐길래", "이거 뭐야", "이거 왜 이렇게", "미쳤다", "레전드", "이거 알던 사람 손", 그리고 "~하는 사람 나야 나", "그래 나예요", "나 말고 또 있나", "나 같은 사람", "나만 그런가", "나만 이래?", "나만 몰랐어?" 같은 자기 지목 후킹(어떤 형태든). 이 표현들은 이미 너무 많은 글에서 반복돼서 읽는 순간 광고·자동생성 글로 보인다. 특히 첫 줄을 "이거"/"이게"로 시작하지 않는다 — 실제로 잘 터지는 글은 "우리 딸 굽은 등 보고 식겁했잖아", "시어머니가 밥할 때마다 계란을 같이 넣으시는데", "식빵 그냥 주면 거들떠도 안 봄" 처럼 누가·언제·무슨 상황인지부터 시작한다. 같은 계정에서 매번 비슷한 첫마디로 시작하지 않도록, 소재마다 첫 줄의 형태(상황 먼저 / 사람 반응 먼저 / 결과 먼저 / 자기 비하 개그 / 질문)를 바꿔 쓴다.
 - 기존의 금지어 목록, 카테고리별 고정 문구, 후기형 템플릿, 획일적인 질문 CTA를 따르지 않는다.
 - 레시피/방법/제품명 등 댓글 공개가 자연스러운 소재만 핵심 일부를 본문에서 숨길 수 있다. 모든 글에 댓글 유도를 넣지 않는다.
 - 레시피 댓글은 실제 소재에 재료/조리 근거가 있을 때만 상세 레시피로 확장한다. 근거가 부족하면 없는 수치·재료·조리법을 만들어 형식을 채우지 않는다.
@@ -149,7 +151,8 @@ const CLICHE_OPENER = /^(?:이거|이게)\s*(?:진짜\s*|대체\s*|도대체\s*)
 const CLICHE_ANYWHERE = /실화(?:냐|임|야|인가|냐고|냐구|라니)/;
 // Self-identification hooks the user banned ("~하는 사람 나야 나", "그래 나예요", "나 말고 또 있나",
 // "나 같은 사람"): 139 of 5,531 posts used them after the 2026-10-04 persona examples, and they draw few views.
-const SELF_ID = /나\s*야\s*나|(?:그래|그게|여기)\s*나(?:예요|에요|임|야)(?![가-힣])|사람\s*(?:나임|여기\s*있음|접니다)|나\s*말고\s*(?:또\s*)?(?:있|없)|나\s*같은\s*사람|나만\s*그런(?:가|거)/;
+const SELF_ID =
+  /나\s*야\s*나|(?:그래|그게|여기)\s*나(?:예요|에요|임|야)(?![가-힣])|사람\s*(?:나임|여기\s*있음|접니다)|나\s*말고\s*(?:또\s*)?(?:있|없)|나\s*같은\s*사람|나만\s*(?:그런(?:가|거)|이래|그래\s*\?|이런\s*거|몰랐)/;
 function clichePhrasing(t) {
   const firstLine = (t.split('\n').find(l => l.trim()) || '').trim();
   return CLICHE_OPENER.test(firstLine) || CLICHE_ANYWHERE.test(t) || SELF_ID.test(t);
@@ -190,12 +193,53 @@ function overFragmentedParagraphs(t) {
     .filter(g => g.length);
   return groups.length >= 4 && groups.every(g => g.length === 1);
 }
-// Counts visible characters only; blank lines between paragraphs are not content.
+// 2026-10-30 (marketing plan 5 check): the limit is the whole body as people see it, line breaks
+// included (marketing counted 13 of 31 posts over 100 that the old visible-only count let through).
 function bodyTooLong(t) {
-  return t.replace(/\n/g, '').length > MAX_BODY_CHARS;
+  return Array.from(String(t).trim()).length > MAX_BODY_CHARS;
 }
-function voiceProblems(text, { comment = false } = {}) {
+// The writer's own planning note published as the post (2026-10-14, posts 6750/6753: "저녁 메뉴
+// 고민으로 간다. 최근 첫 줄(…)과 겹치지 않게.", "원룸 빨래 말리기로 골랐고, 최근 첫 줄과 겹치지 않게
+// 썼다."). A line that talks about the writing instead of the writer's life.
+const PLANNING_LEAK = [
+  /겹치지\s*않(?:게|도록)/,
+  /(?:최근|이전|직전|위)\s*첫\s*줄/,
+  /페르소나/,
+  /본문(?:만|은|을)\s*(?:출력|작성|쓴)/,
+  /(?:최근|이전|직전)\s*(?:글|게시물|첫마디)/,
+  /(?:소재|주제|글감)[^\n]{0,25}?(?:골랐|정했|잡았|선택했)/,
+  /(?:썼다|쓴다|쓰겠다|작성했다|작성한다)\s*[.。]\s*$/,
+  /(?:으로|로)\s*간다\s*[.。]\s*$/,
+];
+function planningLeakLines(text) {
+  return String(text || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l && PLANNING_LEAK.some(r => r.test(l)));
+}
+// Drops planning-note lines from the TOP of a draft (where the model puts them) plus the blank
+// lines after them. Lines further down are left for planningLeakLines() to reject.
+function stripLeadingPlanningLines(text) {
+  const lines = String(text || '').split('\n');
+  let i = 0;
+  while (i < lines.length && (!lines[i].trim() || PLANNING_LEAK.some(r => r.test(lines[i].trim())))) i++;
+  return lines.slice(i).join('\n').trim();
+}
+// Owner accounts (2026-10-14): 27 of 108 posts across all 7 accounts opened "쿠팡 뒤지다가 … 발견함ㄷㄷ".
+// The same opener on every account reads as one affiliate operation; it is banned for them.
+const COUPANG_DIG_OPENER = /쿠팡\s*(?:을|에서)?\s*(?:뒤지|뒤적이|뒤적거리|구경하|둘러보|검색하)(?:다가?|는데|던)/;
+function coupangOpener(t) {
+  return COUPANG_DIG_OPENER.test(t);
+}
+// bannedPhrases: per-account phrases that must not appear (accountPersonas.bannedPhrasesFor - the
+// stock lines and other fixed-persona accounts' signature phrases). Empty/absent for every other
+// account, so their checks are unchanged.
+// frame/grounding: fixed-persona accounts' framed product posts only (postFrames.js). frame 'A'
+// lets "실화임/미친 가성비/무조건 쟁여" through the cliché/hype checks; grounding rejects a store,
+// authority claim or price that the source post / Coupang product data does not contain.
+function voiceProblems(text, { comment = false, bannedPhrases = null, frame = null, grounding = null } = {}) {
   const t = normalizeVoice(text),
+    styleText = frame ? relaxForFrame(t, frame) : t,
     reasons = [];
   if (!t && !comment) reasons.push('empty');
   if (!comment) {
@@ -205,15 +249,26 @@ function voiceProblems(text, { comment = false } = {}) {
     if (lines.length && GENERIC_CTA_ENDING.test(lines.slice(-2).join(' '))) reasons.push('뻔한 CTA 마무리');
     if (missingParagraphBreak(t, lines)) reasons.push('문단 구분 없음');
     if (overFragmentedParagraphs(t)) reasons.push('문단 과다 분절');
-    if (clichePhrasing(t)) reasons.push('상투적 표현');
+    if (clichePhrasing(styleText)) reasons.push('상투적 표현');
     if (engagementBait(t)) reasons.push('참여 낚시');
-    if (adHype(t)) reasons.push('광고 문구');
+    if (adHype(styleText)) reasons.push('광고 문구');
     if (thisOveruse(t)) reasons.push('이거 반복');
     if (tooManyParagraphs(t)) reasons.push('문단 과다');
     if (bodyTooLong(t)) reasons.push('본문 길이 초과');
+    if (bannedPhraseHits(t, bannedPhrases).length) reasons.push('다른 계정 말투');
+    // bannedPhrases is set only for fixed-persona owner accounts.
+    if (Array.isArray(bannedPhrases) && bannedPhrases.length && coupangOpener(t)) reasons.push('쿠팡 발견 템플릿');
+    if (planningLeakLines(t).length) reasons.push('작성 메모 노출');
+    reasons.push(...groundingProblems(t, grounding));
   }
+  if (priceMention(t)) reasons.push('가격 언급');
   if (highRiskClaim(t)) reasons.push('고위험 효능 주장');
   return [...new Set(reasons)];
+}
+// Owner rule 2026-10-24: Threads posts and comments never state a price.
+const PRICE_MENTION_RE = /\d[\d,]*(?:\.\d+)?\s*(?:만|천)?\s*원(?!칙)|\d+\s*(?:만|천)\s*원?\s*대|가격|값이면/;
+function priceMention(text) {
+  return PRICE_MENTION_RE.test(String(text || ''));
 }
 function reject(reasons) {
   const error = new Error(`최종 문체 검증 실패: ${reasons.join(',')}`);
@@ -262,8 +317,8 @@ async function reviewSourceVoice(text, context = {}, request) {
     .slice(0, 12000);
   for (let attempt = 1; attempt <= MAX_FORMAT_REPAIR_ATTEMPTS && problems.length; attempt++) {
     const corrected = await request(
-      `${voiceGuide()}\n형식 교정 전용이다. 핵심 의미와 후킹은 보존하되, 글자수를 맞추려고 완결된 문장을 자르지 마라 — 한 줄이 길어도 그 자체로 완결된 문장/절이면 그대로 둔다. 한 줄에 여러 문장이 억지로 욱여넣어져 있을 때만 자연스러운 문장/절 경계에서 나눠라. 각 물리적 줄은 그 줄만 읽어도 자연스럽게 완결돼야 한다. 최대 ${MAX_LINES}줄(빈 줄 포함)이다. "문단 구분 없음"이 수정 대상에 있으면 매 줄마다 그냥 줄바꿈만 하지 말고, 1~3줄 단위의 생각 덩어리가 끝나는 지점마다 반드시 빈 줄(줄바꿈 두 번)을 넣어 다음 덩어리와 시각적으로 구분해라 — 한 줄씩 뚝뚝 끊어지는 형태로 만들지 마라. 단, 문장마다 전부 빈 줄을 넣으라는 뜻은 아니다 — 같은 생각을 이야기하는 문장 2~3개는 빈 줄 없이 줄바꿈만으로 묶어서 한 덩어리로 만들고, 그 덩어리가 끝나는 지점에서만 빈 줄을 넣어라. "문단 과다 분절"이 수정 대상에 있으면 바로 이 반대 실수다 — 지금 모든 줄이 각각 빈 줄로 따로 떨어져 있어서 목록처럼 보인다는 뜻이니, 서로 이어지는 문장들을 최소 2~3개씩 빈 줄 없이 한 덩어리로 합쳐서 덩어리 개수 자체를 줄여라. "상투적 표현"이 수정 대상에 있으면 "실화냐"류 표현과 "~하는 사람 나야 나/나 말고 또 있나/나 같은 사람" 같은 자기 지목 문장을 전부 없애고, 첫 줄을 "이거/이게 ~냐"식 감탄 대신 소재 속 구체적인 사람·상황·결과로 시작하게 다시 써라 — 내용과 후킹 포인트는 그대로 두고 말투만 바꾼다. "참여 낚시"가 수정 대상에 있으면 댓글·좋아요·팔로우·공유를 요구하거나 댓글을 대가로 정보를 주겠다는 문장을 지우고, 그 자리를 읽는 사람이 자기 경험으로 바로 답할 수 있는 질문 한 줄로 바꿔라. "광고 문구"가 수정 대상에 있으면 "대박/미쳐버림/장난 아님/인생템/강추/이거 하나면/없으면 못 살/꼭 써봐야/멈출 수 없음/확인 필수" 같은 과장 카피를 지우고, 그 자리를 실제 장면(누가 어떻게 반응했는지, 숫자 하나)으로 바꿔라. "이거 반복"이 수정 대상에 있으면 상품을 가리키는 "이거/이걸/이게"를 두 번 이하로 줄이고 나머지는 상황 묘사로 바꿔라. "문단 과다"가 수정 대상에 있으면 이어지는 문단을 합치거나 덜 중요한 문장을 빼서 ${MAX_PARAGRAPHS}덩어리 이하로 만들어라. 새 고위험 사실을 만들지 마라. JSON만 출력: {"text":""}`,
-      `[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}\n[교정 시도]\n${attempt}/${MAX_FORMAT_REPAIR_ATTEMPTS}`
+      `${voiceGuide()}\n형식 교정 전용이다. 핵심 의미와 후킹은 보존하되, 글자수를 맞추려고 완결된 문장을 자르지 마라 — 한 줄이 길어도 그 자체로 완결된 문장/절이면 그대로 둔다. 한 줄에 여러 문장이 억지로 욱여넣어져 있을 때만 자연스러운 문장/절 경계에서 나눠라. 각 물리적 줄은 그 줄만 읽어도 자연스럽게 완결돼야 한다. 최대 ${MAX_LINES}줄(빈 줄 포함)이다. "문단 구분 없음"이 수정 대상에 있으면 매 줄마다 그냥 줄바꿈만 하지 말고, 1~3줄 단위의 생각 덩어리가 끝나는 지점마다 반드시 빈 줄(줄바꿈 두 번)을 넣어 다음 덩어리와 시각적으로 구분해라 — 한 줄씩 뚝뚝 끊어지는 형태로 만들지 마라. 단, 문장마다 전부 빈 줄을 넣으라는 뜻은 아니다 — 같은 생각을 이야기하는 문장 2~3개는 빈 줄 없이 줄바꿈만으로 묶어서 한 덩어리로 만들고, 그 덩어리가 끝나는 지점에서만 빈 줄을 넣어라. "문단 과다 분절"이 수정 대상에 있으면 바로 이 반대 실수다 — 지금 모든 줄이 각각 빈 줄로 따로 떨어져 있어서 목록처럼 보인다는 뜻이니, 서로 이어지는 문장들을 최소 2~3개씩 빈 줄 없이 한 덩어리로 합쳐서 덩어리 개수 자체를 줄여라. "상투적 표현"이 수정 대상에 있으면 "실화냐"류 표현과 "~하는 사람 나야 나/나 말고 또 있나/나 같은 사람" 같은 자기 지목 문장을 전부 없애고, 첫 줄을 "이거/이게 ~냐"식 감탄 대신 소재 속 구체적인 사람·상황·결과로 시작하게 다시 써라 — 내용과 후킹 포인트는 그대로 두고 말투만 바꾼다. "참여 낚시"가 수정 대상에 있으면 댓글·좋아요·팔로우·공유를 요구하거나 댓글을 대가로 정보를 주겠다는 문장을 지우고, 그 자리를 읽는 사람이 자기 경험으로 바로 답할 수 있는 질문 한 줄로 바꿔라. "광고 문구"가 수정 대상에 있으면 "대박/미쳐버림/장난 아님/인생템/강추/이거 하나면/없으면 못 살/꼭 써봐야/멈출 수 없음/확인 필수" 같은 과장 카피를 지우고, 그 자리를 실제 장면(누가 어떻게 반응했는지, 숫자 하나)으로 바꿔라. "이거 반복"이 수정 대상에 있으면 상품을 가리키는 "이거/이걸/이게"를 두 번 이하로 줄이고 나머지는 상황 묘사로 바꿔라. "문단 과다"가 수정 대상에 있으면 이어지는 문단을 합치거나 덜 중요한 문장을 빼서 ${MAX_PARAGRAPHS}덩어리 이하로 만들어라. "다른 계정 말투"가 수정 대상에 있으면 [이 계정에서 쓰면 안 되는 문구]에 적힌 표현을 전부 없애고 같은 뜻을 다른 말로 쓴다. "근거 없는 장소/권위/가격"이 수정 대상에 있으면 그 매장 이름·권위·스펙·가격 표현을 지우고, 통합 소재에 실제로 있는 사실이나 이 인물의 일상 상황(장 보다가, 출근길에, 정리하다가 등)으로 바꾼다. "쿠팡 발견 템플릿"이 수정 대상에 있으면 "쿠팡 뒤지다가/쿠팡 구경하다가"로 여는 문장을 없애고 이 인물의 실제 장면(누가, 언제, 무슨 불편)으로 첫 줄을 다시 쓴다. "작성 메모 노출"이 수정 대상에 있으면 글을 어떻게 썼는지 설명하는 문장(소재 선택, 첫 줄, 겹치지 않게 등)을 전부 지운다. "가격 언급"이 수정 대상에 있으면 금액·가격 표현(N원, N천원대, N만원, 가격, 이 값이면 등)을 전부 지우고, 그 자리를 장면·반응·크기·구성 같은 다른 디테일로 바꾼다. 새 고위험 사실을 만들지 마라. JSON만 출력: {"text":""}`,
+      `[통합 소재]\n${evidence}\n[기존 글]\n${out}\n[수정 대상]\n${problems.join('\n')}${bannedNote(out, context)}\n[교정 시도]\n${attempt}/${MAX_FORMAT_REPAIR_ATTEMPTS}`
     );
     const candidate = formatVoice(corrected?.text || '');
     if (candidate) out = candidate;
@@ -274,6 +329,10 @@ async function reviewSourceVoice(text, context = {}, request) {
   ({ out, problems } = tryParagraphRegroup(out, problems, context));
   if (problems.length) reject(problems);
   return out;
+}
+function bannedNote(text, context) {
+  const hits = bannedPhraseHits(text, context?.bannedPhrases);
+  return hits.length ? `\n[이 계정에서 쓰면 안 되는 문구]\n${hits.join('\n')}` : '';
 }
 const PARAGRAPH_PROBLEMS = ['문단 과다 분절', '문단 과다', '문단 구분 없음'];
 function tryParagraphRegroup(out, problems, context) {
@@ -291,8 +350,12 @@ module.exports = {
   voiceGuide,
   formatVoice,
   voiceProblems,
+  priceMention,
   assertVoice,
   reviewSourceVoice,
   incompleteLineReasons,
   bodyTooLong,
+  planningLeakLines,
+  stripLeadingPlanningLines,
+  coupangOpener,
 };

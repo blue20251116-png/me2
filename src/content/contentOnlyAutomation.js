@@ -1,9 +1,17 @@
 'use strict';
-const { getAccount, getSystemApiSettings, getPexelsApiKey, getPixabayApiKey } = require('../infra/db');
+const { db, getAccount, getSystemApiSettings, getPexelsApiKey, getPixabayApiKey } = require('../infra/db');
 const { searchFoodPhotos: searchPexels } = require('../integrations/pexelsApi');
 const { searchFoodPhotos: searchPixabay } = require('../integrations/pixabayApi');
-const { voiceGuide, assertVoice } = require('./voicePolicy');
+const { voiceGuide, assertVoice, planningLeakLines, stripLeadingPlanningLines } = require('./voicePolicy');
 const { pickPersona, PERSONAS } = require('./personas');
+const { accountPersonaFor, bannedPhrasesFor } = require('./accountPersonas');
+const {
+  personaScores,
+  lastPersonaFor,
+  personaDiagnostics,
+  pickPersonaAngle,
+  buildPersonaReflectionBlock,
+} = require('./personaStats');
 const { callAI, callAIJson, imageBlock } = require('../integrations/aiClient');
 const REACTION_PERSONA = PERSONAS.find(p => p.id === 'reaction');
 
@@ -317,11 +325,23 @@ JSON={"dishName":"","servings":"2인분","hook":"","ingredients":[{"name":"","am
 // comment for this content type, unlike materialWriter.js/materialEngine.js where
 // the comment-defer option is legitimate because a real comment does follow. Same fix as
 // aiCaption.js's makeSystemPrompt: require the "reveal within the post" branch instead.
-function buildDailyStorySystemPrompt(personaBlock) {
+// fixedPersona (accountPersonas.js): the link-free everyday post of a fixed-persona owner account -
+// a moment from that one person's life, in their voice, that readers answer from their own life.
+function buildDailyStorySystemPrompt(personaBlock, fixedPersona = null) {
   return `너는 한국 Threads에서 실제 사람이 툭 쓴 듯한 짧은 일상 공감글을 쓴다. 상품 광고나 구매 유도는 절대 하지 않는다.
 
 ${voiceGuide(personaBlock)}
-
+${
+  fixedPersona
+    ? `
+[이 계정의 일상글 — 링크·상품 없는 글]
+- 이 글에는 상품, 브랜드, 가격, 링크, 레시피 계량이 하나도 없다. 위 인물의 하루 중 사소한 순간, 작은 고백, 솔직한 감정 하나를 쓴다.
+- 읽는 사람이 자기 생활로 바로 답할 수 있게 끝낸다: 양자택일, 방법 공유, 공감 확인 질문 중 하나, 또는 질문 없이 여운만 남겨도 된다.
+- 전문가·지인 출처, 통계, 효능, 뉴스 같은 사실 주장은 넣지 않는다. 날씨·날짜도 단정하지 않는다.
+- 2~5줄, 줄바꿈 포함 90자 이내로 짧게 쓴다.
+`
+    : ''
+}
 [이 도구 전용 규칙]
 - 집, 회사, 식사, 정리, 출퇴근, 주말, 잠, 인간관계, 소비습관 같은 평범한 생활 소재 중 하나를 골라 매번 다르게 쓴다.
 - 가짜 경험, 효능, 구체적인 날씨 단정은 하지 않는다.
@@ -330,10 +350,157 @@ ${voiceGuide(personaBlock)}
   "댓글로 넘기지" 말고 반드시 본문 안에서 끝까지 밝히거나 마무리한다.`;
 }
 
-async function generateDailyStory(accountId, target) {
-  const persona = pickPersona({ mode: 'lifestyle', text: '' });
+// Opening lines of this account's recent link-free posts, so a fixed persona does not repeat itself.
+function recentDailyOpenings(accountId, limit = 12) {
+  try {
+    return db
+      .prepare(
+        `SELECT text FROM posts WHERE account_id=? AND (link IS NULL OR link='') AND status IN ('pending','posted') ORDER BY scheduled_at DESC LIMIT ?`
+      )
+      .all(accountId, limit)
+      .map(r =>
+        (
+          String(r.text || '')
+            .split('\n')
+            .find(l => l.trim() && !planningLeakLines(l).length) || ''
+        ).trim()
+      )
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function sampleTopics(topics, n, random = Math.random) {
+  return (topics || [])
+    .map(t => [random(), t])
+    .sort((a, b) => a[0] - b[0])
+    .slice(0, n)
+    .map(x => x[1]);
+}
+
+// Stock photo for an everyday post (2026-10-14: text-only everyday posts stalled at 1-10 views).
+// Needs a Pexels or Pixabay key; null when none is configured or nothing usable is found.
+function dailyPhotoKeys() {
+  return {
+    pexels: getPexelsApiKey() || process.env.PEXELS_API_KEY || null,
+    pixabay: getPixabayApiKey() || process.env.PIXABAY_API_KEY || null,
+  };
+}
+async function pickDailyPhoto(accountId, text) {
+  const keys = dailyPhotoKeys();
+  if (!keys.pexels && !keys.pixabay) return null;
+  let queries = [];
+  try {
+    const d = await callAiText(
+      accountId,
+      '너는 스톡 사진 검색어 생성기다. 한국어 일상글의 핵심 장면을 Pexels/Pixabay에서 잘 찾히는 짧은 영어 검색어(2~4단어)로 바꾼다. 사람 얼굴이 크게 나오는 장면보다 사물·공간·음식 위주로 고른다. JSON={"queries":["laundry drying rack","small apartment room"]} 형식만 출력한다.',
+      `일상글:\n${String(text || '').slice(0, 400)}`,
+      { maxTokens: 120, json: true, temperature: 0.2 }
+    );
+    if (Array.isArray(d.queries))
+      queries = d.queries
+        .map(q => String(q || '').trim())
+        .filter(Boolean)
+        .slice(0, 3);
+  } catch (e) {
+    console.log(`[ContentOnly][DailyPhoto] 검색어 생성 실패: ${e.message}`);
+  }
+  for (const query of queries) {
+    for (const [name, key, search] of [
+      ['Pexels', keys.pexels, searchPexels],
+      ['Pixabay', keys.pixabay, searchPixabay],
+    ]) {
+      if (!key) continue;
+      try {
+        const photos = await search({ apiKey: key, query, count: 1 });
+        if (photos?.[0]?.imageUrl) {
+          console.log(`[ContentOnly][DailyPhoto] ${name} query="${query}"`);
+          return photos[0].imageUrl;
+        }
+      } catch (e) {
+        console.log(`[ContentOnly][DailyPhoto] ${name} 실패 query="${query}": ${e.message}`);
+      }
+    }
+  }
+  return null;
+}
+
+async function generateFixedPersonaDailyStory(accountId, target, persona) {
+  const diag = personaDiagnostics(accountId);
+  const angle = diag?.under1000 && diag.recentLowPosts?.length ? pickPersonaAngle(accountId) : null;
+  const reflection = angle ? buildPersonaReflectionBlock(diag, angle) : '';
+  const system = buildDailyStorySystemPrompt(persona.block, persona) + reflection;
+  const bannedPhrases = bannedPhrasesFor(accountId);
+  const recent = recentDailyOpenings(accountId);
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const user = [
+      `타겟: ${target || '전체'}`,
+      `오늘 소재 후보(하나만 골라서 이 사람의 장면으로): ${sampleTopics(persona.dailyTopics, 3).join(' / ')}`,
+      recent.length ? `[최근에 이미 쓴 첫 줄 — 소재와 첫 줄이 겹치지 않게]\n${recent.join('\n')}` : '',
+      lastError ? `[직전 시도 탈락 사유 — 이번엔 피할 것]\n${lastError.message}` : '',
+      '본문만 출력해.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    try {
+      let text = await callAiText(accountId, system, user, { maxTokens: 350, temperature: 1.0 });
+      text = String(text || '')
+        .replace(/^["'“”]+|["'“”]+$/g, '')
+        .trim();
+      // 2026-10-14: the model sometimes opens with its own plan ("…로 간다. 최근 첫 줄과 겹치지 않게.").
+      // Drop such lines at the top; assertVoice rejects any left further down ('작성 메모 노출').
+      const stripped = stripLeadingPlanningLines(text);
+      if (stripped !== text) console.log(`[ContentOnly][DailyStory] 작성 메모 줄 제거 persona=${persona.id}`);
+      text = stripped;
+      if (looksBloggy(text)) text = await humanizeHook(accountId, text, '일상');
+      text = assertVoice(text, { mode: 'lifestyle', bannedPhrases });
+      return text;
+    } catch (e) {
+      lastError = e;
+      if (e.code !== 'CONTENT_STYLE_REJECTED') throw e;
+      console.log(`[ContentOnly][DailyStory] persona=${persona.id} 시도 ${attempt} 탈락: ${e.message}`);
+    }
+  }
+  throw lastError;
+}
+
+// options.requirePhoto (owner accounts' runner): fail fast without a photo source, and attach a
+// stock photo matching the story (imageUrl null when none was found).
+async function generateDailyStory(accountId, target, { requirePhoto = false } = {}) {
+  const fixed = accountPersonaFor(accountId);
+  if (fixed) {
+    if (requirePhoto) {
+      const k = dailyPhotoKeys();
+      if (!k.pexels && !k.pixabay) throw new Error('일상글 사진 소스 없음 (Pexels/Pixabay 키 미설정)');
+    }
+    console.log(`[ContentOnly][DailyStory] persona fixed="${fixed.name}"(${fixed.id})`);
+    const text = await generateFixedPersonaDailyStory(accountId, target, fixed);
+    const imageUrl = requirePhoto ? await pickDailyPhoto(accountId, text) : null;
+    return {
+      text,
+      link: null,
+      imageUrl,
+      extraImageUrl: null,
+      keyword: '일상',
+      trendNote: '고정 페르소나 · 링크 없는 일상형',
+      target,
+      persona: fixed.id,
+    };
+  }
+  const diag = personaDiagnostics(accountId);
+  const angle = diag?.under1000 ? pickPersonaAngle(accountId) : null;
+  const persona = pickPersona({
+    mode: 'lifestyle',
+    text: '',
+    scores: personaScores(accountId),
+    lastPersona: lastPersonaFor(accountId),
+    excludePersonas: diag?.excludePersonas || [],
+  });
   console.log(`[ContentOnly][DailyStory] persona picked="${persona.name}"(${persona.id})`);
-  const system = buildDailyStorySystemPrompt(persona.block);
+  const system =
+    buildDailyStorySystemPrompt(persona.block) + (diag?.under1000 ? buildPersonaReflectionBlock(diag, angle) : '');
   let text = await callAiText(
     accountId,
     system,
@@ -357,6 +524,7 @@ async function generateDailyStory(accountId, target) {
 
 module.exports = {
   generateRecipe,
+  pickDailyPhoto,
   generateDailyStory,
   RECIPE_COMMENT_TEASERS,
   pickRecipeCommentTeaser,

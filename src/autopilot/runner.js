@@ -10,7 +10,9 @@ const { UPLOADS_DIR } = require('../config/paths');
 const { publicUploadUrl } = require('../config/publicUrl');
 const { db, getAccount, getUserById } = require('../infra/db');
 const coupangApi = require('../integrations/coupangApi');
-const { generateRecipe: generateContentOnlyRecipe } = require('../content/contentOnlyAutomation');
+const { generateRecipe: generateContentOnlyRecipe, generateDailyStory } = require('../content/contentOnlyAutomation');
+const { accountPersonaFor, bannedPhrasesFor, accountPersonaSettings } = require('../content/accountPersonas');
+const accountMix = require('./accountMix');
 const { buildAutopilotPost } = require('./pipeline');
 const { importThreadsVideo } = require('../threads/mediaImporter');
 const { encodeMediaBundle } = require('../threads/mediaBundle');
@@ -43,8 +45,31 @@ function saveAutopilotPost({
   scheduledAt = null,
   persona = null,
   contentMode = null,
+  dedupeKeys = null,
+  postFrame = null,
 }) {
   const formattedText = formatThreadsBody(text);
+  // dedupe_keys is only written for fixed-persona accounts (accountMix.js); every other account keeps
+  // the original INSERT unchanged.
+  if (dedupeKeys) {
+    db.prepare(
+      `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode,dedupe_keys,post_frame) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?,?,?)`
+    ).run(
+      formattedText,
+      link || null,
+      imageUrl || null,
+      extraImageUrl || null,
+      videoUrl || null,
+      String(scheduledAt || new Date().toISOString()),
+      accountId,
+      recipeCommentText,
+      persona || null,
+      contentMode || null,
+      dedupeKeys,
+      postFrame || null
+    );
+    return;
+  }
   db.prepare(
     `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?)`
   ).run(
@@ -82,6 +107,61 @@ async function runContentOnlyAutopilot(account, target, scheduledAt = null) {
     contentMode: 'recipe',
   });
   recordAutopilotLast(account.id, r.keyword, target);
+}
+// Fixed-persona accounts: the link-free everyday post (no product, no Coupang link).
+// 2026-10-14: text-only everyday posts stalled at 1-10 views on these low-follower accounts, so
+// one goes out only with a photo attached (generateDailyStory's stock-photo search) and only if it
+// does not read like another recent owner-account post. Returns false when no such post could be
+// made; the caller then fills the slot with a link-free recipe/product post instead.
+// 2026-10-30 (marketing plan 5: reference accounts' top posts are 20% text-only, ours 0%):
+// accountPersonas.json dailyWithPhoto=false makes these text-only posts again.
+async function runDailyStoryAutopilot(account, target, scheduledAt = null) {
+  const withPhoto = accountPersonaSettings().dailyWithPhoto;
+  let r;
+  try {
+    r = await generateDailyStory(account.id, target, { requirePhoto: withPhoto });
+  } catch (e) {
+    if (isAiBudgetOrCreditError(e)) throw e;
+    console.log(
+      `[자동발행 예약][PERSONA DAILY] account #${account.id} 생략 → 레시피/상품 글로 대체 reason="${e.message}"`
+    );
+    return false;
+  }
+  if (withPhoto && !r?.imageUrl) {
+    console.log(`[자동발행 예약][PERSONA DAILY] account #${account.id} 사진 없음 → 레시피/상품 글로 대체`);
+    return false;
+  }
+  const similar = accountMix.findSimilarText(account.id, r.text, scheduledAt);
+  if (similar) {
+    console.log(
+      `[자동발행 예약][PERSONA DAILY] account #${account.id} 비슷한 글 ${similar.scope} #${similar.accountId} post=${similar.postId} score=${similar.score.toFixed(2)} → 레시피/상품 글로 대체`
+    );
+    return false;
+  }
+  saveAutopilotPost({
+    accountId: account.id,
+    text: r.text,
+    link: null,
+    imageUrl: withPhoto ? r.imageUrl : null,
+    extraImageUrl: null,
+    videoUrl: null,
+    recipeCommentText: null,
+    scheduledAt,
+    persona: r.persona,
+    contentMode: 'daily',
+  });
+  recordAutopilotLast(account.id, r.keyword, target);
+  console.log(
+    `[자동발행 예약][PERSONA DAILY] account #${account.id} persona=${r.persona} link=no photo=${withPhoto ? 'yes' : 'no'}`
+  );
+  return true;
+}
+// Link-free recipe posts keep their recipe comment, but the comment written for a linked post hides
+// the key ingredient as '비밀 소스/재료' (the link revealed it). Without a link, name it.
+function revealSecretIngredient(comment, secretTerm) {
+  const term = String(secretTerm || '').trim();
+  if (!comment || !term) return comment || null;
+  return String(comment).replace(/비밀\s*(?:소스|재료)/g, term);
 }
 // 2026-09-16 (user request, viral-formula screenshot: "사진과 영상은 꼭 넣으세요"): media is
 // reached as missing only when chooseSourceMedia()'s whole fallback chain runs out - no Threads
@@ -124,13 +204,57 @@ function chooseImageFallback(result) {
     imageSourceLabel: result?.product?.image ? 'Threads 미디어 없음 → 쿠팡 상품 이미지 1장' : '미디어 없음',
   };
 }
-async function chooseSourceMedia(result) {
+// Owner accounts (2026-10-14): a re-uploaded video only while the day's video cap allows it, and
+// product posts lead with the Coupang product image instead of another creator's photo.
+function ownerImageFallback(result) {
+  const images = Array.isArray(result?.sourceImages) ? result.sourceImages.filter(Boolean) : [];
+  const productImage = result?.product?.image || null;
+  if (result?.mode === 'product' && productImage)
+    return {
+      videoUrl: null,
+      imageUrl: productImage,
+      extraImageUrl: images[0] || null,
+      imageSourceLabel: `쿠팡 상품 이미지 1장${images[0] ? ' + Threads 소재 이미지 1장' : ''}`,
+    };
+  return chooseImageFallback(result);
+}
+function fileHash(filename) {
+  try {
+    return crypto
+      .createHash('sha1')
+      .update(fs.readFileSync(require('path').join(uploadsDir, filename)))
+      .digest('hex')
+      .slice(0, 20);
+  } catch {
+    return null;
+  }
+}
+// options (owner accounts only): { allowVideo, accountId, scheduledAt } - allowVideo=false skips the
+// video import; a video whose file another owner post already used (m: key) falls back to images.
+async function chooseSourceMedia(result, options = null) {
   const videos = Array.isArray(result?.sourceVideos) ? result.sourceVideos.filter(Boolean) : [];
   const images = Array.isArray(result?.sourceImages) ? result.sourceImages.filter(Boolean) : [];
+  if (options && (!options.allowVideo || !videos.length)) {
+    if (videos.length)
+      console.log(`[Autopilot][VIDEO CAP] account #${options.accountId} 오늘 재업로드 영상 한도 → 이미지 사용`);
+    return ownerImageFallback(result);
+  }
   if (videos.length && result?.sourceUrl) {
     try {
       console.log(`[Autopilot][VIDEO IMPORT] 소재찾기 importer 사용 시작 source=${result.sourceUrl}`);
       const imported = await importThreadsVideo({ url: result.sourceUrl, outputDir: uploadsDir });
+      if (options) {
+        const mediaHash = fileHash(imported.filename);
+        const keys = mediaHash ? accountMix.dedupeKeysFor({ mediaHash }) : [];
+        const dup = keys.length ? accountMix.findDuplicate(options.accountId, keys, options.scheduledAt) : null;
+        if (dup) {
+          console.log(
+            `[Autopilot][VIDEO DEDUPE] account #${options.accountId} 같은 영상 파일 ${dup.scope} #${dup.accountId} → 이미지 사용`
+          );
+          return ownerImageFallback(result);
+        }
+        result.mediaKeys = keys;
+      }
       const videoUrl = publicUploadUrl(imported.filename);
       const items = [{ type: 'VIDEO', url: videoUrl }, ...images.slice(0, 9).map(url => ({ type: 'IMAGE', url }))];
       const bundle = encodeMediaBundle(items);
@@ -151,7 +275,7 @@ async function chooseSourceMedia(result) {
       );
     }
   }
-  return chooseImageFallback(result);
+  return options ? ownerImageFallback(result) : chooseImageFallback(result);
 }
 function classifyCoupangUrl(raw) {
   try {
@@ -306,6 +430,15 @@ async function ensureCoupangReady(accountId, account) {
 }
 async function runAutopilotOnceInner(account, scheduledAt = null) {
   const target = AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
+  // Fixed-persona owner accounts alternate link-free everyday posts with a capped number of linked
+  // posts per day (accountMix.decideSlotKind); every other account skips this (persona = null).
+  const persona = accountPersonaFor(account.id);
+  // 'linked' | 'unlinked' | 'daily' for owner accounts (accountMix.decideSlotKind), null otherwise.
+  let kind = persona ? accountMix.slotKind(account.id, scheduledAt) : null;
+  if (kind === 'daily') {
+    if (await runDailyStoryAutopilot(account, target, scheduledAt)) return;
+    kind = 'unlinked';
+  }
   if (!hasCoupangKeys(account)) {
     await runContentOnlyAutopilot(account, target, scheduledAt);
     return;
@@ -317,10 +450,54 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
     e.isCoupangRateLimit = true;
     throw e;
   }
-  const result = await buildAutopilotPost(account.id, { target });
-  const affiliateLink = await makeAffiliateLink(account, result);
-  const media = await chooseSourceMedia(result);
+  const result = await buildAutopilotPost(account.id, {
+    target,
+    ...(persona ? accountMix.generationFilters(account.id, scheduledAt) : {}),
+  });
+  let dedupeKeys = null;
+  if (persona) {
+    // Later stages (secret affiliate, source-exact product) may swap the product: re-check the final one.
+    const keys = accountMix.dedupeKeysFor({
+      product: result.product,
+      sourceUrl: result.sourceUrl,
+      topic: result.topic,
+      searchTerm: result.productSearchTerm,
+    });
+    const dup = accountMix.findDuplicate(account.id, keys, scheduledAt);
+    if (dup) throw accountMix.duplicateError(dup);
+    const similar = accountMix.findSimilarText(account.id, result.text, scheduledAt);
+    if (similar) throw accountMix.duplicateError(similar);
+    result.text = require('../content/voicePolicy').assertVoice(result.text, {
+      mode: result.mode,
+      bannedPhrases: bannedPhrasesFor(account.id, result.persona),
+      // Framed posts: re-check store/authority/price against the FINAL product (a later stage may swap it).
+      ...(result.postFrame
+        ? {
+            frame: result.postFrame,
+            grounding: {
+              evidence: [result.sourceText, result.authorReplies, result.product?.name].filter(Boolean).join('\n'),
+              price: Number(result.product?.price) > 0 ? Number(result.product.price) : null,
+            },
+          }
+        : {}),
+    });
+    dedupeKeys = accountMix.encodeKeys(keys);
+  }
+  // Owner accounts' 'unlinked' slots: only a RECIPE may go out without the Coupang link (it keeps its
+  // recipe comment with the key ingredient named). A product post always gets its Partners link in the
+  // comment (accountMix.linkFreeAllowed, 2026-10-21) - it is never queued without one.
+  const unlinked = accountMix.linkFreeAllowed(kind, result.mode);
+  const affiliateLink = unlinked ? null : await makeAffiliateLink(account, result);
+  if (!unlinked && !affiliateLink) throw new Error('쿠팡 파트너스 링크가 비어 있어 예약을 만들지 않았습니다');
+  const media = await chooseSourceMedia(
+    result,
+    persona
+      ? { allowVideo: accountMix.videoAllowed(account.id, scheduledAt), accountId: account.id, scheduledAt }
+      : null
+  );
   assertHasMedia(media, { accountId: account.id, target, mode: result.mode, topic: result.topic });
+  if (persona && result.mediaKeys?.length)
+    dedupeKeys = accountMix.encodeKeys([...accountMix.decodeKeys(dedupeKeys), ...result.mediaKeys]);
   saveAutopilotPost({
     accountId: account.id,
     text: result.text,
@@ -328,15 +505,21 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
     imageUrl: media.imageUrl,
     extraImageUrl: media.extraImageUrl,
     videoUrl: media.videoUrl,
-    recipeCommentText: result.commentLead,
+    recipeCommentText: unlinked
+      ? result.mode === 'recipe'
+        ? revealSecretIngredient(result.commentLead, result.secretTerm)
+        : null
+      : result.commentLead,
     scheduledAt,
     persona: result.persona,
-    contentMode: result.mode,
+    contentMode: unlinked ? `${result.mode}-nolink` : result.mode,
+    dedupeKeys,
+    postFrame: persona ? result.postFrame || null : null,
   });
   const last = result.productSearchTerm || result.secretTerm || result.topic;
   recordAutopilotLast(account.id, last, target);
   console.log(
-    `[자동발행 예약][V15 MATERIAL-MIXED-MEDIA] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=yes`
+    `[자동발행 예약][V15 MATERIAL-MIXED-MEDIA] account #${account.id} target="${target}" mode="${result.mode}" topic="${result.topic}" product="${result.product.name}" source="${result.sourceUrl}" media="${media.imageSourceLabel}" affiliateLink=${affiliateLink ? 'yes' : 'no'}`
   );
 }
 // Prevents one Chromium resource failure from being multiplied across every account in the same

@@ -64,7 +64,7 @@ test('posts in the shape that travels pass, strong words about my own scene incl
     `회사 선배가 다이소 거라고 알려줌
 책상 밑 전선 정리 매번 포기했었는데
 
-3천원짜리 케이블 트레이 하나 붙였더니 발밑이 싹 비었음
+손바닥만 한 케이블 트레이 하나 붙였더니 발밑이 싹 비었음
 옆자리 사람도 어디서 샀냐고 물어봄ㅋㅋ`,
     `김치찌개가 뭐 얼마나 달라지겠어 했거든?
 
@@ -76,7 +76,7 @@ test('posts in the shape that travels pass, strong words about my own scene incl
 지금까지 먹어본 비빔국수 통틀어서 원탑임
 
 이제 밖에서 비빔면 사 먹는 짓 안 함
-양념 비율 따라 했더니 4인분에 5천원 들었음`,
+양념 비율 따라 했더니 4인분이 금방 나왔음`,
     `애가 낮잠 30분이면 꼭 깼었는데
 
 암막 커튼 바꾸고 2시간 자는 날이 생김ㅠㅠ
