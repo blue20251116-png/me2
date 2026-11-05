@@ -199,6 +199,10 @@ const migrations = [
   `ALTER TABLE posts ADD COLUMN extra_image_url TEXT`,
   `ALTER TABLE posts ADD COLUMN dedupe_keys TEXT`,
   `ALTER TABLE posts ADD COLUMN post_frame TEXT`,
+  // 2026-11-05 (dev 0079f189): why a slot got no video, and the posted video's length in seconds
+  // (files are deleted after posting). Nullable; the loop below skips a column that already exists.
+  `ALTER TABLE posts ADD COLUMN video_skip_reason TEXT`,
+  `ALTER TABLE posts ADD COLUMN video_duration_sec REAL`,
   `ALTER TABLE accounts ADD COLUMN autopilot_youtube_source_enabled INTEGER DEFAULT 1`,
   `ALTER TABLE accounts ADD COLUMN autopilot_youtube_order TEXT DEFAULT 'relevance'`,
   `ALTER TABLE accounts ADD COLUMN autopilot_frame_media_enabled INTEGER DEFAULT 0`,

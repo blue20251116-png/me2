@@ -10,6 +10,20 @@ function isCoupangLink(link) {
 }
 const DEFAULT_COUPANG_DISCLOSURE =
   '이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.';
+// 2026-11-05 (11/05 review): the disclosure used to live only in the auto-comment, so the post itself
+// never said it was an affiliate post. Every Coupang-link post now ends its BODY with this line too
+// (the comment keeps the full disclosure). Added at publish time (publishQueue), so the account's
+// 100-char body limit (voicePolicy MAX_BODY_CHARS) is counted without it; old queued rows get it too.
+const BODY_COUPANG_DISCLOSURE = '쿠팡 파트너스 활동으로 수수료를 받을 수 있음';
+const THREADS_TEXT_MAX = 500;
+function withBodyDisclosure(text, link) {
+  const body = String(text || '').replace(/\s+$/, '');
+  if (!isCoupangLink(link) || /쿠팡\s*파트너스/.test(body)) return body;
+  const out = body ? `${body}\n\n${BODY_COUPANG_DISCLOSURE}` : BODY_COUPANG_DISCLOSURE;
+  if (Array.from(out).length > THREADS_TEXT_MAX)
+    throw new Error(`본문+쿠팡 파트너스 문구가 ${THREADS_TEXT_MAX}자를 넘어 발행하지 않았습니다`);
+  return out;
+}
 function cleanCommentLine(line) {
   return String(line || '')
     .replace(/\s+/g, ' ')
@@ -198,4 +212,6 @@ module.exports = {
   buildProductLinkComment,
   buildCommentText,
   DEFAULT_COUPANG_DISCLOSURE,
+  BODY_COUPANG_DISCLOSURE,
+  withBodyDisclosure,
 };

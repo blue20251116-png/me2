@@ -504,6 +504,44 @@ async function getMediaInsights(accountId, mediaId) {
   }
 }
 
+// 2026-11-05 (11/05 review): comment_verified_at was never filled (0 rows for 11/03-04), so nobody could
+// tell whether the affiliate reply was really under the post. Reads the reply back (GET on its own media
+// id: free, threads_basic) and checks it is a reply to the parent post. Never posts anything.
+// Returns { verified: true|false, permalink, reason }; throws only on transient/network errors.
+async function verifyReply(accountId, commentMediaId, parentMediaId) {
+  const account = getAccount(accountId);
+  if (!account || !account.threads_access_token) throw new Error('스레드 Access Token이 없습니다');
+  let data;
+  try {
+    const res = await axios.get(`${GRAPH_BASE}/${commentMediaId}`, {
+      params: { fields: 'id,permalink,is_reply,replied_to,root_post', access_token: account.threads_access_token },
+      timeout: 15000,
+    });
+    data = res.data || {};
+  } catch (err) {
+    logThreadsError('REPLY_VERIFY', err, { accountId, commentMediaId });
+    if (isDeadMediaError(err)) return { verified: false, permalink: '', reason: 'COMMENT_NOT_FOUND' };
+    throw err;
+  }
+  return replyCheck(data, commentMediaId, parentMediaId);
+}
+function replyCheck(data, commentMediaId, parentMediaId) {
+  const parent = String(parentMediaId || '');
+  const permalink = String(data?.permalink || '');
+  if (!data || String(data.id || '') !== String(commentMediaId)) return { verified: false, permalink, reason: 'COMMENT_NOT_FOUND' };
+  if (data.is_reply === false) return { verified: false, permalink, reason: 'COMMENT_NOT_A_REPLY' };
+  const repliedTo = String(data.replied_to?.id || ''),
+    root = String(data.root_post?.id || '');
+  if (repliedTo || root) {
+    if (repliedTo === parent || root === parent) return { verified: true, permalink, reason: '' };
+    return { verified: false, permalink, reason: 'COMMENT_UNDER_OTHER_POST' };
+  }
+  // The token can read the reply but not its parent fields: it exists and is a reply.
+  return data.is_reply === true
+    ? { verified: true, permalink, reason: '' }
+    : { verified: false, permalink, reason: 'COMMENT_PARENT_UNKNOWN' };
+}
+
 module.exports = {
   publishPost,
   publishCarouselPost,
@@ -511,4 +549,6 @@ module.exports = {
   publishReply,
   publishContainer,
   getMediaInsights,
+  verifyReply,
+  replyCheck,
 };

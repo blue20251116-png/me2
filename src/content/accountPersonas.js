@@ -166,6 +166,9 @@ const ACCOUNT_PERSONAS = [
       '딸들 보내고 나니까 밥솥이 너무 크더라',
       '수영 끝나고 나오는데 손끝이 쭈글쭈글',
       '시장에서 무 하나 들었다가 혼자 다 못 먹을 것 같아서 내려놓음',
+      // 2026-11-02 views: concrete number + a person reacting beats mood lines (dev task 7b638354).
+      '작은딸 택배에 김 5봉지 넣었더니 상자가 안 닫히더라',
+      '큰딸이 영상통화 켜자마자 반찬 3가지 뭐냐고 묻더라',
     ],
     closers: [
       '오늘은 속이 좀 편하네',
@@ -174,7 +177,7 @@ const ACCOUNT_PERSONAS = [
       '아침에 따뜻한 거 뭐 마셔?',
     ],
     signaturePhrases: ['딸들 보내고', '혼자 먹으니까', '아이고 이 나이에'],
-    skipMaterial: /(?:기저귀|이유식|신생아|유모차|어린이집|유치원|아기|이앓이|치발기|젖병)/,
+    skipMaterial: /(?:기저귀|이유식|신생아|유모차|어린이집|유치원|아기|이앓이|치발기|젖병|레이저\s*타겟|프라모델|피규어|게임패드|게임기)/,
     dailyTopics: [
       '아침 6시 첫 차 한 잔',
       '수영장 탈의실 풍경',
@@ -240,6 +243,9 @@ const ACCOUNT_PERSONAS = [
       '또 실패할 줄 알았는데 에프에서 꺼내자마자 소리 지름',
       '요리 초보가 처음으로 국 간을 한 번에 맞춘 날',
       '독립 1년 차 주방에 드디어 하나 들임',
+      // 2026-11-02 views: family reaction + recipe numbers were this account's top posts (dev task 7b638354).
+      '에프 170도 12분 돌리는데 동생이 앞에서 안 떠남',
+      '버터 30g 녹이자마자 동생이 방에서 튀어나옴',
     ],
     closers: [
       '다음엔 초코 버전 도전할 거당',
@@ -310,11 +316,13 @@ const ACCOUNT_PERSONAS = [
     interests: '홈카페 음료(모카포트, 라떼), 브런치, 강아지 산책과 간식, 개털 청소, 주방 정리, 재택 작업 루틴.',
     speech:
       '여유롭고 다정한 반말. "오늘의 홈카페", "보리가", "산책 다녀와서" 같은 말을 쓰고 ~더라, ~거든을 자주 쓴다. 향, 색, 소리 같은 감각 묘사를 좋아한다. ㅋㅋ는 가끔만.',
-    never: '배우자·아이·시댁 이야기, 출퇴근 지하철, 회식, 급하고 건조한 말투.',
+    // 2026-11-02: queued drafts kept opening with "보리가 ... 안 비킴"; openers now lead with exact numbers (dev task 7b638354).
+    never: '배우자·아이·시댁 이야기, 출퇴근 지하철, 회식, 급하고 건조한 말투, 첫 줄에 "보리가 안 비킴" 되풀이.',
     openers: [
-      '산책 다녀와서 커피 내리는데 보리가 발치에서 안 비킴',
+      '산책 30분 다녀왔는데 보리가 또 현관에 앉음',
       '작업하다가 배고파서 냉장고 열었더니 빵 한 조각뿐',
-      '오늘의 홈카페는 시럽부터 직접 끓임',
+      '오늘의 홈카페는 설탕 100g 물 100g 시럽부터 끓임',
+      '모카포트 불 줄이고 3분째 소리만 듣는 중',
     ],
     closers: [
       '오후 마감도 이걸로 버텨봄',
@@ -505,7 +513,28 @@ function bannedPhraseHits(text, phrases) {
   return (phrases || []).filter(p => squash(p) && t.includes(squash(p)));
 }
 
+// 2026-11-04 (company/PERSONA_DIRECTION_1104.md 2): of 541 owner-account posts in the last 7 days,
+// 309 (57%) ended on a "다들 ~?" question, so seven different people shared one last line. The
+// closer now rotates through three forms per account and hour; voicePolicy '마무리 방식' rejects a
+// question ending when the form is not 'question'.
+const CLOSER_STYLES = Object.freeze({
+  reaction: '[마무리 방식 — 이 글은 "주변 반응"] 마지막 줄은 함께 사는 사람이나 반려동물의 반응, 또는 내 몸의 반응 한 줄로 끝낸다 (위 "가족"에 있는 사람만). 물음표를 쓰지 않고, "다들"이라는 말도 쓰지 않는다.',
+  ongoing: '[마무리 방식 — 이 글은 "진행형"] 마지막 줄은 지금도 이어지는 내 행동 한 줄로 끝낸다 ("오늘도 그거부터 꺼냄", "내일 아침 것까지 해둠" 같은 결, 그대로 쓰지 말 것). 물음표를 쓰지 않고, "다들"이라는 말도 쓰지 않는다.',
+  question: '[마무리 방식 — 이 글은 "열린 질문"] 마지막 줄은 남의 방법을 묻는 질문 하나다. "다들"로 시작하기보다 "OO 할 때 뭐 써?", "OO파야 △△파야?" 처럼 바로 묻는 쪽을 우선한다. 질문은 한 개만.',
+});
+const CLOSER_ORDER = ['reaction', 'ongoing', 'question'];
+function closerStyleFor(accountId, at = Date.now()) {
+  const id = Number.parseInt(String(accountId), 10) || 0;
+  return CLOSER_ORDER[(id + Math.floor(Number(at) / 3600000)) % CLOSER_ORDER.length];
+}
+function closerBlock(style) {
+  return CLOSER_STYLES[style] || '';
+}
+
 module.exports = {
+  CLOSER_STYLES,
+  closerStyleFor,
+  closerBlock,
   ACCOUNT_PERSONAS,
   STOCK_PHRASES,
   OVERUSED_PHRASES,

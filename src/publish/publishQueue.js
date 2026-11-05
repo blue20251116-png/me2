@@ -4,6 +4,24 @@ const api = require('../threads/threadsApi');
 const cron = require('node-cron');
 const { setState } = require('../infra/automationState');
 const { classifyPublishFailure, publishRetryable } = require('./publishRetryPolicy');
+const { UPLOADS_DIR } = require('../config/paths');
+const { postVideoDurationSec } = require('../threads/videoDuration');
+const { withBodyDisclosure } = require('./commentText');
+
+// 2026-11-05 (dev 0079f189): the video file is deleted after posting, so its length is saved on the row at
+// publish time (when the reservation did not already record it). Never affects the publish itself.
+function recordPublishedVideoDuration(post, uploadsDir = UPLOADS_DIR) {
+  try {
+    if (post?.video_duration_sec != null) return null;
+    const sec = postVideoDurationSec(post, uploadsDir);
+    if (sec == null) return null;
+    db.prepare('UPDATE posts SET video_duration_sec=? WHERE id=? AND video_duration_sec IS NULL').run(sec, post.id);
+    return sec;
+  } catch (e) {
+    console.warn(`[Publish][VIDEO DURATION] post=${post?.id} 기록 실패 reason="${e.message}"`);
+    return null;
+  }
+}
 // Column migrations must not crash the boot on a full disk (the process keeps serving).
 try {
   for (const definition of [
@@ -16,6 +34,7 @@ try {
     'comment_retry_count INTEGER DEFAULT 0',
     'comment_next_retry_at TEXT',
     'recipe_comment_text TEXT',
+    'comment_verified_at TEXT',
   ]) {
     const name = definition.split(' ')[0];
     if (
@@ -45,6 +64,50 @@ function initializeRecovery() {
   } catch (e) {
     console.error('[PublishQueue][INIT] 복구 초기화 실패 (디스크 문제로 추정) - 계속 부팅합니다:', e.message);
   }
+}
+
+// 2026-11-05 (11/05 review): reads each posted auto-comment back once (threadsApi.verifyReply, read-only GET)
+// and fills comment_verified_at. A definite miss is written to comment_error_message (COMMENT_VERIFY_FAILED)
+// and never re-posted automatically (that could double the comment); transient errors retry next tick.
+// Only comments from the last 7 days, a few per tick, at least a minute after posting.
+const VERIFY_PER_TICK = 5;
+async function verifyPostedComments() {
+  if (typeof api.verifyReply !== 'function') return 0;
+  const rows = db
+    .prepare(
+      "SELECT id,account_id,threads_media_id,comment_media_id FROM posts WHERE comment_status='posted' AND comment_media_id IS NOT NULL AND threads_media_id IS NOT NULL AND comment_verified_at IS NULL AND comment_error_message IS NULL AND comment_posted_at<=? AND comment_posted_at>=? ORDER BY comment_posted_at LIMIT ?"
+    )
+    .all(new Date(Date.now() - 60000).toISOString(), new Date(Date.now() - 7 * 86400000).toISOString(), VERIFY_PER_TICK);
+  let verified = 0;
+  for (const row of rows) {
+    try {
+      const result = await api.verifyReply(row.account_id, row.comment_media_id, row.threads_media_id);
+      if (result?.verified) {
+        db.prepare('UPDATE posts SET comment_verified_at=? WHERE id=? AND comment_verified_at IS NULL').run(
+          new Date().toISOString(),
+          row.id
+        );
+        verified++;
+      } else {
+        db.prepare('UPDATE posts SET comment_error_message=? WHERE id=?').run(
+          `COMMENT_VERIFY_FAILED: ${result?.reason || 'unknown'}`.slice(0, 500),
+          row.id
+        );
+        console.warn(`[Comment][VERIFY FAILED] post=${row.id} reason=${result?.reason || 'unknown'}`);
+      }
+    } catch (err) {
+      const status = Number(err?.response?.status || 0);
+      // 4xx other than rate limits will not fix itself (permissions, bad id): record once, stop asking.
+      if (status >= 400 && status < 500 && status !== 429) {
+        db.prepare('UPDATE posts SET comment_error_message=? WHERE id=?').run(
+          `COMMENT_VERIFY_FAILED: HTTP ${status}`,
+          row.id
+        );
+      }
+      console.warn(`[Comment][VERIFY ERROR] post=${row.id} status=${status || '-'} ${String(err.message).slice(0, 120)}`);
+    }
+  }
+  return verified;
 }
 
 function startPublishJob({ buildCommentText }) {
@@ -87,20 +150,20 @@ function startPublishJob({ buildCommentText }) {
             db.prepare('UPDATE posts SET publish_creation_id=? WHERE id=?').run(String(creationId), post.id);
           if (post.video_url)
             mediaId = await api.publishPost(account.id, {
-              text: post.text,
+              text: withBodyDisclosure(post.text, post.link),
               videoUrl: post.video_url,
               imageUrl: null,
               onCreated,
             });
           else if (post.image_url && post.extra_image_url)
             mediaId = await api.publishCarouselPost(account.id, {
-              text: post.text,
+              text: withBodyDisclosure(post.text, post.link),
               imageUrls: [post.image_url, post.extra_image_url],
               onCreated,
             });
           else
             mediaId = await api.publishPost(account.id, {
-              text: post.text,
+              text: withBodyDisclosure(post.text, post.link),
               imageUrl: post.image_url,
               videoUrl: null,
               onCreated,
@@ -131,6 +194,7 @@ function startPublishJob({ buildCommentText }) {
           console.log(
             `[Publish][COMMITTED] account=${account.id} post=${post.id} mediaId=${mediaId} comment=${comment}`
           );
+          recordPublishedVideoDuration(post);
         } catch (err) {
           // Ambiguous failures (the publish call itself errored) arrive tagged with creationId by
           // threadsApi; publish_creation_id is only a diagnostic trail, so a transient error while
@@ -208,6 +272,7 @@ function startPublishJob({ buildCommentText }) {
           console.warn(`[Comment][FAILED] post=${post.id} attempts=${attempts}/3 retry=${retry}`);
         }
       }
+      await verifyPostedComments();
     } finally {
       running = publishing = false;
       setState(-1, 'idle', 'publish tick complete');
@@ -223,4 +288,4 @@ function startPublishJob({ buildCommentText }) {
 // between container creation and publish.
 let publishing = false;
 const isPublishing = () => publishing;
-module.exports = { startPublishJob, retryable, initializeRecovery, isPublishing };
+module.exports = { startPublishJob, retryable, initializeRecovery, isPublishing, recordPublishedVideoDuration, verifyPostedComments };
