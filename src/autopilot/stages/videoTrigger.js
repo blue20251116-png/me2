@@ -50,9 +50,12 @@ async function detectThreadsVideoInBrowser(postUrl) {
         return true;
 
       const html = document.documentElement?.innerHTML || '';
+      // 11/2: every Threads page carries Meta UI clips (static.cdninstagram.com/rsrc.php/...mp4), so a bare
+      // ".mp4" in the HTML is not a post video; it made text-only posts look like video posts.
+      const mp4s = html.match(/https?:\\?\/\\?\/[^"'<>\s]+?\.mp4/gi) || [];
       return (
-        /"(?:video_url|playable_url|playable_url_quality_hd|browser_native_hd_url)"\s*:/i.test(html) ||
-        /https?:\\?\/\\?\/[^"'<>\s]+?\.mp4/i.test(html)
+        /"(?:video_url|playable_url|playable_url_quality_hd|browser_native_hd_url)"\s*:\s*"https/i.test(html) ||
+        mp4s.some(u => !/static\.cdninstagram\.com|rsrc\.php/i.test(u))
       );
     });
 

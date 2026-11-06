@@ -100,12 +100,16 @@ function dayBounds(dayKey) {
   const start = kstMidnight(dayKey);
   return [start.toISOString(), new Date(start.getTime() + 86400000).toISOString()];
 }
+// 2026-11-05 (dev 0079f189): a post counts toward its day in every live status - pending, publishing
+// (the few seconds of the Threads call), posted and any future non-failed state. Only failed/cancelled
+// rows free their slot. (Was status IN ('pending','posted'): a 'publishing' post fell out of the count.)
+const LIVE_POST_STATUS_SQL = `status NOT IN ('failed','cancelled','canceled')`;
 function countScheduledForDay(accountId, dayKey) {
   const [start, end] = dayBounds(dayKey);
   return Number(
     db
       .prepare(
-        `SELECT COUNT(*) c FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND status IN ('pending','posted')`
+        `SELECT COUNT(*) c FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND ${LIVE_POST_STATUS_SQL}`
       )
       .get(accountId, start, end)?.c || 0
   );
@@ -359,6 +363,8 @@ module.exports = {
   addDay,
   targetForAccount,
   dayBounds,
+  LIVE_POST_STATUS_SQL,
+  countScheduledForDay,
   personaChainOptions,
   chainStepper,
   futurePendingCount,

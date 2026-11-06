@@ -7,6 +7,8 @@ const { classifyPublishFailure, publishRetryable } = require('./publishRetryPoli
 const { UPLOADS_DIR } = require('../config/paths');
 const { postVideoDurationSec } = require('../threads/videoDuration');
 const { withBodyDisclosure } = require('./commentText');
+const { sanitizePublishedThreadsText } = require('../threads/publishText');
+const { reconcileUnknownPublishes, checkBeforeRetry } = require('./publishRecovery');
 
 // 2026-11-05 (dev 0079f189): the video file is deleted after posting, so its length is saved on the row at
 // publish time (when the reservation did not already record it). Never affects the publish itself.
@@ -35,6 +37,13 @@ try {
     'comment_next_retry_at TEXT',
     'recipe_comment_text TEXT',
     'comment_verified_at TEXT',
+    // 2026-11-05 (marketing c1266546): the body exactly as sent (withBodyDisclosure adds the Coupang line
+    // at publish time, so posts.text never shows it), whether the disclosure was in it, the one-time
+    // recovery marker for unknown outcomes, and the permalink of a post found live by recovery.
+    'sent_text TEXT',
+    'disclosure_in_body INTEGER',
+    'publish_recovered_at TEXT',
+    'threads_permalink TEXT',
   ]) {
     const name = definition.split(' ')[0];
     if (
@@ -114,7 +123,7 @@ function startPublishJob({ buildCommentText }) {
   initializeRecovery();
   let running = false;
   const tick = async () => {
-    if (running) return;
+    if (running || draining) return;
     running = publishing = true;
     setState(-1, 'running', 'publish');
     try {
@@ -125,6 +134,7 @@ function startPublishJob({ buildCommentText }) {
         )
         .all(now, now);
       for (const post of due) {
+        if (draining) break; // shutdown requested: finish the post in flight, claim no new one
         const account = getAccount(post.account_id);
         if (!account?.threads_access_token) {
           db.prepare(
@@ -144,26 +154,38 @@ function startPublishJob({ buildCommentText }) {
           )
           .run(new Date().toISOString(), post.id);
         if (!Number(claim.changes)) continue;
+        // A retry whose earlier attempt already created a container is re-sent only if that container
+        // was not published (never a double post).
+        if (!(await checkBeforeRetry(post))) continue;
         let mediaId;
         try {
           const onCreated = creationId =>
             db.prepare('UPDATE posts SET publish_creation_id=? WHERE id=?').run(String(creationId), post.id);
+          // 2026-11-05 (marketing c1266546): store the body exactly as sent and whether the disclosure
+          // is in it, so the body disclosure can be verified from the DB.
+          const sentText = withBodyDisclosure(post.text, post.link);
+          const storedText = sanitizePublishedThreadsText(sentText);
+          db.prepare('UPDATE posts SET sent_text=?,disclosure_in_body=? WHERE id=?').run(
+            storedText,
+            /쿠팡\s*파트너스/.test(storedText) ? 1 : 0,
+            post.id
+          );
           if (post.video_url)
             mediaId = await api.publishPost(account.id, {
-              text: withBodyDisclosure(post.text, post.link),
+              text: sentText,
               videoUrl: post.video_url,
               imageUrl: null,
               onCreated,
             });
           else if (post.image_url && post.extra_image_url)
             mediaId = await api.publishCarouselPost(account.id, {
-              text: withBodyDisclosure(post.text, post.link),
+              text: sentText,
               imageUrls: [post.image_url, post.extra_image_url],
               onCreated,
             });
           else
             mediaId = await api.publishPost(account.id, {
-              text: withBodyDisclosure(post.text, post.link),
+              text: sentText,
               imageUrl: post.image_url,
               videoUrl: null,
               onCreated,
@@ -233,6 +255,7 @@ function startPublishJob({ buildCommentText }) {
         )
         .all(new Date().toISOString());
       for (const post of comments) {
+        if (draining) break;
         const account = getAccount(post.account_id);
         if (!account?.threads_access_token) continue;
         if (
@@ -272,7 +295,8 @@ function startPublishJob({ buildCommentText }) {
           console.warn(`[Comment][FAILED] post=${post.id} attempts=${attempts}/3 retry=${retry}`);
         }
       }
-      await verifyPostedComments();
+      if (!draining) await verifyPostedComments();
+      if (!draining) await reconcileUnknownPublishes({ shouldStop: () => draining });
     } finally {
       running = publishing = false;
       setState(-1, 'idle', 'publish tick complete');
@@ -288,4 +312,10 @@ function startPublishJob({ buildCommentText }) {
 // between container creation and publish.
 let publishing = false;
 const isPublishing = () => publishing;
-module.exports = { startPublishJob, retryable, initializeRecovery, isPublishing, recordPublishedVideoDuration, verifyPostedComments };
+// 2026-11-05 (marketing c1266546): set by graceful shutdown; the running tick finishes the post it is
+// sending and then stops, and no new tick starts.
+let draining = false;
+const requestDrain = () => {
+  draining = true;
+};
+module.exports = { requestDrain, startPublishJob, retryable, initializeRecovery, isPublishing, recordPublishedVideoDuration, verifyPostedComments };

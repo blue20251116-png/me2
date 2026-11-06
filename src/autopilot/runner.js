@@ -47,12 +47,87 @@ function saveAutopilotPost({
   contentMode = null,
   dedupeKeys = null,
   postFrame = null,
+  videoSkipReason = null,
+  videoDurationSec = null,
+  guard = null,
 }) {
   const formattedText = formatThreadsBody(text);
+  // guard (owner accounts, dev 0079f189): re-checks the day caps right before the INSERT inside one
+  // IMMEDIATE transaction, so another process or a concurrent generation cannot slip in between.
+  // A non-empty reason returned by guard() skips the insert and is handed back as { skipped }.
+  let inTx = false;
+  if (guard) {
+    db.exec('BEGIN IMMEDIATE');
+    inTx = true;
+  }
+  try {
+    const reason = guard ? guard() : null;
+    if (reason) {
+      db.exec('ROLLBACK');
+      inTx = false;
+      return { skipped: reason };
+    }
+    const info = insertAutopilotPost({
+      formattedText,
+      accountId,
+      link,
+      imageUrl,
+      extraImageUrl,
+      videoUrl,
+      recipeCommentText,
+      scheduledAt,
+      persona,
+      contentMode,
+      dedupeKeys,
+      postFrame,
+    });
+    const id = Number(info?.lastInsertRowid || 0) || null;
+    recordVideoMeta(id, videoSkipReason, videoDurationSec);
+    if (inTx) {
+      db.exec('COMMIT');
+      inTx = false;
+    }
+    return { id };
+  } catch (e) {
+    if (inTx)
+      try {
+        db.exec('ROLLBACK');
+      } catch {}
+    throw e;
+  }
+}
+// Why this post has no video (posts.video_skip_reason) and its video length (posts.video_duration_sec).
+// Best effort: a missing column (migration failed) never blocks the reservation.
+function recordVideoMeta(id, videoSkipReason, videoDurationSec) {
+  if (!id || (videoSkipReason == null && videoDurationSec == null)) return;
+  try {
+    db.prepare('UPDATE posts SET video_skip_reason=?, video_duration_sec=? WHERE id=?').run(
+      videoSkipReason ? String(videoSkipReason).slice(0, 300) : null,
+      Number.isFinite(Number(videoDurationSec)) && videoDurationSec != null ? Number(videoDurationSec) : null,
+      id
+    );
+  } catch (e) {
+    console.warn(`[Autopilot][VIDEO META] post=${id} 기록 실패 reason="${e.message}"`);
+  }
+}
+function insertAutopilotPost({
+  formattedText,
+  accountId,
+  link,
+  imageUrl,
+  extraImageUrl,
+  videoUrl,
+  recipeCommentText,
+  scheduledAt,
+  persona,
+  contentMode,
+  dedupeKeys,
+  postFrame,
+}) {
   // dedupe_keys is only written for fixed-persona accounts (accountMix.js); every other account keeps
   // the original INSERT unchanged.
   if (dedupeKeys) {
-    db.prepare(
+    return db.prepare(
       `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode,dedupe_keys,post_frame) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?,?,?)`
     ).run(
       formattedText,
@@ -68,9 +143,8 @@ function saveAutopilotPost({
       dedupeKeys,
       postFrame || null
     );
-    return;
   }
-  db.prepare(
+  return db.prepare(
     `INSERT INTO posts (text,link,image_url,extra_image_url,video_url,scheduled_at,auto_comment_enabled,comment_status,account_id,recipe_comment_text,comment_retry_count,comment_next_retry_at,persona,content_mode) VALUES (?,?,?,?,?,?,1,'pending',?,?,0,NULL,?,?)`
   ).run(
     formattedText,
@@ -105,6 +179,7 @@ async function runContentOnlyAutopilot(account, target, scheduledAt = null) {
     scheduledAt,
     persona: r.persona,
     contentMode: 'recipe',
+    videoSkipReason: '콘텐츠 전용 경로(쿠팡 키 없음): 레시피 이미지 글은 영상 미사용',
   });
   recordAutopilotLast(account.id, r.keyword, target);
 }
@@ -115,7 +190,7 @@ async function runContentOnlyAutopilot(account, target, scheduledAt = null) {
 // made; the caller then fills the slot with a link-free recipe/product post instead.
 // 2026-10-30 (marketing plan 5: reference accounts' top posts are 20% text-only, ours 0%):
 // accountPersonas.json dailyWithPhoto=false makes these text-only posts again.
-async function runDailyStoryAutopilot(account, target, scheduledAt = null) {
+async function runDailyStoryAutopilot(account, target, scheduledAt = null, reservation = null) {
   const withPhoto = accountPersonaSettings().dailyWithPhoto;
   let r;
   try {
@@ -138,7 +213,7 @@ async function runDailyStoryAutopilot(account, target, scheduledAt = null) {
     );
     return false;
   }
-  saveAutopilotPost({
+  const saved = saveAutopilotPost({
     accountId: account.id,
     text: r.text,
     link: null,
@@ -149,7 +224,13 @@ async function runDailyStoryAutopilot(account, target, scheduledAt = null) {
     scheduledAt,
     persona: r.persona,
     contentMode: 'daily',
+    videoSkipReason: '일상 글 칸: 텍스트/사진 글이라 영상 미사용',
+    guard: () => accountMix.capRecheck(account.id, scheduledAt, { daily: true, own: [reservation] }).daily,
   });
+  if (saved?.skipped) {
+    console.log(`[자동발행 예약][PERSONA DAILY] account #${account.id} ${saved.skipped} → 레시피/상품 글로 대체`);
+    return false;
+  }
   recordAutopilotLast(account.id, r.keyword, target);
   console.log(
     `[자동발행 예약][PERSONA DAILY] account #${account.id} persona=${r.persona} link=no photo=${withPhoto ? 'yes' : 'no'}`
@@ -180,6 +261,9 @@ function assertHasMedia(media, { accountId, target, mode, topic } = {}) {
   err.code = 'CONTENT_QUALITY_HOLD';
   err.isContentQualityHold = true;
   throw err;
+}
+function mediaHasVideo(media) {
+  return !!media?.videoUrl || /VIDEO/.test(String(media?.imageUrl || ''));
 }
 function chooseImageFallback(result) {
   const images = Array.isArray(result?.sourceImages) ? result.sourceImages.filter(Boolean) : [];
@@ -229,17 +313,31 @@ function fileHash(filename) {
     return null;
   }
 }
-// options (owner accounts only): { allowVideo, accountId, scheduledAt } - allowVideo=false skips the
-// video import; a video whose file another owner post already used (m: key) falls back to images.
+// options (owner accounts only): { allowVideo, accountId, scheduledAt, capReason } - allowVideo=false skips
+// the video import; a video whose file another owner post already used (m: key) falls back to images.
+// 2026-11-05 (dev 0079f189): the returned media carries videoSkipReason (why this slot got no video; null
+// when it has one) and videoDurationSec (length of the imported file), both saved on the post row.
 async function chooseSourceMedia(result, options = null) {
+  const media = await chooseSourceMediaInner(result, options);
+  if (!mediaHasVideo(media) && media.videoSkipReason) {
+    const who = options?.accountId ? `account #${options.accountId} ` : '';
+    console.log(`[Autopilot][VIDEO SKIP] ${who}slot=${options?.scheduledAt || '-'} reason="${media.videoSkipReason}"`);
+  }
+  return media;
+}
+function withReason(media, videoSkipReason) {
+  return { ...media, videoSkipReason, videoDurationSec: null };
+}
+async function chooseSourceMediaInner(result, options = null) {
   const videos = Array.isArray(result?.sourceVideos) ? result.sourceVideos.filter(Boolean) : [];
   const images = Array.isArray(result?.sourceImages) ? result.sourceImages.filter(Boolean) : [];
-  if (options && (!options.allowVideo || !videos.length)) {
-    if (videos.length)
-      console.log(`[Autopilot][VIDEO CAP] account #${options.accountId} 오늘 재업로드 영상 한도 → 이미지 사용`);
-    return ownerImageFallback(result);
+  const fallback = reason => withReason(options ? ownerImageFallback(result) : chooseImageFallback(result), reason);
+  if (!videos.length) return fallback('소재에 영상 없음');
+  if (options && !options.allowVideo) {
+    console.log(`[Autopilot][VIDEO CAP] account #${options.accountId} 오늘 재업로드 영상 한도 → 이미지 사용`);
+    return fallback(options.capReason || '오늘 영상 한도 도달');
   }
-  if (videos.length && result?.sourceUrl) {
+  if (result?.sourceUrl) {
     try {
       console.log(`[Autopilot][VIDEO IMPORT] 소재찾기 importer 사용 시작 source=${result.sourceUrl}`);
       const imported = await importThreadsVideo({ url: result.sourceUrl, outputDir: uploadsDir });
@@ -251,10 +349,13 @@ async function chooseSourceMedia(result, options = null) {
           console.log(
             `[Autopilot][VIDEO DEDUPE] account #${options.accountId} 같은 영상 파일 ${dup.scope} #${dup.accountId} → 이미지 사용`
           );
-          return ownerImageFallback(result);
+          return withReason(ownerImageFallback(result), `같은 영상 파일을 이미 씀 (${dup.scope} #${dup.accountId})`);
         }
         result.mediaKeys = keys;
       }
+      const videoDurationSec = require('../threads/videoDuration').probeVideoDurationSec(
+        require('path').join(uploadsDir, imported.filename)
+      );
       const videoUrl = publicUploadUrl(imported.filename);
       const items = [{ type: 'VIDEO', url: videoUrl }, ...images.slice(0, 9).map(url => ({ type: 'IMAGE', url }))];
       const bundle = encodeMediaBundle(items);
@@ -267,15 +368,25 @@ async function chooseSourceMedia(result, options = null) {
           imageUrl: bundle,
           extraImageUrl: null,
           imageSourceLabel: `Threads 소재 원본 영상 1개 + 이미지 ${Math.min(images.length, 9)}개`,
+          videoSkipReason: null,
+          videoDurationSec,
         };
-      return { videoUrl, imageUrl: null, extraImageUrl: null, imageSourceLabel: 'Threads 소재 원본 영상 다운로드 1개' };
+      return {
+        videoUrl,
+        imageUrl: null,
+        extraImageUrl: null,
+        imageSourceLabel: 'Threads 소재 원본 영상 다운로드 1개',
+        videoSkipReason: null,
+        videoDurationSec,
+      };
     } catch (err) {
       console.warn(
         `[Autopilot][VIDEO IMPORT] 실패 → 이미지 fallback source=${result.sourceUrl} reason="${err.message}"`
       );
+      return fallback(`영상 다운로드 실패: ${String(err?.message || err).slice(0, 160)}`);
     }
   }
-  return options ? ownerImageFallback(result) : chooseImageFallback(result);
+  return fallback('영상 원본 주소 없음');
 }
 function classifyCoupangUrl(raw) {
   try {
@@ -309,8 +420,13 @@ async function makeAffiliateLink(account, result) {
   } catch (err) {
     const msg = String(err?.message || err?.response?.data?.rMessage || '');
     if (/url convert failed/i.test(msg)) {
-      console.warn(`[Coupang][LINK] 딥링크 재변환 거부 → 검색 API productUrl 그대로 사용`);
-      return raw;
+      // dev 936a5d23 (11/05): never post the plain product URL. Drop this product; the slot retries in 10 min
+      // and the generation filter skips it, so another product is picked.
+      accountMix.markLinkRejected(result?.product);
+      console.warn(`[Coupang][LINK] 딥링크 변환 거부 → 이 상품은 버리고 다음 시도에서 다른 상품 사용`);
+      const e = new Error('쿠팡 딥링크 변환 거부(url convert failed): 이 상품은 건너뛰고 다른 상품으로 다시 시도');
+      e.code = 'COUPANG_LINK_REJECTED';
+      throw e;
     }
     throw err;
   }
@@ -428,17 +544,35 @@ async function ensureCoupangReady(accountId, account) {
     return true;
   }
 }
+// Owner accounts: every slot holds an in-flight reservation of its kind (and of a video) while it is being
+// generated, so a concurrent generation of the same account-day counts it (dev 0079f189).
 async function runAutopilotOnceInner(account, scheduledAt = null) {
+  const reservations = [];
+  try {
+    return await runAutopilotOnceReserved(account, scheduledAt, reservations);
+  } finally {
+    for (const r of reservations) r.release();
+  }
+}
+async function runAutopilotOnceReserved(account, scheduledAt, reservations) {
   const target = AUTOPILOT_TARGETS[Math.floor(Math.random() * AUTOPILOT_TARGETS.length)];
   // Fixed-persona owner accounts alternate link-free everyday posts with a capped number of linked
   // posts per day (accountMix.decideSlotKind); every other account skips this (persona = null).
   const persona = accountPersonaFor(account.id);
+  const hold = k => {
+    const r = accountMix.reserveSlot(account.id, scheduledAt, k);
+    reservations.push(r);
+    return r;
+  };
   // 'linked' | 'unlinked' | 'daily' for owner accounts (accountMix.decideSlotKind), null otherwise.
   let kind = persona ? accountMix.slotKind(account.id, scheduledAt) : null;
   if (kind === 'daily') {
-    if (await runDailyStoryAutopilot(account, target, scheduledAt)) return;
+    const dailyHold = hold('daily');
+    if (await runDailyStoryAutopilot(account, target, scheduledAt, dailyHold)) return;
+    dailyHold.release();
     kind = 'unlinked';
   }
+  if (persona) hold(kind === 'linked' ? 'linked' : 'plain');
   if (!hasCoupangKeys(account)) {
     await runContentOnlyAutopilot(account, target, scheduledAt);
     return;
@@ -450,9 +584,13 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
     e.isCoupangRateLimit = true;
     throw e;
   }
+  // dev 0079f189 (b): while the day's video cap allows a video, video source posts are tried first.
+  const preferVideo = !!persona && accountMix.videoAllowed(account.id, scheduledAt);
   const result = await buildAutopilotPost(account.id, {
     target,
-    ...(persona ? accountMix.generationFilters(account.id, scheduledAt) : {}),
+    ...(preferVideo ? { preferVideo: true } : {}),
+    // Accounts without a fixed persona still skip products whose deeplink was refused (dev 936a5d23).
+    ...(persona ? accountMix.generationFilters(account.id, scheduledAt) : { productFilter: accountMix.linkRejectFilter }),
   });
   let dedupeKeys = null;
   if (persona) {
@@ -489,33 +627,54 @@ async function runAutopilotOnceInner(account, scheduledAt = null) {
   const unlinked = accountMix.linkFreeAllowed(kind, result.mode);
   const affiliateLink = unlinked ? null : await makeAffiliateLink(account, result);
   if (!unlinked && !affiliateLink) throw new Error('쿠팡 파트너스 링크가 비어 있어 예약을 만들지 않았습니다');
-  const media = await chooseSourceMedia(
-    result,
-    persona
-      ? { allowVideo: accountMix.videoAllowed(account.id, scheduledAt), accountId: account.id, scheduledAt }
-      : null
-  );
+  let mediaOptions = null;
+  let videoHold = null;
+  if (persona) {
+    const allowVideo = accountMix.videoAllowed(account.id, scheduledAt);
+    const capReason = allowVideo
+      ? null
+      : `오늘 영상 한도 ${accountMix.videoPostsOnDay(account.id, scheduledAt)}/${accountPersonaSettings().maxVideoPerDay}`;
+    if (allowVideo) videoHold = hold('video');
+    mediaOptions = { allowVideo, accountId: account.id, scheduledAt, capReason };
+  }
+  let media = await chooseSourceMedia(result, mediaOptions);
+  if (videoHold && !mediaHasVideo(media)) videoHold.release();
   assertHasMedia(media, { accountId: account.id, target, mode: result.mode, topic: result.topic });
   if (persona && result.mediaKeys?.length)
     dedupeKeys = accountMix.encodeKeys([...accountMix.decodeKeys(dedupeKeys), ...result.mediaKeys]);
-  saveAutopilotPost({
-    accountId: account.id,
-    text: result.text,
-    link: affiliateLink,
-    imageUrl: media.imageUrl,
-    extraImageUrl: media.extraImageUrl,
-    videoUrl: media.videoUrl,
-    recipeCommentText: unlinked
-      ? result.mode === 'recipe'
-        ? revealSecretIngredient(result.commentLead, result.secretTerm)
-        : null
-      : result.commentLead,
-    scheduledAt,
-    persona: result.persona,
-    contentMode: unlinked ? `${result.mode}-nolink` : result.mode,
-    dedupeKeys,
-    postFrame: persona ? result.postFrame || null : null,
-  });
+  const save = m =>
+    saveAutopilotPost({
+      accountId: account.id,
+      text: result.text,
+      link: affiliateLink,
+      imageUrl: m.imageUrl,
+      extraImageUrl: m.extraImageUrl,
+      videoUrl: m.videoUrl,
+      recipeCommentText: unlinked
+        ? result.mode === 'recipe'
+          ? revealSecretIngredient(result.commentLead, result.secretTerm)
+          : null
+        : result.commentLead,
+      scheduledAt,
+      persona: result.persona,
+      contentMode: unlinked ? `${result.mode}-nolink` : result.mode,
+      dedupeKeys,
+      postFrame: persona ? result.postFrame || null : null,
+      videoSkipReason: mediaHasVideo(m) ? null : m.videoSkipReason || null,
+      videoDurationSec: mediaHasVideo(m) ? m.videoDurationSec ?? null : null,
+      guard:
+        persona && mediaHasVideo(m)
+          ? () => accountMix.capRecheck(account.id, scheduledAt, { video: true, own: reservations }).video
+          : null,
+    });
+  const saved = save(media);
+  if (saved?.skipped) {
+    // Another generation filled the day's video cap meanwhile: same post with the source images instead.
+    console.log(`[Autopilot][VIDEO CAP] account #${account.id} ${saved.skipped} → 이미지 사용`);
+    media = withReason(ownerImageFallback(result), saved.skipped);
+    assertHasMedia(media, { accountId: account.id, target, mode: result.mode, topic: result.topic });
+    save(media);
+  }
   const last = result.productSearchTerm || result.secretTerm || result.topic;
   recordAutopilotLast(account.id, last, target);
   console.log(
@@ -706,4 +865,12 @@ function startAutopilotJob() {
   );
 }
 
-module.exports = { startAutopilotJob, runAutopilotOnce, refillAccount, chooseImageFallback, assertHasMedia };
+module.exports = {
+  startAutopilotJob,
+  runAutopilotOnce,
+  refillAccount,
+  chooseImageFallback,
+  assertHasMedia,
+  chooseSourceMedia,
+  saveAutopilotPost,
+};

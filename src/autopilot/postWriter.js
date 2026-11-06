@@ -7,6 +7,8 @@ const {
   accountPersonaSettings,
   bannedPhrasesFor,
   identityAnchorBlock,
+  closerStyleFor,
+  closerBlock,
 } = require('../content/accountPersonas');
 const { frameBlock } = require('../content/postFrames');
 const { chooseFrameFor } = require('./accountMix');
@@ -155,6 +157,8 @@ async function generatePost(accountId, { material, analysis, product, target, la
   const persona =
     fixed && picked.id !== fixed.id ? { ...picked, block: `${picked.block}\n${identityAnchorBlock(fixed)}` } : picked;
   const reflectionBlock = diag?.under1000 ? buildPersonaReflectionBlock(diag, angle) : '';
+  // 2026-11-04: fixed-persona accounts rotate the last line (reaction / ongoing / question).
+  const closerStyle = fixed ? closerStyleFor(accountId) : null;
   // Fixed-persona product posts also get a post-structure frame (postFrames.js), alternated per
   // account; grounding = the only facts a store/authority/price claim may come from.
   const frame = fixed && analysis.mode === 'product' ? chooseFrameFor(accountId) : null;
@@ -172,7 +176,9 @@ async function generatePost(accountId, { material, analysis, product, target, la
     `너는 한국 Threads에서 실제 사람이 쓰는 쇼핑/레시피 글 편집자다. 아래 문체 정책에 따라 원 소재를 가장 바이럴한 각도로 재구성한다.
 
 ${voiceGuide(persona.block)}${reflectionBlock}
-${frame ? `\n${frameBlock(frame)}\n` : ''}
+${closerStyle ? `
+${closerBlock(closerStyle)}
+` : ''}${frame ? `\n${frameBlock(frame)}\n` : ''}
 [레시피]
 - 본문 text는 위 문체 정책대로 가장 강한 후킹 포인트를 중심으로 재구성한다. 다만 재료/조리법 같은 레시피 사실은 원문 근거를 벗어나지 않는다.
 - 정확한 제휴 소스/핵심재료 이름은 본문에서 숨긴다.
@@ -238,6 +244,7 @@ JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     mode: analysis.mode,
     ...(bannedPhrases.length ? { bannedPhrases } : {}),
     ...(frame ? { frame, grounding } : {}),
+    ...(closerStyle ? { closerStyle } : {}),
   });
   console.log(`[AutopilotV3][SOURCE VOICE v2] text="${text.replace(/\n/g, ' / ')}"`);
   return { text, commentLead, persona: persona.id, frame, grounding };

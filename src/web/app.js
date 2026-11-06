@@ -69,6 +69,17 @@ function createApp() {
   // Threads API requires public media URLs, so /uploads is served before the auth gate.
   app.use('/uploads', express.static(uploadsDir));
 
+  // Threads OAuth 콜백이 공개 https 주소(터널)로 들어왔는데 세션은 로컬 주소(127.0.0.1/localhost)에 있을 때,
+  // state에 실린 루프백 주소로 그대로 넘겨 로컬 세션에서 마무리한다. 루프백 주소만 허용(오픈 리다이렉트 방지).
+  app.get('/auth/callback', (req, res, next) => {
+    if (req.session?.threadsOauth) return next();
+    const enc = String(req.query.state || '').split('.')[2];
+    if (!enc) return next();
+    const target = Buffer.from(enc, 'base64url').toString('utf8');
+    if (!/^(localhost|127\.0\.0\.1):\d{2,5}$/.test(target) || target === req.get('host')) return next();
+    res.redirect(`http://${target}/auth/callback?${new URLSearchParams(req.query).toString()}`);
+  });
+
   // ---------- 여기부터는 로그인 + 승인(active) 상태여야만 통과 ----------
   app.use(requireAuth);
   app.use(require('./routes/admin'));

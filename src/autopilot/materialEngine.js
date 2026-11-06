@@ -18,8 +18,9 @@ const { identifyCommerceTarget, analyzeMaterial, mediaFlagSkipReason } = require
 // options.materialFilter / options.productFilter (accountMix.generationFilters, fixed-persona
 // accounts only) return a skip reason for a source or product this account must not use.
 async function buildThreadsFirstAutopilot(accountId, options = {}) {
-  const { target, materialFilter, productFilter } = options;
-  const materials = await collectQualifiedThreadsMaterials(3);
+  const { target, materialFilter, productFilter, preferVideo } = options;
+  // preferVideo (owner accounts while the day's video cap allows one, runner.js): video sources first.
+  const materials = await collectQualifiedThreadsMaterials(3, preferVideo ? { preferVideo: true } : undefined);
   const preferredSlot = preferredContentSlot(accountId);
   const preferredMode = preferredSlot.mode;
   const specialStoryWanted = preferredSlot.specialStory === true;

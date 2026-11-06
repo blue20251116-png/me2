@@ -4,7 +4,7 @@
 // product/source/media/text de-duplication. Every function is a no-op for other accounts, so their
 // autopilot behaviour is unchanged.
 const { db } = require('../infra/db');
-const { dayKeyKst, dayBounds } = require('../publish/slots');
+const { dayKeyKst, dayBounds, LIVE_POST_STATUS_SQL, personaChainOptions } = require('../publish/slots');
 const {
   accountPersonaFor,
   isPersonaAccount,
@@ -37,17 +37,83 @@ function linkFreeAllowed(kind, mode) {
   return kind === 'unlinked' && mode === 'recipe';
 }
 
-function dayMix(accountId, dayKey) {
+// 2026-11-05 (dev 0079f189): 11/03 home_tempick_ got 4 daily posts (cap 3) and chi_chi1200 2 (cap 1).
+// The day mix only counted status IN ('pending','posted'), so a post in the few seconds of 'publishing'
+// vanished from the count (8704 was decided while 8680 was publishing), and two generations of the same
+// account-day running at once could not see each other. Every live status now counts (LIVE_POST_STATUS_SQL),
+// slots still being generated count as in-flight reservations, and the runner re-checks right before insert.
+const inflight = new Map(); // "accountId|dayKey" -> { linked, plain, daily, video }
+function inflightKey(accountId, scheduledAt) {
+  return `${Number(accountId)}|${dayKeyKst(new Date(scheduledAt || Date.now()))}`;
+}
+function inflightCount(accountId, dayKey, kind) {
+  return Number(inflight.get(`${Number(accountId)}|${dayKey}`)?.[kind] || 0);
+}
+// Holds one slot of `kind` ('linked' | 'plain' | 'daily' | 'video') on the slot's KST day until release().
+function reserveSlot(accountId, scheduledAt, kind) {
+  const key = inflightKey(accountId, scheduledAt);
+  const row = inflight.get(key) || { linked: 0, plain: 0, daily: 0, video: 0 };
+  row[kind] = (row[kind] || 0) + 1;
+  inflight.set(key, row);
+  let done = false;
+  return {
+    kind,
+    get active() {
+      return !done;
+    },
+    release() {
+      if (done) return;
+      done = true;
+      const r = inflight.get(key);
+      if (!r) return;
+      r[kind] = Math.max(0, (r[kind] || 0) - 1);
+      if (!r.linked && !r.plain && !r.daily && !r.video) inflight.delete(key);
+    },
+  };
+}
+
+function dayMixFromDb(accountId, dayKey) {
   const [start, end] = dayBounds(dayKey);
   const row = db
     .prepare(
       `SELECT SUM(CASE WHEN link IS NOT NULL AND link<>'' THEN 1 ELSE 0 END) linked,
               SUM(CASE WHEN (link IS NULL OR link='') AND content_mode='daily' THEN 1 ELSE 0 END) daily,
               SUM(CASE WHEN (link IS NULL OR link='') AND (content_mode IS NULL OR content_mode<>'daily') THEN 1 ELSE 0 END) plain
-         FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND status IN ('pending','posted')`
+         FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND ${LIVE_POST_STATUS_SQL}`
     )
     .get(accountId, start, end);
   return { linked: Number(row?.linked || 0), plain: Number(row?.plain || 0), daily: Number(row?.daily || 0) };
+}
+// DB rows of the day plus slots of this account-day still being generated.
+function dayMix(accountId, dayKey) {
+  const m = dayMixFromDb(accountId, dayKey);
+  return {
+    linked: m.linked + inflightCount(accountId, dayKey, 'linked'),
+    plain: m.plain + inflightCount(accountId, dayKey, 'plain'),
+    daily: m.daily + inflightCount(accountId, dayKey, 'daily'),
+  };
+}
+function maxDailyFor(accountId) {
+  const cfg = accountPersonaSettings();
+  return cfg.maxDailyPerDayByAccount?.[Number(accountId)] ?? cfg.maxDailyPerDay;
+}
+
+// 2026-11-06 (dev a97695f9): the KST minute of the day this account's everyday post goes to, or null
+// when dailySlotTimes is not configured. Account id N -> entry (N-1) % length.
+function dailySlotMinuteFor(accountId) {
+  const times = accountPersonaSettings().dailySlotMinutes || [];
+  if (!times.length) return null;
+  const id = Math.max(1, Number(accountId) || 1);
+  return times[(id - 1) % times.length];
+}
+// Does this slot (scheduledAt) sit on the account's everyday-post time? The template slot times carry
+// this account's stagger offset (slots.js personaChainOptions), so it is taken off before comparing.
+function isDailySlotTime(accountId, scheduledAt, dailyMinute) {
+  const at = new Date(scheduledAt || Date.now());
+  const day = dayKeyKst(at);
+  const offset = Number(personaChainOptions(accountId)?.offsetMin || 0);
+  const minute = Math.round((at.getTime() - Date.parse(`${day}T00:00:00+09:00`)) / 60000) - offset;
+  return Math.abs(minute - dailyMinute) <= 2;
 }
 
 // null for accounts without a fixed persona (caller keeps its original path).
@@ -55,31 +121,65 @@ function slotKind(accountId, scheduledAt) {
   if (!isPersonaAccount(accountId)) return null;
   const day = dayKeyKst(new Date(scheduledAt || Date.now()));
   const cfg = accountPersonaSettings();
+  const mix = dayMix(accountId, day);
+  const maxDaily = maxDailyFor(accountId);
+  const dailyMinute = dailySlotMinuteFor(accountId);
+  if (dailyMinute != null) {
+    // Time mode: the everyday post only goes to its fixed time; every other slot is linked/unlinked
+    // exactly as before (the daily count still counts toward the linked spread).
+    if (mix.daily < maxDaily && isDailySlotTime(accountId, scheduledAt, dailyMinute)) return 'daily';
+    return decideSlotKind({ ...mix, maxLinked: cfg.maxLinkedPerDay, maxDaily: 0, dailyCap: cfg.dailyPostsMax });
+  }
   return decideSlotKind({
-    ...dayMix(accountId, day),
+    ...mix,
     maxLinked: cfg.maxLinkedPerDay,
-    maxDaily: cfg.maxDailyPerDayByAccount?.[Number(accountId)] ?? cfg.maxDailyPerDay,
+    maxDaily,
     dailyCap: cfg.dailyPostsMax,
   });
 }
 
 // Posts of this account on the slot's KST day that carry a re-uploaded Threads video (a plain
 // video_url or a media bundle with a VIDEO item).
-function videoPostsOnDay(accountId, scheduledAt) {
+// (In-flight video reservations of the day count too, see reserveSlot.)
+function videoPostsOnDayFromDb(accountId, scheduledAt) {
   const [start, end] = dayBounds(dayKeyKst(new Date(scheduledAt || Date.now())));
   return Number(
     db
       .prepare(
-        `SELECT COUNT(*) c FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND status IN ('pending','posted') AND ((video_url IS NOT NULL AND video_url<>'') OR image_url LIKE '%VIDEO%')`
+        `SELECT COUNT(*) c FROM posts WHERE account_id=? AND scheduled_at>=? AND scheduled_at<? AND ${LIVE_POST_STATUS_SQL} AND ((video_url IS NOT NULL AND video_url<>'') OR image_url LIKE '%VIDEO%')`
       )
       .get(accountId, start, end)?.c || 0
   );
+}
+function videoPostsOnDay(accountId, scheduledAt) {
+  const day = dayKeyKst(new Date(scheduledAt || Date.now()));
+  return videoPostsOnDayFromDb(accountId, scheduledAt) + inflightCount(accountId, day, 'video');
 }
 // May this slot use a video re-uploaded from another creator? Owner accounts: only while the day
 // holds fewer than maxVideoPerDay such posts (about a third). Always true for other accounts.
 function videoAllowed(accountId, scheduledAt) {
   if (!isPersonaAccount(accountId)) return true;
   return videoPostsOnDay(accountId, scheduledAt) < accountPersonaSettings().maxVideoPerDay;
+}
+// Last check right before the INSERT (runs inside the same synchronous transaction as the insert, so a
+// second process or a concurrent generation cannot slip in between). `own` lists this slot's own
+// reservations (they are not counted against it). Returns { daily, video } over-cap reasons or null.
+function capRecheck(accountId, scheduledAt, { daily = false, video = false, own = [] } = {}) {
+  if (!isPersonaAccount(accountId)) return { daily: null, video: null };
+  const day = dayKeyKst(new Date(scheduledAt || Date.now()));
+  const ownCount = kind => own.filter(r => r && r.active && r.kind === kind).length;
+  const out = { daily: null, video: null };
+  if (daily) {
+    const n = dayMixFromDb(accountId, day).daily + inflightCount(accountId, day, 'daily') - ownCount('daily');
+    const max = maxDailyFor(accountId);
+    if (n >= max) out.daily = `일상 글 하루 한도 ${n}/${max} (insert 직전 재확인)`;
+  }
+  if (video) {
+    const n = videoPostsOnDayFromDb(accountId, scheduledAt) + inflightCount(accountId, day, 'video') - ownCount('video');
+    const max = accountPersonaSettings().maxVideoPerDay;
+    if (n >= max) out.video = `영상 하루 한도 ${n}/${max} (insert 직전 재확인)`;
+  }
+  return out;
 }
 
 function normKey(v) {
@@ -204,6 +304,36 @@ function findSimilarText(accountId, text, scheduledAt, { threshold = SIMILAR_TEX
 
 // Filters handed to the material engine so a duplicate or off-persona source is skipped before
 // any vision/AI work, and a duplicate product before the post is written. {} for other accounts.
+// 2026-11-05 (dev 936a5d23): a product whose Coupang deeplink conversion is refused ("url convert failed") is
+// remembered for 7 days and skipped, so the next attempt picks another product instead of posting a plain URL
+// (plain URLs failed as Threads comments with subcode 4279047 and earn no Partners commission).
+const LINK_REJECT_TTL_MS = 7 * 86400000;
+const linkRejected = new Map();
+function linkRejectKeys(product) {
+  const keys = [];
+  if (product?.productId) keys.push('p:' + String(product.productId));
+  const url = String(product?.url || '').split(/[?#]/)[0].toLowerCase();
+  if (url) keys.push('u:' + url);
+  return keys;
+}
+function markLinkRejected(product, now = Date.now()) {
+  for (const k of linkRejectKeys(product)) linkRejected.set(k, now + LINK_REJECT_TTL_MS);
+}
+function isLinkRejected(product, now = Date.now()) {
+  return linkRejectKeys(product).some((k) => {
+    const until = linkRejected.get(k);
+    if (!until) return false;
+    if (until < now) {
+      linkRejected.delete(k);
+      return false;
+    }
+    return true;
+  });
+}
+function linkRejectFilter(candidate) {
+  return isLinkRejected(candidate?.product) ? '쿠팡 딥링크 변환 거부된 상품' : null;
+}
+
 function generationFilters(accountId, scheduledAt) {
   const persona = accountPersonaFor(accountId);
   if (!persona) return {};
@@ -216,6 +346,8 @@ function generationFilters(accountId, scheduledAt) {
       return dup ? `중복 소재 ${dup.scope} #${dup.accountId} ${dup.key}` : null;
     },
     productFilter(candidate) {
+      const rejected = linkRejectFilter(candidate);
+      if (rejected) return rejected;
       const dup = findDuplicate(accountId, dedupeKeysFor(candidate), scheduledAt);
       return dup ? `중복 상품 ${dup.scope} #${dup.accountId} ${dup.key}` : null;
     },
@@ -255,11 +387,14 @@ function duplicateError(dup) {
 
 module.exports = {
   decideSlotKind,
+  dailySlotMinuteFor,
   linkFreeAllowed,
   dayMix,
   slotKind,
   videoPostsOnDay,
   videoAllowed,
+  reserveSlot,
+  capRecheck,
   dedupeKeysFor,
   encodeKeys,
   decodeKeys,
@@ -268,6 +403,9 @@ module.exports = {
   findSimilarText,
   SIMILAR_TEXT_THRESHOLD,
   generationFilters,
+  markLinkRejected,
+  isLinkRejected,
+  linkRejectFilter,
   frameCounts,
   chooseFrameFor,
   duplicateError,

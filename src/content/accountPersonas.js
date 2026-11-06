@@ -430,6 +430,18 @@ function parseSlotTemplate(v) {
   }
   return [...new Set(out)].sort((a, b) => a - b);
 }
+// Like parseSlotTemplate but keeps the given order (the position picks the account group).
+function parseTimesInOrder(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const s of v) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(s).trim());
+    if (!m) continue;
+    const min = Number(m[1]) * 60 + Number(m[2]);
+    if (Number(m[2]) < 60 && min < 24 * 60) out.push(min);
+  }
+  return out;
+}
 function normalizeConfig(raw = {}) {
   const d = DEFAULT_CONFIG;
   const known = new Set(ACCOUNT_PERSONAS.map(p => p.id));
@@ -463,6 +475,10 @@ function normalizeConfig(raw = {}) {
     activeEndHour: num(raw.activeEndHour, d.activeEndHour, activeStartHour + 1, 24),
     dedupeOwnDays: num(raw.dedupeOwnDays, d.dedupeOwnDays, 0, 60),
     slotTemplateMinutes: parseSlotTemplate(raw.slotTemplate),
+    // 2026-11-06 (dev a97695f9, marketing a1e03d3a 3-day test): fixed KST times for the everyday post,
+    // in the order given; account id N uses entry (N-1) % length (["08:00","17:30"]: odd ids 08:00,
+    // even ids 17:30). Empty = the old order-based rule (decideSlotKind).
+    dailySlotMinutes: parseTimesInOrder(raw.dailySlotTimes),
     slotStaggerMinutes: num(raw.slotStaggerMinutes, d.slotStaggerMinutes, 0, 30),
     dailyWithPhoto: raw.dailyWithPhoto == null ? d.dailyWithPhoto : raw.dailyWithPhoto === true,
   };

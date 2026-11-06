@@ -20,6 +20,34 @@ function getAuthUrl(accountId, state) {
   return `https://threads.net/oauth/authorize?client_id=${encodeURIComponent(appId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes)}&response_type=code&state=${encodeURIComponent(state ?? accountId)}`;
 }
 
+// 11/5 meaiflow 연결 실패(4476002 "요청과 함께 앱 ID가 전송되지 않았습니다"): 공용 설정에 Threads 앱 ID가 아니라
+// Meta 앱(페이스북) ID가 들어 있었다. Threads authorize 화면은 모르는 ID를 "앱 ID 없음"으로 표시하므로,
+// 연결 버튼을 누를 때 graph.threads.net 앱 토큰 발급으로 ID/시크릿을 먼저 확인하고 알아볼 수 있는 안내를 띄운다.
+const appCheckCache = new Map();
+async function checkThreadsAppCreds(account) {
+  if (process.env.NODE_ENV === 'test' || process.env.THREADS_APP_PREFLIGHT === '0') return { ok: true, skipped: true };
+  const { appId, appSecret } = resolveThreadsAppCreds(account);
+  if (!appId || !appSecret) return { ok: true, skipped: true };
+  const key = `${appId}:${appSecret.length}:${appSecret.slice(-4)}`;
+  const hit = appCheckCache.get(key);
+  if (hit && Date.now() - hit.at < 10 * 60000) return hit.result;
+  let result;
+  try {
+    await axios.get('https://graph.threads.net/oauth/access_token', {
+      params: { client_id: appId, client_secret: appSecret, grant_type: 'client_credentials' },
+      timeout: 10000,
+    });
+    result = { ok: true };
+  } catch (err) {
+    const msg = String(err.response?.data?.error?.message || '');
+    if (err.response?.status === 400 && /invalid client_id/i.test(msg)) result = { ok: false, reason: 'app_id' };
+    else if (err.response?.status === 400 && /secret/i.test(msg)) result = { ok: false, reason: 'app_secret' };
+    else return { ok: true, skipped: true }; // 네트워크 문제 등은 연결을 막지 않는다
+  }
+  appCheckCache.set(key, { at: Date.now(), result });
+  return result;
+}
+
 async function exchangeCodeForToken(accountId, code) {
   const account = getAccount(accountId);
   if (!account) throw new Error('존재하지 않는 계정입니다');
@@ -85,4 +113,4 @@ async function fetchProfile(accessToken, userId) {
   }
 }
 
-module.exports = { getAuthUrl, exchangeCodeForToken, exchangeForLongLivedToken, refreshLongLivedToken, fetchProfile };
+module.exports = { getAuthUrl, checkThreadsAppCreds, exchangeCodeForToken, exchangeForLongLivedToken, refreshLongLivedToken, fetchProfile };

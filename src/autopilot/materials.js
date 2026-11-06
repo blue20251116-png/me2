@@ -75,14 +75,27 @@ function materialScore(i) {
   return s + Math.random();
 }
 
-async function pickThreadsMaterials() {
+function materialHasVideo(i) {
+  return !!i?.hasVideo || Number(i?.videoCount || 0) > 0 || (Array.isArray(i?.videos) && i.videos.some(Boolean));
+}
+// 2026-11-05 (dev 0079f189 b, approval 922f4bd8: an open slot uses a video post first): the +2 video score
+// alone did not guarantee it (a long recipe text outscored a video). With preferVideo every video source
+// sorts ahead of every non-video one; the score still orders each group. The day's video cap (8) is
+// checked by the caller, which only asks for preferVideo while the cap allows a video.
+function sortMaterials(items, { preferVideo = false } = {}) {
+  const scored = items.map(i => ({ i, s: materialScore(i), v: preferVideo && materialHasVideo(i) ? 1 : 0 }));
+  scored.sort((a, b) => b.v - a.v || b.s - a.s);
+  return scored.map(x => x.i);
+}
+
+async function pickThreadsMaterials({ preferVideo = false } = {}) {
   const m = await collectBenchmarkMaterials({ limit: 10 });
   const filtered = (m || []).filter(
     x => x?.url && clean(x.text).length >= 12 && !hasExternalLink(x.text) && !isEngagementBait(x.text)
   );
-  const u = dedupeMaterials(filtered);
+  const u = sortMaterials(dedupeMaterials(filtered), { preferVideo });
   if (!u.length) throw new Error('Threads에서 사용할 소재를 찾지 못했습니다');
-  u.sort((a, b) => materialScore(b) - materialScore(a));
+  if (preferVideo) console.log(`[AutopilotV3][Material] 영상 소재 우선 video=${u.filter(materialHasVideo).length}/${u.length}`);
   console.log(`[AutopilotV3][Material] 수집=${m?.length || 0} 필터후=${filtered.length} 중복제거후=${u.length}`);
   return u;
 }
@@ -105,8 +118,8 @@ async function enrichThreadsMaterial(i) {
   return { ...i, sourceText, authorReplies, images, videos };
 }
 
-async function collectQualifiedThreadsMaterials(maxQualified = 3) {
-  const candidates = await pickThreadsMaterials();
+async function collectQualifiedThreadsMaterials(maxQualified = 3, { preferVideo = false } = {}) {
+  const candidates = await pickThreadsMaterials({ preferVideo });
   const out = [];
   let lastError = null;
   for (const candidate of candidates.slice(0, 10)) {
@@ -125,7 +138,9 @@ async function collectQualifiedThreadsMaterials(maxQualified = 3) {
     }
   }
   if (!out.length) throw new Error(`조건에 맞는 소재를 찾지 못했습니다${lastError ? `: ${lastError.message}` : ''}`);
+  // After enrichment the detail page may reveal a video the listing did not show: those go first too.
+  if (preferVideo) return [...out.filter(materialHasVideo), ...out.filter(x => !materialHasVideo(x))];
   return out;
 }
 
-module.exports = { normalized, collectQualifiedThreadsMaterials };
+module.exports = { normalized, collectQualifiedThreadsMaterials, sortMaterials, materialHasVideo };

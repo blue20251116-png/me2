@@ -75,9 +75,20 @@ function isAllowedMediaUrl(raw) {
   }
 }
 
+// 11/2: a logged-out page shows no post video, only Meta UI assets such as
+// static.cdninstagram.com/rsrc.php/...mp4 (always 97,950 bytes). Those are never the post's video.
+function isUiAsset(raw) {
+  try {
+    const u = new URL(raw);
+    return /(^|\.)static\.cdninstagram\.com$/i.test(u.hostname) || /^\/rsrc\.php\//i.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function pushCandidate(out, raw) {
   const decoded = decodeEscapedUrl(raw);
-  if (!decoded || decoded.startsWith('blob:') || !isAllowedMediaUrl(decoded)) return;
+  if (!decoded || decoded.startsWith('blob:') || !isAllowedMediaUrl(decoded) || isUiAsset(decoded)) return;
   if (!out.includes(decoded)) out.push(decoded);
 }
 
@@ -148,11 +159,21 @@ async function extractCandidatesInBrowser(sourceUrl) {
       args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--autoplay-policy=no-user-gesture-required'],
     });
     const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36';
+    // 11/2: use the collector's logged-in Threads session (db/threads-storage-state.json); logged out,
+    // Threads no longer renders post videos (domVideos=0) and every import fell back to images.
+    let storageState = null;
+    try {
+      const statePath = process.env.THREADS_STORAGE_STATE_PATH || require('path').join(require('../config/paths').DATA_DIR, 'threads-storage-state.json');
+      if (require('fs').existsSync(statePath)) storageState = JSON.parse(require('fs').readFileSync(statePath, 'utf8'));
+    } catch (err) {
+      console.warn('[Threads import] storageState load failed:', err.message);
+    }
     const context = await browser.newContext({
       locale: 'ko-KR',
       viewport: { width: 1280, height: 1600 },
       userAgent,
       extraHTTPHeaders: { 'accept-language': 'ko-KR,ko;q=0.9,en;q=0.8' },
+      ...(storageState ? { storageState } : {}),
     });
 
     const inspectUrl = raw => {
