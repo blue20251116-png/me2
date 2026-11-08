@@ -65,12 +65,12 @@ test.beforeEach(() => {
   db.prepare("UPDATE posts SET comment_status='done' WHERE comment_status IN ('pending','posted')").run();
 });
 
-test('a Coupang-link post is published with the disclosure as its last body line; the stored text is unchanged', async () => {
+test('owner 11/08: a Coupang-link post is published with the body as written (disclosure only in the comment)', async () => {
   const body = '퇴근하고 바닥에 누움\n\n폭신해서 그대로 잠듦';
   const id = addPost({ text: body, link: 'https://link.coupang.com/a/abc', image_url: 'https://cdn.example/a.jpg' });
   await tick();
   const sent = calls.find(c => c.fn === 'publishPost').opts.text;
-  assert.equal(sent, `${body}\n\n쿠팡 파트너스 활동으로 수수료를 받을 수 있음`);
+  assert.equal(sent, body);
   assert.equal(post(id).text, body);
   assert.equal(post(id).status, 'posted');
 });

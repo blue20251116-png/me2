@@ -73,7 +73,16 @@ test('frame A prompt and openers no longer model purchases', () => {
   for (const o of frames.FRAME_A_OPENINGS) assert.ok(!policy.purchaseClaim(o), o);
 });
 
-test('Coupang-link posts get the disclosure as the last body line; other posts are untouched', () => {
+test('owner 11/08: by default the body is sent unchanged (disclosure only in the comment)', () => {
+  const prev = process.env.ME2_BODY_DISCLOSURE;
+  delete process.env.ME2_BODY_DISCLOSURE;
+  const body = '퇴근하고 바닥에 누움\n\n폭신해서 그대로 잠듦';
+  assert.equal(withBodyDisclosure(body, 'https://link.coupang.com/a/abc123'), body);
+  if (prev !== undefined) process.env.ME2_BODY_DISCLOSURE = prev;
+});
+
+test('ME2_BODY_DISCLOSURE=1: Coupang-link posts get the disclosure as the last body line; other posts are untouched', () => {
+  process.env.ME2_BODY_DISCLOSURE = '1';
   const body = '퇴근하고 바닥에 누움\n\n폭신해서 그대로 잠듦';
   const out = withBodyDisclosure(body, 'https://link.coupang.com/a/abc123');
   assert.equal(out, `${body}\n\n${BODY_COUPANG_DISCLOSURE}`);
@@ -85,9 +94,11 @@ test('Coupang-link posts get the disclosure as the last body line; other posts a
   assert.equal(withBodyDisclosure(`${body}\n\n${DEFAULT_COUPANG_DISCLOSURE}`, 'https://www.coupang.com/vp/1').split('쿠팡 파트너스').length, 2);
   // Threads' 500-char limit.
   assert.throws(() => withBodyDisclosure('가'.repeat(490), 'https://link.coupang.com/a/x'), /500자/);
+  delete process.env.ME2_BODY_DISCLOSURE;
 });
 
 test("the account's 100-char body limit is counted without the disclosure line", () => {
+  process.env.ME2_BODY_DISCLOSURE = '1';
   // A body right at the ceiling passes the writer's check; the disclosure is added only at publish time.
   const body = '서랍 세 칸이 한 번에 정리되니까 신기함\n방 어질러놓는 게 습관이었는데 그날 두 칸이나 비웠잖아\n\n이번 주말엔 안방 옷장까지 해볼 생각임';
   assert.ok(Array.from(body).length <= policy.MAX_BODY_CHARS);
@@ -95,6 +106,7 @@ test("the account's 100-char body limit is counted without the disclosure line",
   const published = withBodyDisclosure(body, 'https://link.coupang.com/a/x');
   assert.ok(Array.from(published).length > Array.from(body).length);
   assert.ok(Array.from(published).length <= 500);
+  delete process.env.ME2_BODY_DISCLOSURE;
 });
 
 test('replyCheck: a reply under the right post is verified; missing, top-level or misplaced ones are not', () => {

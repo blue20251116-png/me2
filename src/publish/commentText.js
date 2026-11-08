@@ -14,10 +14,16 @@ const DEFAULT_COUPANG_DISCLOSURE =
 // never said it was an affiliate post. Every Coupang-link post now ends its BODY with this line too
 // (the comment keeps the full disclosure). Added at publish time (publishQueue), so the account's
 // 100-char body limit (voicePolicy MAX_BODY_CHARS) is counted without it; old queued rows get it too.
+// 2026-11-08 owner: "본문에 글을 쓰고 댓글로 쿠팡파트너스 고지글 달잖아" -> the body stays the persona's
+// own text; the disclosure lives only in the auto-comment. ME2_BODY_DISCLOSURE=1 turns the body line back on.
 const BODY_COUPANG_DISCLOSURE = '쿠팡 파트너스 활동으로 수수료를 받을 수 있음';
 const THREADS_TEXT_MAX = 500;
+function bodyDisclosureOn() {
+  return String(process.env.ME2_BODY_DISCLOSURE || '') === '1';
+}
 function withBodyDisclosure(text, link) {
   const body = String(text || '').replace(/\s+$/, '');
+  if (!bodyDisclosureOn()) return body;
   if (!isCoupangLink(link) || /쿠팡\s*파트너스/.test(body)) return body;
   const out = body ? `${body}\n\n${BODY_COUPANG_DISCLOSURE}` : BODY_COUPANG_DISCLOSURE;
   if (Array.from(out).length > THREADS_TEXT_MAX)
