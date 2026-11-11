@@ -63,9 +63,16 @@ async function callAI(
   { system, userContent, model = DEFAULT_MODEL, maxTokens = 1200, temperature = 0.7, timeout = 30000 } = {}
 ) {
   if (process.env.AI_PROVIDER === 'claude-cli') {
-    const text = await callClaudeCli({ system, userContent, timeout });
-    if (!text) throw new Error('AI로부터 응답을 받지 못했습니다');
-    return text;
+    try {
+      const text = await callClaudeCli({ system, userContent, timeout });
+      if (!text) throw new Error('AI로부터 응답을 받지 못했습니다');
+      return text;
+    } catch (err) {
+      // 2026-11-11 (dev a9b0a750, 11/09 08:20~19:06 no new post while the Claude login was at its limit): only when the
+      // owner turns it on (AI_FALLBACK_PROVIDER=openai, a paid API) a Claude limit falls through to OpenAI below.
+      if (!(err.code === 'CLAUDE_CLI_LIMIT' && process.env.AI_FALLBACK_PROVIDER === 'openai' && process.env.OPENAI_API_KEY)) throw err;
+      console.warn('[AI][FALLBACK] Claude CLI limit -> OpenAI (AI_FALLBACK_PROVIDER=openai)');
+    }
   }
   const key = !apiKey || looksLikeAnthropicKey(apiKey) ? process.env.OPENAI_API_KEY || apiKey : apiKey;
   if (!key) throw new Error('OpenAI API 키가 설정되지 않았습니다');

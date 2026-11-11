@@ -104,8 +104,13 @@ Write-Host "로컬 주소 : http://localhost:$port" -ForegroundColor Green
 Write-Host '종료하려면 이 창에서 Ctrl+C'
 Write-Host ''
 
+# 2026-11-11 (dev 5077c0fb, a9b0a750): the server output is kept (it was lost, so the 11/07~11/09 stalls had no log)
+$logDir = Join-Path $PSScriptRoot 'logs'
+New-Item -ItemType Directory -Force $logDir | Out-Null
+$serverLog = Join-Path $logDir ("server-{0:yyyyMMdd-HHmm}.log" -f (Get-Date))
+Write-Host "서버 출력 기록 : $serverLog"
 try {
-  npm start
+  npm start 2>&1 | Tee-Object -FilePath $serverLog
 } finally {
   if ($tunnel) { Stop-Process -Id $tunnel.Id -ErrorAction SilentlyContinue }
 }

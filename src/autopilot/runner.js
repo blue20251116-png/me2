@@ -833,7 +833,10 @@ function startAutopilotJob() {
               `account #${accountId} refill exceeded ${ACCOUNT_REFILL_TIMEOUT_MS}ms`
             );
           } catch (err) {
-            setState(accountId, 'retry', err.code || 'PREFLIGHT_FAILED');
+            // 2026-11-11 (dev a9b0a750): the reason itself (e.g. CLAUDE_CLI_LIMIT: ...), and the newest one on row -2 for /healthz
+            const why = `${err.code || 'PREFLIGHT_FAILED'}: ${String(err.message || '').slice(0, 200)}`;
+            setState(accountId, 'retry', why);
+            try { setState(-2, 'error', `#${accountId} ${why}`); } catch {}
             console.error(`[Autopilot][ACCOUNT ERROR] #${accountId}: ${err.message}`);
           }
         }
