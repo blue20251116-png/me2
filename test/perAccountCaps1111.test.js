@@ -23,7 +23,7 @@ test('per-account caps override the shared ones; others keep the shared values',
   assert.equal(a2.dailyPostsMax, 10); assert.equal(a2.maxVideoPerDay, 8);
   assert.equal(a3.maxVideoPerDay + a10.maxVideoPerDay, 16, 'owner 11/03: video total kept at 16');
   const { personaChainOptions } = require('../src/publish/slots');
-  assert.equal(personaChainOptions(3).dailyMax, 5);
+  assert.equal(personaChainOptions(3).dailyMax, 5); assert.equal(personaChainOptions(3).dailyMin, 5, 'own count = exact');
   assert.equal(personaChainOptions(3).template.length, 5);
   assert.equal(personaChainOptions(2).template.length, 3);
   ap.setAccountPersonaConfig(null);

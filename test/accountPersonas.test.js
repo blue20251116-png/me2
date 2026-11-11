@@ -521,19 +521,24 @@ test('slot template: fixed KST times per account, a few minutes apart, gaps neve
   ap.setAccountPersonaConfig(cfg);
   try {
     for (const id of OWNER_IDS) {
-      const step = slots.chainStepper(id, cfg.dailyPostsMax, 0, () => 0, slots.personaChainOptions(id));
+      // 11/11 (dev 673f3070): an account may have its own times / daily count (slotTemplateByAccount, dailyPostsByAccount)
+      const own = (cfg.slotTemplateByAccount || {})[String(id)];
+      const template = own || cfg.slotTemplate;
+      const dailyMax = (cfg.dailyPostsByAccount || {})[String(id)] ?? cfg.dailyPostsMax;
+      const step = slots.chainStepper(id, dailyMax, 0, () => 0, slots.personaChainOptions(id));
       const day = [];
       for (let i = 0; i < 60; i++) {
         const d = step();
         if (!d) break;
         if (slots.dayKeyKst(d) === slots.addDay(slots.dayKeyKst(), 1)) day.push(d.getTime());
       }
-      assert.equal(day.length, cfg.slotTemplate.length, `account ${id}`);
+      assert.equal(day.length, Math.min(template.length, dailyMax), `account ${id}`);
       for (let i = 1; i < day.length; i++) assert.ok(day[i] - day[i - 1] >= 50 * 60000, `account ${id} gap ${i}`);
       const hour = t => new Date(t + 9 * 3600000).getUTCHours();
       const morning = day.filter(t => hour(t) >= 8 && hour(t) <= 10).length;
       const midday = day.filter(t => hour(t) >= 11 && hour(t) <= 21).length;
-      assert.ok(morning >= 4 && midday <= morning, `account ${id} morning ${morning} midday ${midday}`);
+      // the morning-heavy rule is the shared template's; an account's own times are the threads department's choice
+      if (!own) assert.ok(morning >= 4 && midday <= morning, `account ${id} morning ${morning} midday ${midday}`);
     }
   } finally {
     ap.setAccountPersonaConfig(null);

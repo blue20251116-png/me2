@@ -28,7 +28,7 @@ function personaChainOptions(accountId) {
   return {
     gapMin: c.gapMinutesMin,
     gapMax: c.gapMinutesMax,
-    dailyMin: c.dailyPostsMin,
+    dailyMin: personaCapsFor(accountId).dailyPostsMin,
     dailyMax: personaCapsFor(accountId).dailyPostsMax,
     startHour: c.activeStartHour,
     endHour: c.activeEndHour,

@@ -498,6 +498,9 @@ function personaCapsFor(accountId) {
   const id = Number(accountId);
   return {
     dailyPostsMax: c.dailyPostsByAccount?.[id] ?? c.dailyPostsMax,
+    // an account with its own count posts exactly that many (the shared minimum would make 10 -> random 10~15,
+    // or an empty range for 5 < 10)
+    dailyPostsMin: c.dailyPostsByAccount?.[id] ?? Math.min(c.dailyPostsMin, c.dailyPostsMax),
     maxVideoPerDay: c.maxVideoPerDayByAccount?.[id] ?? c.maxVideoPerDay,
     slotTemplateMinutes: c.slotTemplateByAccount?.[id] || c.slotTemplateMinutes,
   };
