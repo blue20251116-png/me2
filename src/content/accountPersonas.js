@@ -481,6 +481,25 @@ function normalizeConfig(raw = {}) {
     dailySlotMinutes: parseTimesInOrder(raw.dailySlotTimes),
     slotStaggerMinutes: num(raw.slotStaggerMinutes, d.slotStaggerMinutes, 0, 30),
     dailyWithPhoto: raw.dailyWithPhoto == null ? d.dailyWithPhoto : raw.dailyWithPhoto === true,
+    // 2026-11-11 (dev 869a6010, threads 2a81f547; owner 11/03 account 3 videos 8->5, account 10 8->11): per-account
+    // overrides {"3":5,"10":15}; an account not listed keeps the shared value.
+    dailyPostsByAccount: byAccount(raw.dailyPostsByAccount, (v) => num(v, dailyPostsMax, 1, 50)),
+    maxVideoPerDayByAccount: byAccount(raw.maxVideoPerDayByAccount, (v) => num(v, 0, 0, 50)),
+    slotTemplateByAccount: Object.fromEntries(Object.entries(raw.slotTemplateByAccount || {}).filter(([id]) => Number(id) > 0)
+      .map(([id, v]) => [Number(id), parseSlotTemplate(v)]).filter(([, t]) => t && t.length)),
+  };
+}
+function byAccount(map, conv) {
+  return Object.fromEntries(Object.entries(map || {}).filter(([id]) => Number(id) > 0).map(([id, v]) => [Number(id), conv(v)]));
+}
+// The caps of one owner account: its own override, else the shared value.
+function personaCapsFor(accountId) {
+  const c = accountPersonaSettings();
+  const id = Number(accountId);
+  return {
+    dailyPostsMax: c.dailyPostsByAccount?.[id] ?? c.dailyPostsMax,
+    maxVideoPerDay: c.maxVideoPerDayByAccount?.[id] ?? c.maxVideoPerDay,
+    slotTemplateMinutes: c.slotTemplateByAccount?.[id] || c.slotTemplateMinutes,
   };
 }
 // Tests (and a future settings screen) can swap the config without touching the file.
@@ -548,6 +567,7 @@ function closerBlock(style) {
 }
 
 module.exports = {
+  personaCapsFor,
   CLOSER_STYLES,
   closerStyleFor,
   closerBlock,

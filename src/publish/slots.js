@@ -2,7 +2,7 @@
 // When autopilot posts go out: KST day helpers, per-account daily targets, and deterministic,
 // staggered publish slots inside the active window.
 const { db, getAccount, getUserById } = require('../infra/db');
-const { isPersonaAccount, accountPersonaSettings, personaAccountIds } = require('../content/accountPersonas');
+const { isPersonaAccount, accountPersonaSettings, personaAccountIds, personaCapsFor } = require('../content/accountPersonas');
 
 function dayKeyKst(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -29,7 +29,7 @@ function personaChainOptions(accountId) {
     gapMin: c.gapMinutesMin,
     gapMax: c.gapMinutesMax,
     dailyMin: c.dailyPostsMin,
-    dailyMax: c.dailyPostsMax,
+    dailyMax: personaCapsFor(accountId).dailyPostsMax,
     startHour: c.activeStartHour,
     endHour: c.activeEndHour,
     // 2026-10-14 (user: the 7 owner accounts all posted inside the same ~20 minutes every hour):
@@ -38,9 +38,10 @@ function personaChainOptions(accountId) {
     // 2026-10-30 (marketing plan 5, owner reset order): optional fixed KST slot times (minutes of the
     // day) so the morning 8-10 gets the most posts and 22h gets two; accounts then sit a few minutes
     // apart (slotStaggerMinutes) instead of spread over a whole period.
-    template: c.slotTemplateMinutes && c.slotTemplateMinutes.length ? c.slotTemplateMinutes : null,
+    // 2026-11-11 (dev 869a6010): an account's own slot times (slotTemplateByAccount) win over the shared template
+    template: personaCapsFor(accountId).slotTemplateMinutes?.length ? personaCapsFor(accountId).slotTemplateMinutes : null,
     offsetMin:
-      c.slotTemplateMinutes && c.slotTemplateMinutes.length
+      personaCapsFor(accountId).slotTemplateMinutes?.length
         ? idx * c.slotStaggerMinutes
         : Math.round((idx * (c.gapMinutesMin + c.gapMinutesMax)) / 2 / Math.max(1, ids.length)),
   };
@@ -90,7 +91,7 @@ function latticeStepper(accountId, target, prevMs, dayCount, opts) {
   };
 }
 function targetForAccount(account) {
-  if (account?.id && isPersonaAccount(account.id)) return accountPersonaSettings().dailyPostsMax;
+  if (account?.id && isPersonaAccount(account.id)) return personaCapsFor(account.id).dailyPostsMax;
   if (!account?.user_id) return 25;
   const user = getUserById(account.user_id);
   if (user?.role === 'admin') return 25;

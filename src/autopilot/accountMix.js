@@ -10,6 +10,7 @@ const {
   isPersonaAccount,
   personaAccountIds,
   accountPersonaSettings,
+  personaCapsFor,
 } = require('../content/accountPersonas');
 const { chooseFrame } = require('../content/postFrames');
 
@@ -128,13 +129,13 @@ function slotKind(accountId, scheduledAt) {
     // Time mode: the everyday post only goes to its fixed time; every other slot is linked/unlinked
     // exactly as before (the daily count still counts toward the linked spread).
     if (mix.daily < maxDaily && isDailySlotTime(accountId, scheduledAt, dailyMinute)) return 'daily';
-    return decideSlotKind({ ...mix, maxLinked: cfg.maxLinkedPerDay, maxDaily: 0, dailyCap: cfg.dailyPostsMax });
+    return decideSlotKind({ ...mix, maxLinked: cfg.maxLinkedPerDay, maxDaily: 0, dailyCap: personaCapsFor(accountId).dailyPostsMax });
   }
   return decideSlotKind({
     ...mix,
     maxLinked: cfg.maxLinkedPerDay,
     maxDaily,
-    dailyCap: cfg.dailyPostsMax,
+    dailyCap: personaCapsFor(accountId).dailyPostsMax,
   });
 }
 
@@ -159,7 +160,7 @@ function videoPostsOnDay(accountId, scheduledAt) {
 // holds fewer than maxVideoPerDay such posts (about a third). Always true for other accounts.
 function videoAllowed(accountId, scheduledAt) {
   if (!isPersonaAccount(accountId)) return true;
-  return videoPostsOnDay(accountId, scheduledAt) < accountPersonaSettings().maxVideoPerDay;
+  return videoPostsOnDay(accountId, scheduledAt) < personaCapsFor(accountId).maxVideoPerDay;
 }
 // Last check right before the INSERT (runs inside the same synchronous transaction as the insert, so a
 // second process or a concurrent generation cannot slip in between). `own` lists this slot's own
@@ -176,7 +177,7 @@ function capRecheck(accountId, scheduledAt, { daily = false, video = false, own 
   }
   if (video) {
     const n = videoPostsOnDayFromDb(accountId, scheduledAt) + inflightCount(accountId, day, 'video') - ownCount('video');
-    const max = accountPersonaSettings().maxVideoPerDay;
+    const max = personaCapsFor(accountId).maxVideoPerDay;
     if (n >= max) out.video = `영상 하루 한도 ${n}/${max} (insert 직전 재확인)`;
   }
   return out;

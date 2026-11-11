@@ -11,7 +11,7 @@ const { publicUploadUrl } = require('../config/publicUrl');
 const { db, getAccount, getUserById } = require('../infra/db');
 const coupangApi = require('../integrations/coupangApi');
 const { generateRecipe: generateContentOnlyRecipe, generateDailyStory } = require('../content/contentOnlyAutomation');
-const { accountPersonaFor, bannedPhrasesFor, accountPersonaSettings } = require('../content/accountPersonas');
+const { accountPersonaFor, bannedPhrasesFor, accountPersonaSettings, personaCapsFor } = require('../content/accountPersonas');
 const accountMix = require('./accountMix');
 const { buildAutopilotPost } = require('./pipeline');
 const { importThreadsVideo } = require('../threads/mediaImporter');
@@ -633,7 +633,7 @@ async function runAutopilotOnceReserved(account, scheduledAt, reservations) {
     const allowVideo = accountMix.videoAllowed(account.id, scheduledAt);
     const capReason = allowVideo
       ? null
-      : `오늘 영상 한도 ${accountMix.videoPostsOnDay(account.id, scheduledAt)}/${accountPersonaSettings().maxVideoPerDay}`;
+      : `오늘 영상 한도 ${accountMix.videoPostsOnDay(account.id, scheduledAt)}/${personaCapsFor(account.id).maxVideoPerDay}`;
     if (allowVideo) videoHold = hold('video');
     mediaOptions = { allowVideo, accountId: account.id, scheduledAt, capReason };
   }
