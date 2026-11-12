@@ -242,10 +242,12 @@ test('materials: preferVideo puts every video source ahead, score still orders e
 
 test('runner asks for video-first materials only while the video cap allows one (owner accounts)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'autopilot', 'runner.js'), 'utf8');
-  assert.match(src, /const preferVideo = !!persona && accountMix\.videoAllowed\(account\.id, scheduledAt\)/);
+  // 2026-11-07: video-required accounts (require_video_for_link) also ask for video-first materials.
+  assert.match(src, /const preferVideo = \(!!persona \|\| needVideo\) && accountMix\.videoAllowed\(account\.id, scheduledAt\)/);
   assert.match(src, /preferVideo \? \{ preferVideo: true \} : \{\}/);
   const engine = fs.readFileSync(path.join(__dirname, '..', 'src', 'autopilot', 'materialEngine.js'), 'utf8');
-  assert.match(engine, /collectQualifiedThreadsMaterials\(3, preferVideo \? \{ preferVideo: true \} : undefined\)/);
+  // 2026-11-13 (dev aad7afc8): 6 materials while the account's day is short of recipe posts, else 3
+  assert.match(engine, /collectQualifiedThreadsMaterials\(recipeQuota \? 6 : 3, preferVideo \? \{ preferVideo: true \} : undefined\)/);
 });
 
 test.after(() => ap.setAccountPersonaConfig(null));

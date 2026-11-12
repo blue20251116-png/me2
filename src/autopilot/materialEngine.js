@@ -13,16 +13,23 @@ const {
 const { collectQualifiedThreadsMaterials } = require('./materials');
 const { confidence01, productMatchOk, buildSoldFirstTerms, findProduct } = require('./productMatching');
 const { generatePost } = require('./postWriter');
+const { recipeFirst } = require('./recipeQuota');
 const { identifyCommerceTarget, analyzeMaterial, mediaFlagSkipReason } = require('./vision');
 
 // options.materialFilter / options.productFilter (accountMix.generationFilters, fixed-persona
 // accounts only) return a skip reason for a source or product this account must not use.
 async function buildThreadsFirstAutopilot(accountId, options = {}) {
-  const { target, materialFilter, productFilter, preferVideo } = options;
+  const { target, materialFilter, productFilter, preferVideo, recipeQuota } = options;
   // preferVideo (owner accounts while the day's video cap allows one, runner.js): video sources first.
-  const materials = await collectQualifiedThreadsMaterials(3, preferVideo ? { preferVideo: true } : undefined);
+  // 2026-11-13 (dev aad7afc8): while the account's day is short of recipe posts (recipeQuota.js), more materials are read,
+  // recipe-looking ones (keywords / local recipe signals) go first and the slot prefers a recipe.
+  let materials = await collectQualifiedThreadsMaterials(recipeQuota ? 6 : 3, preferVideo ? { preferVideo: true } : undefined);
+  if (recipeQuota) {
+    materials = recipeFirst(materials, recipeQuota.keywords, localStrongContentMode);
+    console.log(`[AutopilotV3][RECIPE QUOTA] account=${accountId} today=${recipeQuota.count}/${recipeQuota.min} strict=${recipeQuota.strict ? 'ON' : 'OFF'} → 레시피 소재 우선`);
+  }
   const preferredSlot = preferredContentSlot(accountId);
-  const preferredMode = preferredSlot.mode;
+  const preferredMode = recipeQuota ? 'recipe' : preferredSlot.mode;
   const specialStoryWanted = preferredSlot.specialStory === true;
   console.log(
     `[AutopilotV3][CONTENT MIX] account=${accountId} target=50/50/0 preferred=${preferredMode} specialStory=${specialStoryWanted ? 'ON' : 'OFF'} sourceVoice=v2 lifestyle=0%`
@@ -92,6 +99,11 @@ async function buildThreadsFirstAutopilot(accountId, options = {}) {
         console.log(
           `[AutopilotV3][NO LIFESTYLE SKIP] @${material.username || '-'} lifestyle 소재 → 발행 제외 · 다음 후보`
         );
+        continue;
+      }
+      if (recipeQuota?.strict && analysis.mode !== 'recipe' && idx < materials.length - 1) {
+        lastError = new Error('레시피 할당 슬롯: 레시피 소재 아님');
+        console.log(`[AutopilotV3][RECIPE QUOTA SKIP] got=${analysis.mode} @${material.username || '-'} → 다음 소재`);
         continue;
       }
       if (analysis.mode !== preferredMode)

@@ -1,4 +1,8 @@
 {
+  "_comment_recipe": "2026-11-13 dev aad7afc8 (marketing 6fd0e425): recipe posts per KST day per account; keywords tried first; evening hours take only a recipe while the day is short (src/autopilot/recipeQuota.js)",
+  "minRecipePerDayByAccount": { "10": 3 },
+  "recipeKeywordsByAccount": { "10": ["에어프라이어", "통째로"] },
+  "recipeEveningHours": [20, 22],
   "_comment": "Owner accounts that run as one fixed person each (src/content/accountPersonas.js). Accounts not listed here keep the random per-post persona, the plan's daily target and the global gap schedule. Override the file path with ME2_ACCOUNT_PERSONAS_FILE.",
   "accounts": {
     "1": "acct-home-keeper",

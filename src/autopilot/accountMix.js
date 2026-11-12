@@ -339,7 +339,11 @@ function generationFilters(accountId, scheduledAt) {
   const persona = accountPersonaFor(accountId);
   if (!persona) return {};
   const rotate = accountPersonaSettings().rotatePersonas;
+  // 2026-11-13 (dev aad7afc8): the day's recipe quota for this slot (null when the account has none)
+  let recipeQuota = null;
+  try { recipeQuota = require('./recipeQuota').recipeQuotaFor(accountId, scheduledAt); } catch (e) { console.warn('[AutopilotV3][RECIPE QUOTA] ' + e.message); }
   return {
+    ...(recipeQuota && recipeQuota.deficit > 0 ? { recipeQuota } : {}),
     materialFilter(material) {
       const text = `${material?.sourceText || material?.text || ''}\n${material?.authorReplies || ''}`;
       if (!rotate && persona.skipMaterial && persona.skipMaterial.test(text)) return `persona ${persona.id} 소재 아님`;
