@@ -193,6 +193,10 @@ ${closerBlock(closerStyle)}
 - 상품명/스펙 나열, '✅ 핵심만', 링크, 광고고지는 본문에 쓰지 않는다.
 - commentLead 첫 줄은 이 물건에 대한 짧고 자연스러운 반말 한마디다. 그다음 줄부터 [Threads 원문]·[작성자 추가댓글]·쿠팡 상품명으로 확인되는 포인트 2~3개를 한 줄에 하나씩 짧게 쓴다(기호·이모지 없이, 줄 앞 표시는 코드가 붙인다). 확인된 포인트가 없으면 한마디만 쓴다. 추가 정보가 전혀 없으면 빈 문자열로 둔다. 링크·광고고지·가격(금액)은 쓰지 않는다.
 
+[CCN] (사장님 11/01 "지금 나의 모든 채널들 주제 선정 폭을 다 넓혀, CCN 적용되야해")
+- 쓰기 전에 세 독자를 다 잡는지 본다. Core(이 분야를 잘 아는 사람): 원문에서 확인되는 정확한 디테일 2개(수치, 상황, 쓰는 방법). Casual(가끔 보는 사람): 누구나 아는 익숙한 연결고리 1개(계절, 흔한 상황, 유명한 것). New(처음 보는 사람): 첫 줄만 보고 1초 안에 무슨 얘기인지 안다, 용어·줄임말 없이.
+- 세 가지 중 하나라도 원문으로 채울 수 없으면 지어내지 말고 있는 사실로 각도를 바꾼다. 가격 금지와 자기지목 후킹 금지는 그대로다.
+
 JSON만 출력:{"text":"본문","commentLead":"댓글"}`,
     `타겟:${target || '전체'}\n모드:${analysis.mode}\n주제:${analysis.topic}\n내부 전용 비밀재료(출력 금지):${analysis.secretTerm || productName}\n쿠팡 상품:${productName}\n가격:본문과 commentLead 어디에도 가격·금액을 쓰지 않는다\n판매대상:${analysis.vision?.soldObject || '-'} / 요리:${analysis.vision?.dish || '-'}\n[시각 근거]\n${analysis.vision?.evidence || '(없음)'}\n[Threads 원문]\n${material.sourceText.slice(0, 5000)}\n[작성자 추가댓글]\n${material.authorReplies.slice(0, 5000) || '(없음)'}`,
     { maxTokens: 2800, temperature: 0.65 }
