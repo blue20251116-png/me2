@@ -30,3 +30,16 @@ test('does not retry deterministic client failures', () => {
   assert.equal(publishRetryable(err), false);
   assert.equal(classifyPublishFailure(err, 0).retry, false);
 });
+
+test('publishErrorText keeps what Threads answered, never the token (dev 1ea14eaf)', () => {
+  const { publishErrorText } = require('../src/publish/publishRetryPolicy');
+  const err = Object.assign(new Error('Request failed with status code 400'), {
+    code: 'ERR_BAD_REQUEST',
+    config: { url: 'https://graph.threads.net/v1.0/me/threads?access_token=SECRET' },
+    response: { status: 400, data: { error: { message: 'Invalid parameter', type: 'OAuthException', code: 100, error_subcode: 2207052, error_user_msg: 'Media download has failed.' } } },
+  });
+  const text = publishErrorText(err);
+  assert.match(text, /^ERR_BAD_REQUEST HTTP 400 Invalid parameter \(OAuthException, code 100, subcode 2207052\) Media download has failed\.$/);
+  assert.doesNotMatch(text, /SECRET/);
+  assert.equal(publishErrorText(Object.assign(new Error('THREADS_TOKEN_MISSING'), {})), 'THREADS_TOKEN_MISSING');
+});

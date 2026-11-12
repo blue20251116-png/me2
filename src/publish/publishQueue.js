@@ -3,7 +3,7 @@ const { db, getAccount, canPublish, logUsage } = require('../infra/db');
 const api = require('../threads/threadsApi');
 const cron = require('node-cron');
 const { setState } = require('../infra/automationState');
-const { classifyPublishFailure, publishRetryable } = require('./publishRetryPolicy');
+const { classifyPublishFailure, publishRetryable, publishErrorText } = require('./publishRetryPolicy');
 const { UPLOADS_DIR } = require('../config/paths');
 const { postVideoDurationSec } = require('../threads/videoDuration');
 const { withBodyDisclosure } = require('./commentText');
@@ -231,7 +231,7 @@ function startPublishJob({ buildCommentText }) {
             const next = new Date(Date.now() + decision.retryDelayMs).toISOString();
             db.prepare(
               "UPDATE posts SET status='pending',publish_retry_count=?,publish_next_retry_at=?,publish_started_at=NULL,error_message=? WHERE id=?"
-            ).run(decision.attempts, next, String(err.code || err.message).slice(0, 500), post.id);
+            ).run(decision.attempts, next, publishErrorText(err), post.id);
             console.warn(
               `[Publish][RETRY] account=${account.id} post=${post.id} attempts=${decision.attempts}/3 next=${next}`
             );
@@ -239,13 +239,13 @@ function startPublishJob({ buildCommentText }) {
           } else {
             const message = decision.outcomeUnknown
               ? 'PUBLISH_OUTCOME_UNKNOWN: 외부 컨테이너 생성 후 결과 확인 필요'
-              : String(err.code || err.message).slice(0, 500);
+              : publishErrorText(err);
             db.prepare(
               "UPDATE posts SET status='failed',publish_retry_count=?,publish_next_retry_at=NULL,error_message=? WHERE id=?"
             ).run(decision.attempts, message, post.id);
           }
           console.error(
-            `[Publish][FAILED] account=${account.id} post=${post.id} code=${err.code || 'PUBLISH_FAILED'} knownMedia=${mediaId || '-'} unknownOutcome=${decision.outcomeUnknown}`
+            `[Publish][FAILED] account=${account.id} post=${post.id} code=${err.code || 'PUBLISH_FAILED'} detail=${JSON.stringify(publishErrorText(err, 300))} knownMedia=${mediaId || '-'} unknownOutcome=${decision.outcomeUnknown}`
           );
         }
       }
