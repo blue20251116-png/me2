@@ -59,7 +59,14 @@ async function toClaudeContent(userContent) {
 }
 
 function runCli({ system, content, timeout }) {
-  return new Promise((resolve, reject) => {
+  // 2026-11-11 (dev a9b0a750): a usage / rate limit is tagged CLAUDE_CLI_LIMIT so the autopilot state says so and
+  // aiClient can use the opt-in fallback (AI_FALLBACK_PROVIDER=openai).
+  const rejectTagged = (reject) => (err) => {
+    if (/limit|usage|rate.?limit|quota|overloaded|429|한도/i.test(String(err && err.message))) err.code = err.code || 'CLAUDE_CLI_LIMIT';
+    reject(err);
+  };
+  return new Promise((resolve, rejectRaw) => {
+    const reject = rejectTagged(rejectRaw);
     const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
     args.push('--tools', '', '--model', CLI_MODEL, '--no-session-persistence');
     args.push('--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands');

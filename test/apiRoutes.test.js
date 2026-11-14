@@ -193,10 +193,20 @@ test('OAuth login binds state to the session and the callback rejects forged sta
   const login = await alice('GET', `/auth/login?accountId=${ids.alice}`);
   assert.equal(login.status, 302);
   const state = new URL(login.headers.get('location')).searchParams.get('state');
-  assert.match(state, new RegExp(`^${ids.alice}\\.[0-9a-f]{32}$`));
+  assert.match(state, new RegExp(`^${ids.alice}\\.[0-9a-f]{32}(\\.[A-Za-z0-9_-]+)?$`));
   // Forged: someone else's account id, or a nonce this session never issued.
   assert.equal((await alice('GET', `/auth/callback?code=x&state=${ids.bob}.${state.split('.')[1]}`)).status, 400);
   assert.equal((await bob('GET', `/auth/callback?code=x&state=${state}`)).status, 400);
+});
+
+test('OAuth callback on a public host bounces only to the loopback origin carried in state', async () => {
+  const loop = Buffer.from('localhost:3000').toString('base64url');
+  const r = await fetch(`${base}/auth/callback?code=c1&state=1.abc.${loop}`, { redirect: 'manual' });
+  assert.equal(r.status, 302);
+  assert.equal(r.headers.get('location'), `http://localhost:3000/auth/callback?code=c1&state=1.abc.${loop}`);
+  const evil = Buffer.from('evil.example.com').toString('base64url');
+  const r2 = await fetch(`${base}/auth/callback?code=c1&state=1.abc.${evil}`, { redirect: 'manual' });
+  assert.notEqual(r2.headers.get('location') || '', `http://evil.example.com/auth/callback?code=c1&state=1.abc.${evil}`);
 });
 
 test('posts: create, list, and only the owner can delete', async () => {

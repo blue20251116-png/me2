@@ -26,6 +26,12 @@ $tunnel = $null
 $ngrokDomain = $null
 $ngLine = Select-String -Path '.env' -Pattern '^\s*NGROK_DOMAIN\s*=\s*(\S+)' | Select-Object -First 1
 if ($ngLine) { $ngrokDomain = $ngLine.Matches[0].Groups[1].Value -replace '^https?://', '' -replace '/+$', '' }
+$namedTunnel = $null
+$namedHost = $null
+$ntLine = Select-String -Path '.env' -Pattern '^\s*ME2_TUNNEL_NAME\s*=\s*(\S+)' | Select-Object -First 1
+if ($ntLine) { $namedTunnel = $ntLine.Matches[0].Groups[1].Value }
+$nhLine = Select-String -Path '.env' -Pattern '^\s*ME2_PUBLIC_HOST\s*=\s*(\S+)' | Select-Object -First 1
+if ($nhLine) { $namedHost = $nhLine.Matches[0].Groups[1].Value -replace '^https?://', '' -replace '/+$', '' }
 
 if (-not $NoTunnel -and $ngrokDomain) {
   if (-not (Get-Command ngrok -ErrorAction SilentlyContinue)) {
@@ -40,6 +46,22 @@ if (-not $NoTunnel -and $ngrokDomain) {
   Write-Host ''
   Write-Host "공개 주소 : $url  (ngrok 고정 주소)" -ForegroundColor Green
   Write-Host "콜백 주소 : $url/auth/callback  (스레드 계정 새로 연결할 때만 Meta 앱에 등록 필요)"
+}
+elseif (-not $NoTunnel -and $namedTunnel -and $namedHost) {
+  # 11/5: Cloudflare 고정 터널(이름 있는 터널). 주소가 안 바뀌므로 Meta 앱 콜백을 한 번만 등록하면 된다.
+  # .env: ME2_TUNNEL_NAME=me2  ME2_PUBLIC_HOST=me2.mevideolab.com
+  $cf = Get-Command cloudflared -ErrorAction SilentlyContinue
+  $cfPath = if ($cf) { $cf.Source } else { 'C:\Program Files (x86)\cloudflared\cloudflared.exe' }
+  $log = Join-Path $env:TEMP 'me2-cloudflared-named.log'
+  $tunnel = Start-Process -FilePath $cfPath `
+    -ArgumentList @('tunnel', '--no-autoupdate', '--logfile', $log, 'run', '--url', "http://localhost:$port", $namedTunnel) `
+    -WindowStyle Hidden -PassThru
+  $url = "https://$namedHost"
+  $env:PUBLIC_BASE_URL = $url
+  $env:THREADS_REDIRECT_URI = "$url/auth/callback"
+  Write-Host ''
+  Write-Host "공개 주소 : $url  (Cloudflare 고정 터널 $namedTunnel)" -ForegroundColor Green
+  Write-Host "콜백 주소 : $url/auth/callback  (Meta 앱 리디렉션 콜백 URL에 한 번 등록)"
 }
 elseif (-not $NoTunnel) {
   $cf = Get-Command cloudflared -ErrorAction SilentlyContinue
@@ -82,8 +104,13 @@ Write-Host "로컬 주소 : http://localhost:$port" -ForegroundColor Green
 Write-Host '종료하려면 이 창에서 Ctrl+C'
 Write-Host ''
 
+# 2026-11-11 (dev 5077c0fb, a9b0a750): the server output is kept (it was lost, so the 11/07~11/09 stalls had no log)
+$logDir = Join-Path $PSScriptRoot 'logs'
+New-Item -ItemType Directory -Force $logDir | Out-Null
+$serverLog = Join-Path $logDir ("server-{0:yyyyMMdd-HHmm}.log" -f (Get-Date))
+Write-Host "서버 출력 기록 : $serverLog"
 try {
-  npm start
+  npm start 2>&1 | Tee-Object -FilePath $serverLog
 } finally {
   if ($tunnel) { Stop-Process -Id $tunnel.Id -ErrorAction SilentlyContinue }
 }

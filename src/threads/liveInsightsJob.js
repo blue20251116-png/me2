@@ -59,6 +59,8 @@ async function collectLiveInsights() {
     );
   } finally {
     liveInsightRunning = false;
+    // 2026-11-11 (dev 111def91): last run time for /healthz
+    try { require('../infra/automationState').setState(-3, 'idle', 'live insights'); } catch {}
   }
 }
 function startLiveInsightsJob() {

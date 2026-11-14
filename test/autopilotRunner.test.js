@@ -81,6 +81,7 @@ function harness({ generationError, preflightError, env = {} } = {}) {
     },
     './accountMix': {},
     './pipeline': { buildAutopilotPost: async () => ({}) },
+    './materials': { materialHasVideo: () => false },
     '../threads/mediaImporter': { importThreadsVideo: async () => ({}) },
     '../infra/isolatedTask': { getBrowserCircuitState: () => ({ open: false }), browserInfraFailure: () => false },
   };

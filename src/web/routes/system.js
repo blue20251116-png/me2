@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { db } = require('../../infra/db');
 
 const router = express.Router();
+const STARTED_AT = new Date().toISOString();
 
 // Railway's platform-level healthcheck gates ALL traffic to this deployment: while this returns
 // non-2xx, Railway refuses to route anything at all (not even the emergency-cleanup route below),
@@ -22,7 +23,23 @@ router.get('/healthz', (req, res) => {
   } catch {
     dbOk = false;
   }
-  res.json({ ok: true, dbOk });
+  // 2026-11-11 (dev 111def91, 5077c0fb): 11/07~11/08 port 3000 was open for 29 h while nothing was published (a
+  // screen-only service held the port; a stuck tick). The real me2 says so here: app, jobs, and when each job last ran.
+  const out = { ok: true, dbOk, app: 'me2', jobs: 'on', pid: process.pid, started_at: STARTED_AT };
+  if (dbOk) {
+    try {
+      const rows = db.prepare('SELECT account_id,status,detail,updated_at FROM automation_state WHERE account_id IN (-3,-2,-1,0)').all();
+      const by = Object.fromEntries(rows.map((r) => [r.account_id, r]));
+      out.publish_tick_at = by[-1]?.updated_at || null;
+      out.autopilot = by[0] ? { status: by[0].status, detail: by[0].detail, at: by[0].updated_at } : null;
+      out.insights_at = by[-3]?.updated_at || null;
+      out.last_generation_error = by[-2] ? { detail: by[-2].detail, at: by[-2].updated_at } : null;
+      out.last_posted_at = db.prepare("SELECT MAX(posted_at) at FROM posts WHERE status='posted'").get()?.at || null;
+    } catch (e) {
+      out.state_error = String(e.message).slice(0, 120);
+    }
+  }
+  res.json(out);
 });
 
 // 비상 디스크 정리: 디스크가 가득 차면 SQLite(DB/세션) 전체가 죽어서 로그인조차 안 되므로,

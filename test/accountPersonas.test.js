@@ -237,6 +237,50 @@ test('maxDailyPerDayByAccount caps text-only posts for listed accounts only', ()
   clearPosts();
 });
 
+test('dailySlotTimes puts the everyday post on a fixed time: odd ids 08:00, even ids 17:30 (dev a97695f9)', () => {
+  const cfg = {
+    accounts: LIVE_ACCOUNTS,
+    dailyPostsMin: 10,
+    dailyPostsMax: 10,
+    maxLinkedPerDay: 5,
+    maxDailyPerDay: 1,
+    staggerAccounts: true,
+    slotTemplate: ['08:00', '08:50', '09:40', '10:30', '11:20', '12:30', '17:30', '20:00', '22:00', '22:50'],
+    slotStaggerMinutes: 4,
+    dailySlotTimes: ['08:00', '17:30'],
+  };
+  ap.setAccountPersonaConfig(cfg);
+  assert.equal(mix.dailySlotMinuteFor(1), 8 * 60);
+  assert.equal(mix.dailySlotMinuteFor(3), 8 * 60);
+  assert.equal(mix.dailySlotMinuteFor(2), 17 * 60 + 30);
+  assert.equal(mix.dailySlotMinuteFor(14), 17 * 60 + 30);
+  clearPosts();
+  const slotOf = (id, hhmm) => {
+    const off = slots.personaChainOptions(id).offsetMin;
+    const [h, m] = hhmm.split(':').map(Number);
+    return new Date(Date.parse('2026-11-07T00:00:00+09:00') + (h * 60 + m + off) * 60000).toISOString();
+  };
+  // Account 3 (odd): its 08:00 slot (plus its stagger offset) is the daily one, even as the first post.
+  assert.equal(mix.slotKind(3, slotOf(3, '08:00')), 'daily');
+  // The 4th slot is no longer daily in time mode.
+  insertPost(3, { scheduledAt: slotOf(3, '08:00'), link: 'https://link.coupang.com/a' });
+  insertPost(3, { scheduledAt: slotOf(3, '08:50') });
+  insertPost(3, { scheduledAt: slotOf(3, '09:40') });
+  assert.notEqual(mix.slotKind(3, slotOf(3, '10:30')), 'daily');
+  // Account 2 (even): 08:00 is not daily, 17:30 is.
+  assert.notEqual(mix.slotKind(2, slotOf(2, '08:00')), 'daily');
+  assert.equal(mix.slotKind(2, slotOf(2, '17:30')), 'daily');
+  // Once the day's everyday post exists, the 17:30 slot is a normal one.
+  db.prepare(
+    `INSERT INTO posts (account_id,text,scheduled_at,status,content_mode) VALUES (2,'d',?,'pending','daily')`
+  ).run(slotOf(2, '17:30'));
+  assert.notEqual(mix.slotKind(2, slotOf(2, '17:30')), 'daily');
+  // Without dailySlotTimes the old order rule is unchanged.
+  ap.setAccountPersonaConfig({ ...cfg, dailySlotTimes: undefined });
+  assert.equal(mix.dailySlotMinuteFor(3), null);
+  clearPosts();
+});
+
 test('volume: owner accounts target 4-5 posts/day inside 08-23 KST; customers keep plan targets', () => {
   pinBaseConfig();
   assert.equal(slots.targetForAccount({ id: 1, user_id: 1 }), 5);
@@ -431,16 +475,24 @@ test('staggered schedule: 7 owner accounts on distinct offsets, 50-60 min gaps, 
   // Every full future day holds exactly 16 posts per account.
   const tomorrow = slots.addDay(slots.dayKeyKst(), 1);
   for (const id of OWNER_IDS) assert.equal(days.get(`${id}:${tomorrow}`), 16, `#${id} tomorrow`);
-  // Tomorrow, any two accounts' posts are at least 4 minutes apart.
-  const all = [];
-  for (const [id, out] of minutesByAccount)
-    for (const t of out) if (slots.dayKeyKst(new Date(t)) === tomorrow) all.push([t, id]);
-  all.sort((a, b) => a[0] - b[0]);
-  for (let i = 1; i < all.length; i++)
-    assert.ok(all[i][0] - all[i - 1][0] >= 4 * 60000, `#${all[i - 1][1]} and #${all[i][1]} too close`);
   // Start offsets spread across the hour.
   const offsets = OWNER_IDS.map(id => slots.personaChainOptions(id).offsetMin);
   assert.deepEqual(offsets, [0, 8, 16, 24, 31, 39, 47]);
+  // 2026-11-05 (dev 0079f189 c): this used to demand 4 minutes between any two accounts "tomorrow", but the
+  // lattice only guarantees the offset distance minus 2*jitter (slots.js latticeSlot): offsets 7-8 min apart,
+  // jitter +-floor((60-50)/4)=2 -> 3 min. Whether two jitters met head-on depended on tomorrow's date hash
+  // (#10/#11 3 min apart on 11/04, 11/07-09, 11/11, ...; fine on 11/03, 11/05, 11/06), so the test passed or
+  // failed by calendar day. It now checks the real guarantee on every generated day.
+  const jitter = Math.floor((60 - 50) / 4);
+  const minOffsetGap = Math.min(...offsets.slice(1).map((o, i) => o - offsets[i]));
+  const all = [];
+  for (const [id, out] of minutesByAccount) for (const t of out) all.push([t, id]);
+  all.sort((a, b) => a[0] - b[0]);
+  for (let i = 1; i < all.length; i++)
+    assert.ok(
+      all[i][0] - all[i - 1][0] >= (minOffsetGap - 2 * jitter) * 60000,
+      `#${all[i - 1][1]} and #${all[i][1]} too close`
+    );
   pinBaseConfig();
 });
 
@@ -469,19 +521,24 @@ test('slot template: fixed KST times per account, a few minutes apart, gaps neve
   ap.setAccountPersonaConfig(cfg);
   try {
     for (const id of OWNER_IDS) {
-      const step = slots.chainStepper(id, cfg.dailyPostsMax, 0, () => 0, slots.personaChainOptions(id));
+      // 11/11 (dev 673f3070): an account may have its own times / daily count (slotTemplateByAccount, dailyPostsByAccount)
+      const own = (cfg.slotTemplateByAccount || {})[String(id)];
+      const template = own || cfg.slotTemplate;
+      const dailyMax = (cfg.dailyPostsByAccount || {})[String(id)] ?? cfg.dailyPostsMax;
+      const step = slots.chainStepper(id, dailyMax, 0, () => 0, slots.personaChainOptions(id));
       const day = [];
       for (let i = 0; i < 60; i++) {
         const d = step();
         if (!d) break;
         if (slots.dayKeyKst(d) === slots.addDay(slots.dayKeyKst(), 1)) day.push(d.getTime());
       }
-      assert.equal(day.length, cfg.slotTemplate.length, `account ${id}`);
+      assert.equal(day.length, Math.min(template.length, dailyMax), `account ${id}`);
       for (let i = 1; i < day.length; i++) assert.ok(day[i] - day[i - 1] >= 50 * 60000, `account ${id} gap ${i}`);
       const hour = t => new Date(t + 9 * 3600000).getUTCHours();
       const morning = day.filter(t => hour(t) >= 8 && hour(t) <= 10).length;
       const midday = day.filter(t => hour(t) >= 11 && hour(t) <= 21).length;
-      assert.ok(morning >= 4 && midday <= morning, `account ${id} morning ${morning} midday ${midday}`);
+      // the morning-heavy rule is the shared template's; an account's own times are the threads department's choice
+      if (!own) assert.ok(morning >= 4 && midday <= morning, `account ${id} morning ${morning} midday ${midday}`);
     }
   } finally {
     ap.setAccountPersonaConfig(null);

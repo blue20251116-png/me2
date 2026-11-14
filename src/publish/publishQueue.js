@@ -3,7 +3,27 @@ const { db, getAccount, canPublish, logUsage } = require('../infra/db');
 const api = require('../threads/threadsApi');
 const cron = require('node-cron');
 const { setState } = require('../infra/automationState');
-const { classifyPublishFailure, publishRetryable } = require('./publishRetryPolicy');
+const { classifyPublishFailure, publishRetryable, publishErrorText } = require('./publishRetryPolicy');
+const { UPLOADS_DIR } = require('../config/paths');
+const { postVideoDurationSec } = require('../threads/videoDuration');
+const { withBodyDisclosure } = require('./commentText');
+const { sanitizePublishedThreadsText } = require('../threads/publishText');
+const { reconcileUnknownPublishes, checkBeforeRetry } = require('./publishRecovery');
+
+// 2026-11-05 (dev 0079f189): the video file is deleted after posting, so its length is saved on the row at
+// publish time (when the reservation did not already record it). Never affects the publish itself.
+function recordPublishedVideoDuration(post, uploadsDir = UPLOADS_DIR) {
+  try {
+    if (post?.video_duration_sec != null) return null;
+    const sec = postVideoDurationSec(post, uploadsDir);
+    if (sec == null) return null;
+    db.prepare('UPDATE posts SET video_duration_sec=? WHERE id=? AND video_duration_sec IS NULL').run(sec, post.id);
+    return sec;
+  } catch (e) {
+    console.warn(`[Publish][VIDEO DURATION] post=${post?.id} 기록 실패 reason="${e.message}"`);
+    return null;
+  }
+}
 // Column migrations must not crash the boot on a full disk (the process keeps serving).
 try {
   for (const definition of [
@@ -16,6 +36,14 @@ try {
     'comment_retry_count INTEGER DEFAULT 0',
     'comment_next_retry_at TEXT',
     'recipe_comment_text TEXT',
+    'comment_verified_at TEXT',
+    // 2026-11-05 (marketing c1266546): the body exactly as sent (withBodyDisclosure adds the Coupang line
+    // at publish time, so posts.text never shows it), whether the disclosure was in it, the one-time
+    // recovery marker for unknown outcomes, and the permalink of a post found live by recovery.
+    'sent_text TEXT',
+    'disclosure_in_body INTEGER',
+    'publish_recovered_at TEXT',
+    'threads_permalink TEXT',
   ]) {
     const name = definition.split(' ')[0];
     if (
@@ -33,6 +61,21 @@ try {
 function retryable(err) {
   return publishRetryable(err);
 }
+// Last line of defence for accounts.require_video_for_link=1 (2026-11-07 owner rule): a pending post with
+// a Coupang link and no video (video_url, or a VIDEO item in the image_url bundle / media_items_json)
+// is cancelled instead of published. Everyday and link-free posts are untouched.
+function postHasVideo(post) {
+  return (
+    !!String(post?.video_url || '').trim() ||
+    /VIDEO/.test(String(post?.image_url || '')) ||
+    /VIDEO/.test(String(post?.media_items_json || ''))
+  );
+}
+function videoRequiredBlocks(account, post) {
+  if (Number(account?.require_video_for_link || 0) !== 1) return false;
+  if (!/coupang\./i.test(String(post?.link || ''))) return false;
+  return !postHasVideo(post);
+}
 function initializeRecovery() {
   // Posts caught mid-publish by a restart are marked for review, never re-posted blindly.
   try {
@@ -47,11 +90,55 @@ function initializeRecovery() {
   }
 }
 
+// 2026-11-05 (11/05 review): reads each posted auto-comment back once (threadsApi.verifyReply, read-only GET)
+// and fills comment_verified_at. A definite miss is written to comment_error_message (COMMENT_VERIFY_FAILED)
+// and never re-posted automatically (that could double the comment); transient errors retry next tick.
+// Only comments from the last 7 days, a few per tick, at least a minute after posting.
+const VERIFY_PER_TICK = 5;
+async function verifyPostedComments() {
+  if (typeof api.verifyReply !== 'function') return 0;
+  const rows = db
+    .prepare(
+      "SELECT id,account_id,threads_media_id,comment_media_id FROM posts WHERE comment_status='posted' AND comment_media_id IS NOT NULL AND threads_media_id IS NOT NULL AND comment_verified_at IS NULL AND comment_error_message IS NULL AND comment_posted_at<=? AND comment_posted_at>=? ORDER BY comment_posted_at LIMIT ?"
+    )
+    .all(new Date(Date.now() - 60000).toISOString(), new Date(Date.now() - 7 * 86400000).toISOString(), VERIFY_PER_TICK);
+  let verified = 0;
+  for (const row of rows) {
+    try {
+      const result = await api.verifyReply(row.account_id, row.comment_media_id, row.threads_media_id);
+      if (result?.verified) {
+        db.prepare('UPDATE posts SET comment_verified_at=? WHERE id=? AND comment_verified_at IS NULL').run(
+          new Date().toISOString(),
+          row.id
+        );
+        verified++;
+      } else {
+        db.prepare('UPDATE posts SET comment_error_message=? WHERE id=?').run(
+          `COMMENT_VERIFY_FAILED: ${result?.reason || 'unknown'}`.slice(0, 500),
+          row.id
+        );
+        console.warn(`[Comment][VERIFY FAILED] post=${row.id} reason=${result?.reason || 'unknown'}`);
+      }
+    } catch (err) {
+      const status = Number(err?.response?.status || 0);
+      // 4xx other than rate limits will not fix itself (permissions, bad id): record once, stop asking.
+      if (status >= 400 && status < 500 && status !== 429) {
+        db.prepare('UPDATE posts SET comment_error_message=? WHERE id=?').run(
+          `COMMENT_VERIFY_FAILED: HTTP ${status}`,
+          row.id
+        );
+      }
+      console.warn(`[Comment][VERIFY ERROR] post=${row.id} status=${status || '-'} ${String(err.message).slice(0, 120)}`);
+    }
+  }
+  return verified;
+}
+
 function startPublishJob({ buildCommentText }) {
   initializeRecovery();
   let running = false;
   const tick = async () => {
-    if (running) return;
+    if (running || draining) return;
     running = publishing = true;
     setState(-1, 'running', 'publish');
     try {
@@ -62,6 +149,7 @@ function startPublishJob({ buildCommentText }) {
         )
         .all(now, now);
       for (const post of due) {
+        if (draining) break; // shutdown requested: finish the post in flight, claim no new one
         const account = getAccount(post.account_id);
         if (!account?.threads_access_token) {
           db.prepare(
@@ -75,32 +163,52 @@ function startPublishJob({ buildCommentText }) {
           ).run(post.id);
           continue;
         }
+        if (videoRequiredBlocks(account, post)) {
+          // 2026-11-07 owner: a Coupang-link post on a video-required account never goes out without a video.
+          db.prepare(
+            "UPDATE posts SET status='cancelled',error_message='VIDEO_REQUIRED_FOR_LINK: 쿠팡 링크 글인데 영상 없음 → 발행 취소',publish_next_retry_at=NULL WHERE id=? AND status='pending'"
+          ).run(post.id);
+          console.warn(`[Publish][VIDEO REQUIRED] post=${post.id} account #${post.account_id} 쿠팡 링크 글 영상 없음 → 발행 취소`);
+          continue;
+        }
         const claim = db
           .prepare(
             "UPDATE posts SET status='publishing',publish_started_at=?,publish_next_retry_at=NULL WHERE id=? AND status='pending'"
           )
           .run(new Date().toISOString(), post.id);
         if (!Number(claim.changes)) continue;
+        // A retry whose earlier attempt already created a container is re-sent only if that container
+        // was not published (never a double post).
+        if (!(await checkBeforeRetry(post))) continue;
         let mediaId;
         try {
           const onCreated = creationId =>
             db.prepare('UPDATE posts SET publish_creation_id=? WHERE id=?').run(String(creationId), post.id);
+          // 2026-11-05 (marketing c1266546): store the body exactly as sent and whether the disclosure
+          // is in it, so the body disclosure can be verified from the DB.
+          const sentText = withBodyDisclosure(post.text, post.link);
+          const storedText = sanitizePublishedThreadsText(sentText);
+          db.prepare('UPDATE posts SET sent_text=?,disclosure_in_body=? WHERE id=?').run(
+            storedText,
+            /쿠팡\s*파트너스/.test(storedText) ? 1 : 0,
+            post.id
+          );
           if (post.video_url)
             mediaId = await api.publishPost(account.id, {
-              text: post.text,
+              text: sentText,
               videoUrl: post.video_url,
               imageUrl: null,
               onCreated,
             });
           else if (post.image_url && post.extra_image_url)
             mediaId = await api.publishCarouselPost(account.id, {
-              text: post.text,
+              text: sentText,
               imageUrls: [post.image_url, post.extra_image_url],
               onCreated,
             });
           else
             mediaId = await api.publishPost(account.id, {
-              text: post.text,
+              text: sentText,
               imageUrl: post.image_url,
               videoUrl: null,
               onCreated,
@@ -131,6 +239,7 @@ function startPublishJob({ buildCommentText }) {
           console.log(
             `[Publish][COMMITTED] account=${account.id} post=${post.id} mediaId=${mediaId} comment=${comment}`
           );
+          recordPublishedVideoDuration(post);
         } catch (err) {
           // Ambiguous failures (the publish call itself errored) arrive tagged with creationId by
           // threadsApi; publish_creation_id is only a diagnostic trail, so a transient error while
@@ -145,7 +254,7 @@ function startPublishJob({ buildCommentText }) {
             const next = new Date(Date.now() + decision.retryDelayMs).toISOString();
             db.prepare(
               "UPDATE posts SET status='pending',publish_retry_count=?,publish_next_retry_at=?,publish_started_at=NULL,error_message=? WHERE id=?"
-            ).run(decision.attempts, next, String(err.code || err.message).slice(0, 500), post.id);
+            ).run(decision.attempts, next, publishErrorText(err), post.id);
             console.warn(
               `[Publish][RETRY] account=${account.id} post=${post.id} attempts=${decision.attempts}/3 next=${next}`
             );
@@ -153,13 +262,13 @@ function startPublishJob({ buildCommentText }) {
           } else {
             const message = decision.outcomeUnknown
               ? 'PUBLISH_OUTCOME_UNKNOWN: 외부 컨테이너 생성 후 결과 확인 필요'
-              : String(err.code || err.message).slice(0, 500);
+              : publishErrorText(err);
             db.prepare(
               "UPDATE posts SET status='failed',publish_retry_count=?,publish_next_retry_at=NULL,error_message=? WHERE id=?"
             ).run(decision.attempts, message, post.id);
           }
           console.error(
-            `[Publish][FAILED] account=${account.id} post=${post.id} code=${err.code || 'PUBLISH_FAILED'} knownMedia=${mediaId || '-'} unknownOutcome=${decision.outcomeUnknown}`
+            `[Publish][FAILED] account=${account.id} post=${post.id} code=${err.code || 'PUBLISH_FAILED'} detail=${JSON.stringify(publishErrorText(err, 300))} knownMedia=${mediaId || '-'} unknownOutcome=${decision.outcomeUnknown}`
           );
         }
       }
@@ -169,6 +278,7 @@ function startPublishJob({ buildCommentText }) {
         )
         .all(new Date().toISOString());
       for (const post of comments) {
+        if (draining) break;
         const account = getAccount(post.account_id);
         if (!account?.threads_access_token) continue;
         if (
@@ -208,6 +318,8 @@ function startPublishJob({ buildCommentText }) {
           console.warn(`[Comment][FAILED] post=${post.id} attempts=${attempts}/3 retry=${retry}`);
         }
       }
+      if (!draining) await verifyPostedComments();
+      if (!draining) await reconcileUnknownPublishes({ shouldStop: () => draining });
     } finally {
       running = publishing = false;
       setState(-1, 'idle', 'publish tick complete');
@@ -223,4 +335,19 @@ function startPublishJob({ buildCommentText }) {
 // between container creation and publish.
 let publishing = false;
 const isPublishing = () => publishing;
-module.exports = { startPublishJob, retryable, initializeRecovery, isPublishing };
+// 2026-11-05 (marketing c1266546): set by graceful shutdown; the running tick finishes the post it is
+// sending and then stops, and no new tick starts.
+let draining = false;
+const requestDrain = () => {
+  draining = true;
+};
+module.exports = {
+  requestDrain,
+  startPublishJob,
+  retryable,
+  initializeRecovery,
+  isPublishing,
+  recordPublishedVideoDuration,
+  verifyPostedComments,
+  videoRequiredBlocks,
+};

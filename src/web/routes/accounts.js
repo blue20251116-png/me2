@@ -107,11 +107,26 @@ router.get('/api/accounts/:accountId/connection-status', requireAccount, (req, r
 // finish OAuth with state=<someone else's accountId> and overwrite that account's Threads token
 // (their autopilot would then post to the attacker's Threads, or vice versa). state now carries a
 // one-time nonce bound to this session + account, and the callback re-checks ownership.
-router.get('/auth/login', requireAccount, (req, res) => {
+// 11/5: me2는 로컬(127.0.0.1:3000)에서 쓰고 콜백만 https 공개 주소(터널)로 받는다. 세션 쿠키는 로컬 주소에
+// 있으므로 state 세 번째 칸에 로컬 주소(루프백만)를 실어 두면, 공개 주소로 돌아온 콜백이 로컬로 다시 넘겨준다
+// (app.js 의 /auth/callback 루프백 바운스). 앱 ID가 Threads 앱 ID가 아니면 Meta 화면 대신 여기서 바로 안내한다.
+const APP_CHECK_MESSAGES = {
+  app_id:
+    '연결 전 확인 실패: 저장된 App ID가 Threads 앱 ID가 아닙니다 (Meta 앱 ID로 보임). Meta 개발자 → 앱 → 사용 사례 → Threads API 액세스 → 설정의 "Threads 앱 ID"와 "Threads 앱 시크릿 코드"를 관리자 설정에 넣어주세요.',
+  app_secret:
+    '연결 전 확인 실패: Threads 앱 시크릿 코드가 맞지 않습니다. Threads API 설정의 "Threads 앱 시크릿 코드"를 다시 넣어주세요.',
+};
+router.get('/auth/login', requireAccount, async (req, res) => {
   try {
+    const url = new URL(threadsApi.getAuthUrl(req.account.id, 'pending'));
+    const check = await threadsApi.checkThreadsAppCreds(req.account);
+    if (!check.ok) return res.status(400).send(APP_CHECK_MESSAGES[check.reason] || '연결 전 확인 실패');
     const nonce = crypto.randomBytes(16).toString('hex');
     req.session.threadsOauth = { nonce, accountId: req.account.id, createdAt: Date.now() };
-    res.redirect(threadsApi.getAuthUrl(req.account.id, `${req.account.id}.${nonce}`));
+    const host = String(req.get('host') || '');
+    const loopback = /^(localhost|127\.0\.0\.1):\d{2,5}$/.test(host) ? `.${Buffer.from(host).toString('base64url')}` : '';
+    url.searchParams.set('state', `${req.account.id}.${nonce}${loopback}`);
+    res.redirect(url.toString());
   } catch (err) {
     res.status(400).send(err.message);
   }

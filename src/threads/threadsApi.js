@@ -504,11 +504,84 @@ async function getMediaInsights(accountId, mediaId) {
   }
 }
 
+// 2026-11-05 (11/05 review): comment_verified_at was never filled (0 rows for 11/03-04), so nobody could
+// tell whether the affiliate reply was really under the post. Reads the reply back (GET on its own media
+// id: free, threads_basic) and checks it is a reply to the parent post. Never posts anything.
+// Returns { verified: true|false, permalink, reason }; throws only on transient/network errors.
+async function verifyReply(accountId, commentMediaId, parentMediaId) {
+  const account = getAccount(accountId);
+  if (!account || !account.threads_access_token) throw new Error('스레드 Access Token이 없습니다');
+  let data;
+  try {
+    const res = await axios.get(`${GRAPH_BASE}/${commentMediaId}`, {
+      params: { fields: 'id,permalink,is_reply,replied_to,root_post', access_token: account.threads_access_token },
+      timeout: 15000,
+    });
+    data = res.data || {};
+  } catch (err) {
+    logThreadsError('REPLY_VERIFY', err, { accountId, commentMediaId });
+    if (isDeadMediaError(err)) return { verified: false, permalink: '', reason: 'COMMENT_NOT_FOUND' };
+    throw err;
+  }
+  return replyCheck(data, commentMediaId, parentMediaId);
+}
+function replyCheck(data, commentMediaId, parentMediaId) {
+  const parent = String(parentMediaId || '');
+  const permalink = String(data?.permalink || '');
+  if (!data || String(data.id || '') !== String(commentMediaId)) return { verified: false, permalink, reason: 'COMMENT_NOT_FOUND' };
+  if (data.is_reply === false) return { verified: false, permalink, reason: 'COMMENT_NOT_A_REPLY' };
+  const repliedTo = String(data.replied_to?.id || ''),
+    root = String(data.root_post?.id || '');
+  if (repliedTo || root) {
+    if (repliedTo === parent || root === parent) return { verified: true, permalink, reason: '' };
+    return { verified: false, permalink, reason: 'COMMENT_UNDER_OTHER_POST' };
+  }
+  // The token can read the reply but not its parent fields: it exists and is a reply.
+  return data.is_reply === true
+    ? { verified: true, permalink, reason: '' }
+    : { verified: false, permalink, reason: 'COMMENT_PARENT_UNKNOWN' };
+}
+
+// 2026-11-05 (marketing c1266546): read-only list of the account's own recent top-level posts, used by
+// publish/publishRecovery.js to tell whether a post whose publish outcome is unknown actually went live.
+// GET /{threads-user-id}/threads (threads_basic). Never posts anything.
+async function listRecentThreads(accountId, { limit = 25 } = {}) {
+  const account = getAccount(accountId);
+  if (!account || !account.threads_access_token) throw new Error('스레드 Access Token이 없습니다');
+  // 2026-11-06: always 'me'. Stored threads_user_id can be off in the last digits (a 17-digit id that went
+  // through a JS number, e.g. ...952 saved as ...950), which made this GET 400 and the recovery pass never ran.
+  const owner = 'me';
+  try {
+    const res = await axios.get(`${GRAPH_BASE}/${owner}/threads`, {
+      params: {
+        fields: 'id,text,timestamp,permalink,media_type',
+        limit: Math.max(1, Math.min(Number(limit) || 25, 100)),
+        access_token: account.threads_access_token,
+      },
+      timeout: 20000,
+    });
+    return Array.isArray(res.data?.data) ? res.data.data : [];
+  } catch (err) {
+    logThreadsError('RECENT_THREADS', err, { accountId });
+    throw err;
+  }
+}
+// Container status for an account (read-only), so callers need not handle the token.
+async function getAccountContainerStatus(accountId, creationId) {
+  const account = getAccount(accountId);
+  if (!account || !account.threads_access_token) throw new Error('스레드 Access Token이 없습니다');
+  return getContainerStatus(creationId, account.threads_access_token);
+}
+
 module.exports = {
+  listRecentThreads,
+  getAccountContainerStatus,
   publishPost,
   publishCarouselPost,
   publishMediaItemsPost,
   publishReply,
   publishContainer,
   getMediaInsights,
+  verifyReply,
+  replyCheck,
 };

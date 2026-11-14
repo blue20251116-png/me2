@@ -33,6 +33,8 @@ async function extractPlayableVideoUrls(postUrl) {
   const add = url => {
     const s = String(url || '').trim();
     if (!isHttpVideoUrl(s)) return;
+    // 11/2: Meta UI clips on every page (static.cdninstagram.com/rsrc.php/...mp4) are not the post's video.
+    if (/static\.cdninstagram\.com|\/rsrc\.php\//i.test(s)) return;
     if (!found.includes(s)) found.push(s);
   };
 

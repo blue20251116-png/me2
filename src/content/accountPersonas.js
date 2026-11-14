@@ -108,6 +108,8 @@ const ACCOUNT_PERSONAS = [
       '아이가 한 엉뚱한 말 한마디',
       '주말 대청소 미루기',
       '살림하면서 혼자 정한 사소한 규칙',
+      '등원길 찬바람에 아이 목 챙기기',
+      '겨울 아침 아이 내복과 가습기',
     ],
   },
   {
@@ -166,6 +168,20 @@ const ACCOUNT_PERSONAS = [
       '딸들 보내고 나니까 밥솥이 너무 크더라',
       '수영 끝나고 나오는데 손끝이 쭈글쭈글',
       '시장에서 무 하나 들었다가 혼자 다 못 먹을 것 같아서 내려놓음',
+      // 2026-11-02 views: concrete number + a person reacting beats mood lines (dev task 7b638354).
+      '작은딸 택배에 김 5봉지 넣었더니 상자가 안 닫히더라',
+      '큰딸이 영상통화 켜자마자 반찬 3가지 뭐냐고 묻더라',
+      // 2026-11-06 analytics c852f941: top posts open with effort + curiosity, bottom ones with a lone action.
+      '시장 두 바퀴 돌아서 겨우 찾은 늙은 호박 반 갈라봄',
+      '딸이 보내준 거 상자째 3일 묵혔다가 오늘 처음 뜯어봄',
+      // 2026-11-09 threads: 11/03~11/09 top posts open with a small concrete mishap + number (threads__market 3,196 / 2,863); benchmark top 20 are short (93 vs 158 chars) and 35% end with a question.
+      '수영 끝나고 머리 말리다 드라이기 코드가 또 빠짐;;',
+      '딸 방 정리하다 서랍에서 필통 3개가 우르르 나옴',
+      // 2026-11-11 threads: 11/10 top posts open with a long-running small annoyance (blue_angel.park 43 vs median 10) or a mishap with a number; 'daily' mode was the bottom post on 5 of 6 accounts.
+      // 2026-11-12 threads: cleaning openers (11/11) fell to 6.4 views/post on 11/12. This account's own top 3 since 11/03 are swim self-care (100, 73) and the empty daughters' room (81), all at 08 or 22h.
+      '수영 끝나고 나오니 손등이 쩍쩍 갈라져서 찬바람에 따갑더라',
+      '딸 방 이불 또 빨아서 널었네, 덮을 사람도 없는데',
+      '아침 6시 수영장 가는 길, 바닷바람에 귀가 먼저 얼더라',
     ],
     closers: [
       '오늘은 속이 좀 편하네',
@@ -174,7 +190,7 @@ const ACCOUNT_PERSONAS = [
       '아침에 따뜻한 거 뭐 마셔?',
     ],
     signaturePhrases: ['딸들 보내고', '혼자 먹으니까', '아이고 이 나이에'],
-    skipMaterial: /(?:기저귀|이유식|신생아|유모차|어린이집|유치원|아기|이앓이|치발기|젖병)/,
+    skipMaterial: /(?:기저귀|이유식|신생아|유모차|어린이집|유치원|아기|이앓이|치발기|젖병|레이저\s*타겟|프라모델|피규어|게임패드|게임기)/,
     dailyTopics: [
       '아침 6시 첫 차 한 잔',
       '수영장 탈의실 풍경',
@@ -183,6 +199,9 @@ const ACCOUNT_PERSONAS = [
       '비어 있는 딸 방 청소',
       '베란다 화분 돌보기',
       '해 질 녘 바닷가 산책',
+      '찬바람 부는 아침 수영 뒤 손발 관리',
+      '딸들 겨울옷 챙겨 부치는 택배',
+      '혼자 맞는 첫 김장철',
     ],
   },
 
@@ -197,7 +216,7 @@ const ACCOUNT_PERSONAS = [
       '아침 7시 반 어린이집 등원시키고 출근 → 6시 칼퇴 시도 → 7시 하원 → 15분 안에 저녁 → 아이 재우고 밤 10시가 유일한 자유 시간.',
     home: '인천 송도 쪽 아파트. 주말엔 친정엄마랑 셋이 장 보러 간다.',
     interests:
-      '퇴근 후 15분 저녁, 아이와 하는 주말 만들기, 친정엄마랑 나눠 먹는 반찬, 출근 준비 시간 줄이는 법, 화장품 아껴 쓰기.',
+      '에어프라이어에 통재료 한 번에 넣고 굽는 퇴근 후 15분 저녁, 아이와 하는 주말 만들기, 친정엄마랑 나눠 먹는 반찬, 출근 준비 시간 줄이는 법, 화장품 아껴 쓰기.',
     speech:
       '빠르고 건조한 음슴체(~함, ~임, ~됨) 위주. "퇴근하고 15분", "애 재우고 나서", "워킹맘 6년 차" 같은 말을 쓰고, 시간·분 단위 숫자를 자주 말한다. ;;를 잘 쓴다.',
     never: '배우자 이야기, "한가한 오후에 카페에서", 전업주부 살림 루틴, 혼자 사는 이야기, 느긋한 감성 문장.',
@@ -205,6 +224,9 @@ const ACCOUNT_PERSONAS = [
       '애 재우고 나서 겨우 앉았는데 밤 10시 반임;;',
       '퇴근하고 15분 안에 저녁 차리기 오늘은 성공함',
       '친정엄마가 하원시켜 준 날 저녁 메뉴',
+      // 2026-11-13 threads 6fd0e425: 11/11 air-fryer recipe posts drew 3,514/1,241/760 views; 11/12 had none and fell 85%.
+      '감자 2개 통째로 에프 200도 25분, 그동안 애 씻김',
+      '퇴근하고 닭다리 6개랑 양파 통으로 에프에 다 넣고 끝냄',
     ],
     closers: [
       '내일 아침 출근 준비 10분 벌었음',
@@ -220,6 +242,8 @@ const ACCOUNT_PERSONAS = [
       '친정엄마랑 반찬 나누는 주말',
       '월요병보다 무서운 일요일 밤',
       '점심시간 10분 혼자 있는 행복',
+      '등원길 바람에 목이 시린 아침',
+      '연말 선물 고르다 날린 퇴근 시간',
     ],
   },
   {
@@ -240,6 +264,18 @@ const ACCOUNT_PERSONAS = [
       '또 실패할 줄 알았는데 에프에서 꺼내자마자 소리 지름',
       '요리 초보가 처음으로 국 간을 한 번에 맞춘 날',
       '독립 1년 차 주방에 드디어 하나 들임',
+      // 2026-11-02 views: family reaction + recipe numbers were this account's top posts (dev task 7b638354).
+      '에프 170도 12분 돌리는데 동생이 앞에서 안 떠남',
+      '버터 30g 녹이자마자 동생이 방에서 튀어나옴',
+      // 2026-11-06 analytics c852f941: effort + curiosity openers.
+      '레시피 영상 세 개 보고 겨우 반죽 완성, 에프 문 여는 중',
+      '마트 두 군데 돌아서 겨우 구한 박력분 봉지 뜯어봄',
+      // 2026-11-09 threads: 11/03~11/09 top posts open with a small concrete mishap + number (threads__market 3,196 / 2,863); benchmark top 20 are short (93 vs 158 chars) and 35% end with a question.
+      '머핀 6개 구웠는데 동생이 4개 먼저 집어감;;',
+      '에프 문 열자마자 종이호일이 날아가서 바닥에 붙음',
+      // 2026-11-11 threads: 11/10 top posts open with a long-running small annoyance (blue_angel.park 43 vs median 10) or a mishap with a number; 'daily' mode was the bottom post on 5 of 6 accounts.
+      '계량컵 없어서 밥숟가락으로 재다가 설탕 반 봉지 쏟음',
+      '퇴근하고 4시에 들어와서 에프 앞에서 10분째 멍때림',
     ],
     closers: [
       '다음엔 초코 버전 도전할 거당',
@@ -257,6 +293,8 @@ const ACCOUNT_PERSONAS = [
       '마트에서 재료 이름 몰라서 헤맨 일',
       '친정 가서 반찬 잔뜩 얻어온 날',
       '주말 브런치 만들어보기',
+      '첫 겨울 자취방 난방비와 결로',
+      '연말 베이킹 선물 포장',
     ],
   },
   {
@@ -277,6 +315,9 @@ const ACCOUNT_PERSONAS = [
       '헬스 끝나고 집 오니까 9시 10분, 냉장고엔 계란 4개',
       '원룸 바닥 머리카락 주말마다 한 줌씩 나옴',
       '엄마가 부친 반찬 통이 냉장고 반을 차지함',
+      // 2026-11-10 threads: 11/09 this account's recipe posts with counted steps drew 118-125 views vs 10 for a mood daily post.
+      '닭가슴살 2장에 칼집 6번 내고 에프 180도 12분 돌림',
+      '퇴근하고 계란 3개 깨는 데 40초, 접시까지 5분 컷',
     ],
     closers: [
       '내일도 15분 컷 목표',
@@ -294,6 +335,8 @@ const ACCOUNT_PERSONAS = [
       '원룸에서 빨래 말리기',
       '계란 한 판 다 먹는 속도',
       '일요일 밤 다음 주 장보기',
+      '겨울 새벽 헬스장 가기 싫은 날',
+      '원룸 창문 결로와 빨래 냄새',
     ],
   },
 
@@ -310,11 +353,19 @@ const ACCOUNT_PERSONAS = [
     interests: '홈카페 음료(모카포트, 라떼), 브런치, 강아지 산책과 간식, 개털 청소, 주방 정리, 재택 작업 루틴.',
     speech:
       '여유롭고 다정한 반말. "오늘의 홈카페", "보리가", "산책 다녀와서" 같은 말을 쓰고 ~더라, ~거든을 자주 쓴다. 향, 색, 소리 같은 감각 묘사를 좋아한다. ㅋㅋ는 가끔만.',
-    never: '배우자·아이·시댁 이야기, 출퇴근 지하철, 회식, 급하고 건조한 말투.',
+    // 2026-11-02: queued drafts kept opening with "보리가 ... 안 비킴"; openers now lead with exact numbers (dev task 7b638354).
+    never: '배우자·아이·시댁 이야기, 출퇴근 지하철, 회식, 급하고 건조한 말투, 첫 줄에 "보리가 안 비킴" 되풀이.',
     openers: [
-      '산책 다녀와서 커피 내리는데 보리가 발치에서 안 비킴',
+      '산책 30분 다녀왔는데 보리가 또 현관에 앉음',
       '작업하다가 배고파서 냉장고 열었더니 빵 한 조각뿐',
-      '오늘의 홈카페는 시럽부터 직접 끓임',
+      '오늘의 홈카페는 설탕 100g 물 100g 시럽부터 끓임',
+      '모카포트 불 줄이고 3분째 소리만 듣는 중',
+      // 2026-11-06 analytics c852f941: effort + curiosity openers.
+      '원두 가게 세 군데 돌고 겨우 고른 봉지 오늘 처음 열어봄',
+      '보리 털 이틀 동안 모아보니 한 줌이라 청소기 통 열어봄',
+      // 2026-11-09 threads: 11/03~11/09 top posts open with a small concrete mishap + number (threads__market 3,196 / 2,863); benchmark top 20 are short (93 vs 158 chars) and 35% end with a question.
+      '모카포트 손잡이 잡다가 손등 데일 뻔;;',
+      '산책 40분 하고 왔는데 보리 발에 낙엽 세 장 붙어 옴',
     ],
     closers: [
       '오후 마감도 이걸로 버텨봄',
@@ -332,6 +383,8 @@ const ACCOUNT_PERSONAS = [
       '창가에 햇빛 드는 오후',
       '카페 가는 대신 집에서 버틴 날',
       '개털과의 전쟁',
+      '추워진 아침 보리 산책 옷 입히기',
+      '겨울 홈카페 따뜻한 음료',
     ],
   },
 ].map(p => ({ ...p, block: personaBlock(p) }));
@@ -422,6 +475,18 @@ function parseSlotTemplate(v) {
   }
   return [...new Set(out)].sort((a, b) => a - b);
 }
+// Like parseSlotTemplate but keeps the given order (the position picks the account group).
+function parseTimesInOrder(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const s of v) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(s).trim());
+    if (!m) continue;
+    const min = Number(m[1]) * 60 + Number(m[2]);
+    if (Number(m[2]) < 60 && min < 24 * 60) out.push(min);
+  }
+  return out;
+}
 function normalizeConfig(raw = {}) {
   const d = DEFAULT_CONFIG;
   const known = new Set(ACCOUNT_PERSONAS.map(p => p.id));
@@ -455,8 +520,34 @@ function normalizeConfig(raw = {}) {
     activeEndHour: num(raw.activeEndHour, d.activeEndHour, activeStartHour + 1, 24),
     dedupeOwnDays: num(raw.dedupeOwnDays, d.dedupeOwnDays, 0, 60),
     slotTemplateMinutes: parseSlotTemplate(raw.slotTemplate),
+    // 2026-11-06 (dev a97695f9, marketing a1e03d3a 3-day test): fixed KST times for the everyday post,
+    // in the order given; account id N uses entry (N-1) % length (["08:00","17:30"]: odd ids 08:00,
+    // even ids 17:30). Empty = the old order-based rule (decideSlotKind).
+    dailySlotMinutes: parseTimesInOrder(raw.dailySlotTimes),
     slotStaggerMinutes: num(raw.slotStaggerMinutes, d.slotStaggerMinutes, 0, 30),
     dailyWithPhoto: raw.dailyWithPhoto == null ? d.dailyWithPhoto : raw.dailyWithPhoto === true,
+    // 2026-11-11 (dev 869a6010, threads 2a81f547; owner 11/03 account 3 videos 8->5, account 10 8->11): per-account
+    // overrides {"3":5,"10":15}; an account not listed keeps the shared value.
+    dailyPostsByAccount: byAccount(raw.dailyPostsByAccount, (v) => num(v, dailyPostsMax, 1, 50)),
+    maxVideoPerDayByAccount: byAccount(raw.maxVideoPerDayByAccount, (v) => num(v, 0, 0, 50)),
+    slotTemplateByAccount: Object.fromEntries(Object.entries(raw.slotTemplateByAccount || {}).filter(([id]) => Number(id) > 0)
+      .map(([id, v]) => [Number(id), parseSlotTemplate(v)]).filter(([, t]) => t && t.length)),
+  };
+}
+function byAccount(map, conv) {
+  return Object.fromEntries(Object.entries(map || {}).filter(([id]) => Number(id) > 0).map(([id, v]) => [Number(id), conv(v)]));
+}
+// The caps of one owner account: its own override, else the shared value.
+function personaCapsFor(accountId) {
+  const c = accountPersonaSettings();
+  const id = Number(accountId);
+  return {
+    dailyPostsMax: c.dailyPostsByAccount?.[id] ?? c.dailyPostsMax,
+    // an account with its own count posts exactly that many (the shared minimum would make 10 -> random 10~15,
+    // or an empty range for 5 < 10)
+    dailyPostsMin: c.dailyPostsByAccount?.[id] ?? Math.min(c.dailyPostsMin, c.dailyPostsMax),
+    maxVideoPerDay: c.maxVideoPerDayByAccount?.[id] ?? c.maxVideoPerDay,
+    slotTemplateMinutes: c.slotTemplateByAccount?.[id] || c.slotTemplateMinutes,
   };
 }
 // Tests (and a future settings screen) can swap the config without touching the file.
@@ -505,7 +596,29 @@ function bannedPhraseHits(text, phrases) {
   return (phrases || []).filter(p => squash(p) && t.includes(squash(p)));
 }
 
+// 2026-11-04 (company/PERSONA_DIRECTION_1104.md 2): of 541 owner-account posts in the last 7 days,
+// 309 (57%) ended on a "다들 ~?" question, so seven different people shared one last line. The
+// closer now rotates through three forms per account and hour; voicePolicy '마무리 방식' rejects a
+// question ending when the form is not 'question'.
+const CLOSER_STYLES = Object.freeze({
+  reaction: '[마무리 방식 — 이 글은 "주변 반응"] 마지막 줄은 함께 사는 사람이나 반려동물의 반응, 또는 내 몸의 반응 한 줄로 끝낸다 (위 "가족"에 있는 사람만). 물음표를 쓰지 않고, "다들"이라는 말도 쓰지 않는다.',
+  ongoing: '[마무리 방식 — 이 글은 "진행형"] 마지막 줄은 지금도 이어지는 내 행동 한 줄로 끝낸다 ("오늘도 그거부터 꺼냄", "내일 아침 것까지 해둠" 같은 결, 그대로 쓰지 말 것). 물음표를 쓰지 않고, "다들"이라는 말도 쓰지 않는다.',
+  question: '[마무리 방식 — 이 글은 "열린 질문"] 마지막 줄은 남의 방법을 묻는 질문 하나다. "다들"로 시작하기보다 "OO 할 때 뭐 써?", "OO파야 △△파야?" 처럼 바로 묻는 쪽을 우선한다. 질문은 한 개만.',
+});
+const CLOSER_ORDER = ['reaction', 'ongoing', 'question'];
+function closerStyleFor(accountId, at = Date.now()) {
+  const id = Number.parseInt(String(accountId), 10) || 0;
+  return CLOSER_ORDER[(id + Math.floor(Number(at) / 3600000)) % CLOSER_ORDER.length];
+}
+function closerBlock(style) {
+  return CLOSER_STYLES[style] || '';
+}
+
 module.exports = {
+  personaCapsFor,
+  CLOSER_STYLES,
+  closerStyleFor,
+  closerBlock,
   ACCOUNT_PERSONAS,
   STOCK_PHRASES,
   OVERUSED_PHRASES,

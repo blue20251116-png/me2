@@ -176,7 +176,7 @@ test('hard format is a line-count ceiling - there is no per-line character limit
   // over 90 must NOT be flagged, matching this file's own "don't cut a complete sentence to hit
   // a count" principle for MAX_LINE_CHARS above.
   const finishesJustOverTarget =
-    '서랍 세 칸이 한 번에 정리되니까 신기함 방 어질러놓는 게 습관이었는데 그날 두 개 더 샀잖아 이번 주말엔 안방 옷장까지 해볼 생각인데 다들 옷장 정리는 어떻게 하는 편임?';
+    '서랍 세 칸이 한 번에 정리되니까 신기함 방 어질러놓는 게 습관이었는데 그날 두 칸 더 비웠잖아 이번 주말엔 안방 옷장까지 해볼 생각인데 다들 옷장 정리는 어떻게 하는 편임?';
   assert.ok(
     Array.from(finishesJustOverTarget).length > 90 &&
       Array.from(finishesJustOverTarget).length <= policy.MAX_BODY_CHARS,
@@ -890,7 +890,7 @@ test('the finance-claim guard does not flag ordinary savings/budgeting content o
   assert.deepEqual(policy.voiceProblems('이 통장 이자 진짜 짭짤함'), []);
   assert.deepEqual(policy.voiceProblems('가계부 쓰는 습관 들이니까 돈이 좀 모임'), []);
   assert.deepEqual(policy.voiceProblems('이 다이어리 쓰면서 저축 습관 생김'), []);
-  assert.deepEqual(policy.voiceProblems('무조건 예쁜 디자인이라 삼'), []);
+  assert.deepEqual(policy.voiceProblems('무조건 예쁜 디자인이라 마음에 듦'), []);
 });
 
 test('highRiskClaim also catches "무손실" guaranteed-profit phrasing, not just bare 원금/손실/무조건', () => {
@@ -1129,8 +1129,8 @@ test('over-fragmented paragraphs are regrouped locally instead of discarding the
     '남동생이 다이소 꿀템이라고 알려줌',
     '유모차 먼지 때문에 고민이었는데',
     '작은 걸로 끝냄',
-    '옆에 엄마들이 어디서 샀냐고 물어봄',
-    '한 통 더 사러 간다ㅋㅋ',
+    '옆에 엄마들이 어디 거냐고 물어봄',
+    '오늘도 그거부터 꺼냄ㅋㅋ',
     '다들 이럴 때 어떻게 해?',
   ].join('\n\n');
   assert.deepEqual(voiceProblems(frag), ['문단 과다 분절', '문단 과다']);

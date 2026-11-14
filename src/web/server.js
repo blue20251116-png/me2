@@ -22,6 +22,8 @@ function startServer() {
   });
   installGracefulShutdown(server, {
     isBusy: require('../publish/publishQueue').isPublishing,
+    onDrain: require('../publish/publishQueue').requestDrain,
+    requestFile: require('path').join(require('../config/paths').DATA_DIR, 'shutdown.request'),
     onClose: () => {
       require('../infra/isolatedTask').killAllWorkers();
       require('../infra/db').db.close();
