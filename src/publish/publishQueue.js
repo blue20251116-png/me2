@@ -61,6 +61,21 @@ try {
 function retryable(err) {
   return publishRetryable(err);
 }
+// Last line of defence for accounts.require_video_for_link=1 (2026-11-07 owner rule): a pending post with
+// a Coupang link and no video (video_url, or a VIDEO item in the image_url bundle / media_items_json)
+// is cancelled instead of published. Everyday and link-free posts are untouched.
+function postHasVideo(post) {
+  return (
+    !!String(post?.video_url || '').trim() ||
+    /VIDEO/.test(String(post?.image_url || '')) ||
+    /VIDEO/.test(String(post?.media_items_json || ''))
+  );
+}
+function videoRequiredBlocks(account, post) {
+  if (Number(account?.require_video_for_link || 0) !== 1) return false;
+  if (!/coupang\./i.test(String(post?.link || ''))) return false;
+  return !postHasVideo(post);
+}
 function initializeRecovery() {
   // Posts caught mid-publish by a restart are marked for review, never re-posted blindly.
   try {
@@ -146,6 +161,14 @@ function startPublishJob({ buildCommentText }) {
           db.prepare(
             "UPDATE posts SET status='failed',error_message='PUBLISH_LIMIT_OR_SUBSCRIPTION',publish_next_retry_at=NULL WHERE id=? AND status='pending'"
           ).run(post.id);
+          continue;
+        }
+        if (videoRequiredBlocks(account, post)) {
+          // 2026-11-07 owner: a Coupang-link post on a video-required account never goes out without a video.
+          db.prepare(
+            "UPDATE posts SET status='cancelled',error_message='VIDEO_REQUIRED_FOR_LINK: 쿠팡 링크 글인데 영상 없음 → 발행 취소',publish_next_retry_at=NULL WHERE id=? AND status='pending'"
+          ).run(post.id);
+          console.warn(`[Publish][VIDEO REQUIRED] post=${post.id} account #${post.account_id} 쿠팡 링크 글 영상 없음 → 발행 취소`);
           continue;
         }
         const claim = db
@@ -318,4 +341,13 @@ let draining = false;
 const requestDrain = () => {
   draining = true;
 };
-module.exports = { requestDrain, startPublishJob, retryable, initializeRecovery, isPublishing, recordPublishedVideoDuration, verifyPostedComments };
+module.exports = {
+  requestDrain,
+  startPublishJob,
+  retryable,
+  initializeRecovery,
+  isPublishing,
+  recordPublishedVideoDuration,
+  verifyPostedComments,
+  videoRequiredBlocks,
+};

@@ -14,6 +14,7 @@ const { generateRecipe: generateContentOnlyRecipe, generateDailyStory } = requir
 const { accountPersonaFor, bannedPhrasesFor, accountPersonaSettings, personaCapsFor } = require('../content/accountPersonas');
 const accountMix = require('./accountMix');
 const { buildAutopilotPost } = require('./pipeline');
+const { materialHasVideo } = require('./materials');
 const { importThreadsVideo } = require('../threads/mediaImporter');
 const { encodeMediaBundle } = require('../threads/mediaBundle');
 const { isTokenExpired } = require('../threads/tokenRefresh');
@@ -264,6 +265,21 @@ function assertHasMedia(media, { accountId, target, mode, topic } = {}) {
 }
 function mediaHasVideo(media) {
   return !!media?.videoUrl || /VIDEO/.test(String(media?.imageUrl || ''));
+}
+// 2026-11-07 owner ("스레드 영상없는거 올리지 말랫는데", then "일상글은 그냥쓰되 쿠파스 링크달 글은
+// 영상잇어야해"): on accounts with accounts.require_video_for_link=1 a post that carries the Coupang
+// link must carry a video. Without one the slot is skipped: no image or text fallback. Everyday posts
+// and link-free recipe posts are unchanged.
+function linkNeedsVideo(account) {
+  return Number(account?.require_video_for_link || 0) === 1;
+}
+function videoRequiredSkip(account, scheduledAt, reason) {
+  console.log(
+    `[Autopilot][VIDEO REQUIRED] account #${account?.id} slot=${scheduledAt || '-'} 쿠팡 링크 글인데 영상 없음 (${reason}) → 이 칸 건너뜀`
+  );
+  const err = new Error(`쿠팡 링크 글은 영상 필수: ${reason} → 칸 건너뜀`);
+  err.code = 'VIDEO_REQUIRED_SKIP';
+  return err;
 }
 function chooseImageFallback(result) {
   const images = Array.isArray(result?.sourceImages) ? result.sourceImages.filter(Boolean) : [];
@@ -584,13 +600,31 @@ async function runAutopilotOnceReserved(account, scheduledAt, reservations) {
     e.isCoupangRateLimit = true;
     throw e;
   }
+  const needVideo = linkNeedsVideo(account);
+  // A 'linked' slot always carries the Coupang link: on a video-required account it is skipped up front
+  // when the day's video cap is already reached (no generation spent on a post that cannot go out).
+  if (needVideo && kind === 'linked' && !accountMix.videoAllowed(account.id, scheduledAt))
+    throw videoRequiredSkip(
+      account,
+      scheduledAt,
+      `오늘 영상 한도 ${accountMix.videoPostsOnDay(account.id, scheduledAt)}/${personaCapsFor(account.id).maxVideoPerDay}`
+    );
   // dev 0079f189 (b): while the day's video cap allows a video, video source posts are tried first.
-  const preferVideo = !!persona && accountMix.videoAllowed(account.id, scheduledAt);
+  const preferVideo = (!!persona || needVideo) && accountMix.videoAllowed(account.id, scheduledAt);
+  // Accounts without a fixed persona still skip products whose deeplink was refused (dev 936a5d23).
+  const filters = persona
+    ? accountMix.generationFilters(account.id, scheduledAt)
+    : { productFilter: accountMix.linkRejectFilter };
+  if (needVideo && kind === 'linked') {
+    // Linked slot on a video-required account: only sources that carry a video are used.
+    const base = filters.materialFilter;
+    filters.materialFilter = m =>
+      materialHasVideo(m) ? (typeof base === 'function' ? base(m) : null) : '영상 없는 소재 (쿠팡 링크 글은 영상 필수)';
+  }
   const result = await buildAutopilotPost(account.id, {
     target,
     ...(preferVideo ? { preferVideo: true } : {}),
-    // Accounts without a fixed persona still skip products whose deeplink was refused (dev 936a5d23).
-    ...(persona ? accountMix.generationFilters(account.id, scheduledAt) : { productFilter: accountMix.linkRejectFilter }),
+    ...filters,
   });
   let dedupeKeys = null;
   if (persona) {
@@ -627,18 +661,23 @@ async function runAutopilotOnceReserved(account, scheduledAt, reservations) {
   const unlinked = accountMix.linkFreeAllowed(kind, result.mode);
   const affiliateLink = unlinked ? null : await makeAffiliateLink(account, result);
   if (!unlinked && !affiliateLink) throw new Error('쿠팡 파트너스 링크가 비어 있어 예약을 만들지 않았습니다');
+  // The post carries the Coupang link on a video-required account: video or nothing.
+  const videoRequired = needVideo && !!affiliateLink;
   let mediaOptions = null;
   let videoHold = null;
-  if (persona) {
+  if (persona || videoRequired) {
     const allowVideo = accountMix.videoAllowed(account.id, scheduledAt);
     const capReason = allowVideo
       ? null
       : `오늘 영상 한도 ${accountMix.videoPostsOnDay(account.id, scheduledAt)}/${personaCapsFor(account.id).maxVideoPerDay}`;
-    if (allowVideo) videoHold = hold('video');
+    if (videoRequired && !allowVideo) throw videoRequiredSkip(account, scheduledAt, capReason);
+    if (allowVideo && persona) videoHold = hold('video');
     mediaOptions = { allowVideo, accountId: account.id, scheduledAt, capReason };
   }
   let media = await chooseSourceMedia(result, mediaOptions);
   if (videoHold && !mediaHasVideo(media)) videoHold.release();
+  if (videoRequired && !mediaHasVideo(media))
+    throw videoRequiredSkip(account, scheduledAt, media.videoSkipReason || '영상 없음');
   assertHasMedia(media, { accountId: account.id, target, mode: result.mode, topic: result.topic });
   if (persona && result.mediaKeys?.length)
     dedupeKeys = accountMix.encodeKeys([...accountMix.decodeKeys(dedupeKeys), ...result.mediaKeys]);
@@ -669,6 +708,8 @@ async function runAutopilotOnceReserved(account, scheduledAt, reservations) {
     });
   const saved = save(media);
   if (saved?.skipped) {
+    // Video-required linked post: never swapped for images, the slot is skipped.
+    if (videoRequired) throw videoRequiredSkip(account, scheduledAt, saved.skipped);
     // Another generation filled the day's video cap meanwhile: same post with the source images instead.
     console.log(`[Autopilot][VIDEO CAP] account #${account.id} ${saved.skipped} → 이미지 사용`);
     media = withReason(ownerImageFallback(result), saved.skipped);

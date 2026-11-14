@@ -206,6 +206,9 @@ const migrations = [
   `ALTER TABLE accounts ADD COLUMN autopilot_youtube_source_enabled INTEGER DEFAULT 1`,
   `ALTER TABLE accounts ADD COLUMN autopilot_youtube_order TEXT DEFAULT 'relevance'`,
   `ALTER TABLE accounts ADD COLUMN autopilot_frame_media_enabled INTEGER DEFAULT 0`,
+  // 2026-11-07 owner ("쿠파스 링크달 글은 영상잇어야해"): per account, 1 = a post carrying a Coupang link
+  // must carry a video; with no video the slot is skipped (never an image/text fallback). Default off.
+  `ALTER TABLE accounts ADD COLUMN require_video_for_link INTEGER DEFAULT 0`,
 ];
 for (const sql of migrations) {
   try {
